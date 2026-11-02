@@ -85,7 +85,8 @@ class StudentPracticeTests(TestCase):
         paper = self.upload()
         self.assertFalse(paper.pdf_file)
         self.assertTrue(os.path.isfile(paper.private_pdf_file.path))
-        self.assertEqual(os.stat(paper.private_pdf_file.path).st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual(os.stat(paper.private_pdf_file.path).st_mode & 0o777, 0o600)
         self.assertNotIn(os.path.realpath(self.root.name + "/public"), os.path.realpath(paper.private_pdf_file.path))
         with self.assertRaises(ValueError):
             _ = paper.private_pdf_file.url
@@ -325,7 +326,9 @@ class StudentPracticeTests(TestCase):
         figure = ExtractedFigure.objects.get(question=question)
         self.assertTrue(figure.private_image)
         self.assertFalse(figure.image)
-        self.assertEqual(self.client.get(reverse("questions:practice_figure_file", args=[figure.pk])).status_code, 200)
+        resp_fig = self.client.get(reverse("questions:practice_figure_file", args=[figure.pk]))
+        self.assertEqual(resp_fig.status_code, 200)
+        resp_fig.close()
         exam = self.create_exam(paper)
         attempt = self.start(exam)
         session = self.client.get(reverse("exams:exam_session", args=[attempt.attempt_uuid]))
@@ -333,7 +336,9 @@ class StudentPracticeTests(TestCase):
         self.assertContains(session, reverse("questions:practice_bank_image", args=[bank_question.pk]))
         bank_figure = bank_question.figures.first()
         self.assertContains(session, reverse("questions:practice_bank_figure", args=[bank_figure.pk]))
-        self.assertEqual(self.client.get(reverse("questions:practice_bank_figure", args=[bank_figure.pk])).status_code, 200)
+        resp_bf = self.client.get(reverse("questions:practice_bank_figure", args=[bank_figure.pk]))
+        self.assertEqual(resp_bf.status_code, 200)
+        resp_bf.close()
         self.assertEqual(self.client.get("/media/" + figure.private_image.name).status_code, 404)
 
     def test_owner_only_student_paper_exam_attempt_and_teacher_admin_endpoints(self):

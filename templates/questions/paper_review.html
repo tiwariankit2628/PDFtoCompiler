@@ -7,7 +7,22 @@
 <!-- KaTeX for crisp mathematical equation rendering in review workspace -->
 <link rel="stylesheet" href="{% static 'vendor/katex/katex.min.css' %}">
 <script defer src="{% static 'vendor/katex/katex.min.js' %}"></script>
-<script defer src="{% static 'vendor/katex/contrib/auto-render.min.js' %}" onload="renderMathInElement(document.body, {delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false},{left:'\\[',right:'\\]',display:true}],throwOnError:false});"></script>
+<script defer src="{% static 'vendor/katex/contrib/auto-render.min.js' %}"></script>
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    if (typeof renderMathInElement !== "undefined") {
+        renderMathInElement(document.body, {
+            delimiters: [
+                {left: '$$', right: '$$', display: true},
+                {left: '$', right: '$', display: false},
+                {left: '\\(', right: '\\)', display: false},
+                {left: '\\[', right: '\\]', display: true}
+            ],
+            throwOnError: false
+        });
+    }
+});
+</script>
 {% endblock %}
 
 {% block dashboard_content %}
@@ -84,7 +99,7 @@
 
                 <form method="post" action="{% url 'questions:paper_bulk_approve' paper.pk %}" class="d-inline" onsubmit="return confirm('Approve all valid extracted questions from this paper into the permanent Question Bank?');">
                     {% csrf_token %}
-                    <button type="submit" class="btn btn-sm btn-success fw-bold" {% if total_extracted == 0 or approved_count == total_extracted %}disabled{% endif %}>
+                    <button type="submit" class="btn btn-sm btn-success fw-bold" {% if total_extracted == 0 or approved_count == total_extracted %}disabled="disabled"{% endif %}>
                         <i class="bi bi-check2-all me-1"></i> Approve All to Question Bank
                     </button>
                 </form>
@@ -245,7 +260,7 @@
                     {% if q.status != 'approved' %}
                     <form method="post" action="{% url 'questions:extracted_approve' q.pk %}" class="d-inline">
                         {% csrf_token %}
-                        <button type="submit" class="btn btn-sm btn-success py-1 px-3 fw-bold" {% if q.is_flagged %}disabled title="Review and clear the flag before approval"{% endif %}>
+                        <button type="submit" class="btn btn-sm btn-success py-1 px-3 fw-bold" {% if q.is_flagged %}disabled="disabled" title="Review and clear the flag before approval"{% endif %}>
                             <i class="bi bi-check-circle me-1"></i> Approve to Bank
                         </button>
                     </form>
