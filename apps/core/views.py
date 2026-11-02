@@ -99,11 +99,11 @@ class SuperAdminDashboardView(SuperAdminRequiredMixin, TemplateView):
         context["total_super_admins"] = User.objects.filter(role=User.Roles.SUPER_ADMIN).count()
         context["total_categories"] = Category.objects.count()
         context["total_active_categories"] = Category.objects.filter(is_active=True).count()
-        context["total_exams"] = Exam.objects.count()
+        context["total_exams"] = Exam.objects.filter(is_private_practice=False).count()
         context["total_published_exams"] = Exam.objects.filter(
-            status=Exam.ExamStatus.PUBLISHED
+            status=Exam.ExamStatus.PUBLISHED, is_private_practice=False
         ).count()
-        context["total_attempts"] = ExamAttempt.objects.count()
+        context["total_attempts"] = ExamAttempt.objects.filter(exam__is_private_practice=False).count()
 
         # Recent activities and registrations
         context["recent_registrations"] = User.objects.order_by("-date_joined")[:6]
@@ -113,7 +113,7 @@ class SuperAdminDashboardView(SuperAdminRequiredMixin, TemplateView):
 
         # Category distribution
         context["category_breakdown"] = (
-            Category.objects.annotate(exam_count=Count("exams"))
+            Category.objects.annotate(exam_count=Count("exams", filter=Q(exams__is_private_practice=False)))
             .filter(is_active=True)
             .order_by("-exam_count")[:6]
         )
@@ -146,19 +146,19 @@ class AdminDashboardView(AdminRequiredMixin, TemplateView):
             role=User.Roles.TEACHER, is_active=True
         ).count()
         context["total_categories"] = Category.objects.count()
-        context["total_exams"] = Exam.objects.count()
+        context["total_exams"] = Exam.objects.filter(is_private_practice=False).count()
         context["published_exams"] = Exam.objects.filter(
-            status=Exam.ExamStatus.PUBLISHED
+            status=Exam.ExamStatus.PUBLISHED, is_private_practice=False
         ).count()
-        context["draft_exams"] = Exam.objects.filter(status=Exam.ExamStatus.DRAFT).count()
-        context["total_attempts"] = ExamAttempt.objects.count()
+        context["draft_exams"] = Exam.objects.filter(status=Exam.ExamStatus.DRAFT, is_private_practice=False).count()
+        context["total_attempts"] = ExamAttempt.objects.filter(exam__is_private_practice=False).count()
 
         # Recent records
         context["recent_students"] = User.objects.filter(role=User.Roles.STUDENT).order_by(
             "-date_joined"
         )[:5]
         context["recent_attempts"] = (
-            ExamAttempt.objects.select_related("student", "exam")
+            ExamAttempt.objects.filter(exam__is_private_practice=False).select_related("student", "exam")
             .order_by("-started_at")[:5]
         )
 
@@ -182,17 +182,17 @@ class TeacherDashboardView(TeacherRequiredMixin, TemplateView):
         teacher = self.request.user
 
         # Scoped strictly to teacher's exams
-        created_exams = Exam.objects.filter(creator=teacher)
+        created_exams = Exam.objects.filter(creator=teacher, is_private_practice=False)
         context["total_exams_created"] = created_exams.count()
         context["published_exams_count"] = created_exams.filter(
-            status=Exam.ExamStatus.PUBLISHED
+            status=Exam.ExamStatus.PUBLISHED, is_private_practice=False
         ).count()
         context["draft_exams_count"] = created_exams.filter(
             status=Exam.ExamStatus.DRAFT
         ).count()
 
         # Attempts on teacher's examinations
-        teacher_attempts = ExamAttempt.objects.filter(exam__creator=teacher)
+        teacher_attempts = ExamAttempt.objects.filter(exam__creator=teacher, exam__is_private_practice=False)
         context["total_student_attempts"] = teacher_attempts.count()
 
         # Permitted categories
@@ -225,7 +225,7 @@ class StudentDashboardView(StudentRequiredMixin, TemplateView):
         student = self.request.user
 
         # Real student attempt metrics from database
-        student_attempts = ExamAttempt.objects.filter(student=student)
+        student_attempts = ExamAttempt.objects.filter(student=student, exam__is_private_practice=False)
         context["total_attempts"] = student_attempts.count()
         context["passed_attempts"] = student_attempts.filter(is_passed=True).count()
 
@@ -241,10 +241,19 @@ class StudentDashboardView(StudentRequiredMixin, TemplateView):
 
         # Available exams with free vs premium labels
         context["available_exams"] = (
-            Exam.objects.filter(status=Exam.ExamStatus.PUBLISHED)
+            Exam.objects.filter(status=Exam.ExamStatus.PUBLISHED, is_private_practice=False)
             .select_related("category")
             .order_by("-created_at")[:6]
         )
+
+        # Private practice is a separate workspace, not part of institutional metrics.
+        from apps.payments.services import usage_summary
+        context["practice_usage"] = usage_summary(student)
+        context["recent_practice_attempts"] = (
+            ExamAttempt.objects.filter(student=student, exam__creator=student, exam__is_private_practice=True)
+            .select_related("exam").order_by("-started_at")[:5]
+        )
+        context["practice_count"] = ExamAttempt.objects.filter(student=student, exam__creator=student, exam__is_private_practice=True).count()
 
         # Dynamic categories for quick navigation
         context["categories"] = Category.objects.filter(is_active=True).order_by("display_order")

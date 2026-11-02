@@ -6,3 +6,6 @@ class PaymentsConfig(AppConfig):
     name = "apps.payments"
     verbose_name = "Subscriptions & Razorpay Billing"
 
+
+    def ready(self):
+        from . import signals  # noqa: F401

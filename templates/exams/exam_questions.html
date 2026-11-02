@@ -1,12 +1,13 @@
 {% extends 'dashboard_base.html' %}
+{% load static %}
 
 {% block title %}Question Builder: {{ exam.title }} | {{ PLATFORM_NAME }}{% endblock %}
 
 {% block extra_head %}
 <!-- KaTeX for live equation rendering -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous">
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3TX4437n" crossorigin="anonymous"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZko/WgHgoVICvIK1Pe49yi36XXgn74CEvTxmKjH" crossorigin="anonymous" onload="renderMathInElement(document.body);"></script>
+<link rel="stylesheet" href="{% static 'vendor/katex/katex.min.css' %}" integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous">
+<script defer src="{% static 'vendor/katex/katex.min.js' %}" integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg" crossorigin="anonymous"></script>
+<script defer src="{% static 'vendor/katex/contrib/auto-render.min.js' %}" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk" crossorigin="anonymous" onload="renderMathInElement(document.body, {delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false},{left:'\\[',right:'\\]',display:true}],throwOnError:false});"></script>
 {% endblock %}
 
 {% block dashboard_content %}
@@ -134,12 +135,16 @@
                         </div>
                         {% endif %}
 
+                        {% for figure in eq.question.figures.all %}{% if not figure.option_id %}<img src="{{ figure.image.url }}" alt="Question figure" class="img-thumbnail mb-2" style="max-height:100px;">{% endif %}{% endfor %}
+
                         <!-- Options Preview (Compact) -->
                         <div class="row g-1 small">
                             {% for opt in eq.question.options.all %}
                             <div class="col-6">
                                 <div class="p-1 px-2 border rounded text-truncate {% if opt.is_correct %}bg-success bg-opacity-10 text-success border-success fw-bold{% else %}bg-light text-muted{% endif %}">
                                     {{ opt.option_key }}. {{ opt.option_text }}
+                                    {% if opt.image %}<img src="{{ opt.image.url }}" alt="Option image" class="img-thumbnail d-block" style="max-height:70px;">{% endif %}
+                                    {% for figure in opt.figures.all %}<img src="{{ figure.image.url }}" alt="Option image" class="img-thumbnail d-block" style="max-height:70px;">{% endfor %}
                                 </div>
                             </div>
                             {% endfor %}

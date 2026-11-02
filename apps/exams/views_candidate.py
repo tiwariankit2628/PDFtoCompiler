@@ -6,17 +6,19 @@ server-authoritative timeout, and atomic final evaluation and submission.
 """
 import json
 import random
+import time
 from datetime import timedelta
 from decimal import Decimal
 
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
-from django.db import transaction
+from django.db import IntegrityError, OperationalError, connection, transaction
 from django.db.models import Q
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.cache import patch_cache_control
 from django.views import View
 from django.views.generic import DetailView, ListView
 
@@ -38,7 +40,7 @@ class ExamCatalogView(ActiveUserRequiredMixin, ListView):
     def get_queryset(self):
         now = timezone.now()
         qs = (
-            Exam.objects.filter(status=Exam.ExamStatus.PUBLISHED)
+            Exam.objects.filter(status=Exam.ExamStatus.PUBLISHED, is_private_practice=False)
             .filter(Q(start_time__isnull=True) | Q(start_time__lte=now))
             .filter(Q(end_time__isnull=True) | Q(end_time__gte=now))
             .select_related("category")
@@ -88,6 +90,15 @@ class ExamInstructionsView(ActiveUserRequiredMixin, DetailView):
     slug_field = "slug"
     slug_url_kwarg = "slug"
 
+    def get_queryset(self):
+        return super().get_queryset().filter(Q(is_private_practice=False) | Q(is_private_practice=True, creator=self.request.user))
+
+    def get(self, request, *args, **kwargs):
+        response = super().get(request, *args, **kwargs)
+        if self.object.is_private_practice:
+            patch_cache_control(response, private=True, no_store=True)
+        return response
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         exam = self.object
@@ -131,6 +142,14 @@ class ExamInstructionsView(ActiveUserRequiredMixin, DetailView):
             can_start = False
             block_reason = f"You have reached the maximum allowed attempts ({exam.max_attempts}) for this examination."
 
+        if exam.is_private_practice:
+            from apps.payments.services import private_attempt_limit
+            limit = private_attempt_limit(user, exam)
+            context["private_attempt_limit"] = limit
+            if limit is not None and completed_count >= limit and not active_attempt:
+                can_start = False
+                block_reason = f"You have reached the practice attempt limit ({limit}) for this test."
+
         # Sections
         sections = list(
             exam.exam_questions.values_list("section", flat=True)
@@ -159,9 +178,26 @@ class ExamStartView(ActiveUserRequiredMixin, View):
     Populates candidate-specific ExamResponse records with optional question randomization.
     """
 
+    def dispatch(self, request, *args, **kwargs):
+        try:
+            return super().dispatch(request, *args, **kwargs)
+        except OperationalError as exc:
+            # SQLite can report contention while the authentication middleware
+            # lazily loads the user, before post() can retry its transaction.
+            if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
+                raise
+            response = HttpResponse("Exams are busy. Please retry your request.", status=503)
+            response["Retry-After"] = "1"
+            return response
+
     def post(self, request, slug):
-        exam = get_object_or_404(Exam, slug=slug)
         user = request.user
+        exam = get_object_or_404(
+            Exam.objects.filter(Q(is_private_practice=False) | Q(is_private_practice=True, creator=user)),
+            slug=slug,
+        )
+        if exam.is_private_practice:
+            return self.start_private(request, exam)
         now = timezone.now()
 
         # 1. Check for active attempt
@@ -265,6 +301,82 @@ class ExamStartView(ActiveUserRequiredMixin, View):
 
         return redirect("exams:exam_session", attempt_uuid=attempt.attempt_uuid)
 
+    def start_private(self, request, exam):
+        # SQLite cannot lock rows with SELECT FOR UPDATE. A competing writer
+        # may briefly hold the database lock; retry the whole transaction so
+        # the winner's existing attempt is resumed rather than restarted.
+        for retry in range(5):
+            try:
+                return self._start_private_once(request, exam)
+            except OperationalError as exc:
+                if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
+                    raise
+                if retry == 4:
+                    messages.warning(request, "Your test is busy. Please retry; any active timer continues.")
+                    return redirect("exams:exam_instructions", slug=exam.slug)
+                time.sleep(0.025 * (2 ** retry))
+
+    def _start_private_once(self, request, exam):
+        # The unique conditional constraint is a backstop on databases where
+        # select_for_update is unavailable; an existing expiry is never reset.
+        try:
+            with transaction.atomic():
+                exam = Exam.objects.select_for_update().get(pk=exam.pk, creator=request.user, is_private_practice=True)
+                active = ExamAttempt.objects.select_for_update().filter(
+                    exam=exam, student=request.user, status=ExamAttempt.AttemptStatus.IN_PROGRESS
+                ).first()
+                if active:
+                    if active.is_expired:
+                        active.submit_attempt(is_timeout=True)
+                        return redirect("exams:exam_completed", attempt_uuid=active.attempt_uuid)
+                    messages.info(request, "Resuming your existing practice attempt; the original timer continues.")
+                    return redirect("exams:exam_session", attempt_uuid=active.attempt_uuid)
+                if exam.status != Exam.ExamStatus.PUBLISHED or exam.duration_minutes <= 0:
+                    messages.error(request, "This practice test is not available.")
+                    return redirect("questions:practice_list")
+                exam_questions = list(exam.exam_questions.select_related("question").order_by("order", "id"))
+                if not exam_questions:
+                    messages.error(request, "This practice test contains no questions.")
+                    return redirect("questions:practice_list")
+                from apps.payments.services import QuotaExceeded, consume, private_attempt_limit
+                limit = private_attempt_limit(request.user, exam)
+                completed = ExamAttempt.objects.filter(exam=exam, student=request.user).exclude(
+                    status=ExamAttempt.AttemptStatus.IN_PROGRESS).count()
+                if limit is not None and completed >= limit:
+                    messages.error(request, f"You have reached the practice attempt limit ({limit}) for this test.")
+                    return redirect("exams:exam_instructions", slug=exam.slug)
+                try:
+                    consume(request.user, "attempts")
+                except QuotaExceeded as exc:
+                    messages.error(request, str(exc))
+                    return redirect("payments:plans")
+                attempt = ExamAttempt.objects.create(
+                    exam=exam, student=request.user, is_private_practice=True,
+                    status=ExamAttempt.AttemptStatus.IN_PROGRESS, total_marks=exam.total_marks,
+                )
+                # auto_now_add supplies the authoritative start; expiry is
+                # derived once from that exact timestamp and never refreshed.
+                attempt.expires_at = attempt.started_at + timedelta(minutes=exam.duration_minutes)
+                ordered = list(exam_questions)
+                if exam.shuffle_questions:
+                    random.shuffle(ordered)
+                ExamResponse.objects.bulk_create([
+                    ExamResponse(attempt=attempt, exam_question=eq, order=idx + 1, is_visited=(idx == 0))
+                    for idx, eq in enumerate(ordered)
+                ])
+                attempt.last_active_question = ordered[0]
+                attempt.save(update_fields=["expires_at", "last_active_question"])
+        except IntegrityError:
+            # Another simultaneous start won the unique active-attempt race.
+            active = ExamAttempt.objects.filter(
+                exam=exam, student=request.user, is_private_practice=True,
+                status=ExamAttempt.AttemptStatus.IN_PROGRESS,
+            ).first()
+            if not active:
+                raise
+            return redirect("exams:exam_session", attempt_uuid=active.attempt_uuid)
+        return redirect("exams:exam_session", attempt_uuid=attempt.attempt_uuid)
+
 
 class ExamSessionView(ActiveUserRequiredMixin, View):
     """
@@ -296,7 +408,7 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
                 "exam_question__question",
                 "selected_option",
             )
-            .prefetch_related("exam_question__question__options")
+            .prefetch_related("exam_question__question__options__figures", "exam_question__question__figures")
             .order_by("order", "id")
         )
 
@@ -315,14 +427,25 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
 
             sanitized_options = []
             for opt in options_list:
+                if exam.is_private_practice:
+                    option_images = [reverse("questions:practice_bank_figure", args=[f.pk]) for f in opt.figures.all() if f.private_image]
+                else:
+                    option_images = ([opt.image.url] if opt.image else []) + [f.image.url for f in opt.figures.all() if f.image]
                 sanitized_options.append(
                     {
                         "id": opt.id,
                         "key": opt.option_key,
                         "text": opt.option_text,
-                        "image_url": opt.image.url if opt.image else None,
+                        "image_url": option_images[0] if option_images else None,
+                        "image_urls": option_images,
                     }
                 )
+            if exam.is_private_practice:
+                question_images = ([reverse("questions:practice_bank_image", args=[q.pk])] if q.private_image else []) + [
+                    reverse("questions:practice_bank_figure", args=[f.pk]) for f in q.figures.all() if f.option_id is None and f.private_image
+                ]
+            else:
+                question_images = ([q.image.url] if q.image else []) + [f.image.url for f in q.figures.all() if f.option_id is None and f.image]
 
             section_name = eq.section or "General"
             sections_map[section_name] = sections_map.get(section_name, 0) + 1
@@ -334,7 +457,8 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
                     "order": resp.order,
                     "section": section_name,
                     "question_text": q.question_text,
-                    "image_url": q.image.url if q.image else None,
+                    "image_url": question_images[0] if question_images else None,
+                    "image_urls": question_images,
                     "positive_marks": float(eq.positive_marks),
                     "negative_marks": float(eq.negative_marks),
                     "selected_option_id": resp.selected_option_id,
@@ -358,6 +482,7 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
             "attempt": attempt,
             "exam": exam,
             "questions_json": json.dumps(questions_payload),
+            "questions_data": questions_payload,
             "sections": list(sections_map.keys()),
             "initial_index": initial_index,
             "remaining_seconds": attempt.remaining_seconds,
@@ -367,7 +492,10 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
             "marked_review_count": attempt.marked_review_count,
             "not_visited_count": attempt.not_visited_count,
         }
-        return render(request, "exams/exam_session.html", context)
+        response = render(request, "exams/exam_session.html", context)
+        if exam.is_private_practice:
+            patch_cache_control(response, private=True, no_store=True)
+        return response
 
 
 class ExamSaveAnswerView(ActiveUserRequiredMixin, View):
@@ -401,13 +529,30 @@ class ExamSaveAnswerView(ActiveUserRequiredMixin, View):
         except (ValueError, TypeError):
             return JsonResponse({"error": "Invalid JSON payload."}, status=400)
 
-        response_id = data.get("response_id")
+        if not isinstance(data, dict):
+            return JsonResponse({"error": "Invalid JSON payload."}, status=400)
         action = data.get("action", "save_next")  # save_next, clear, mark_review, navigate
-        selected_option_id = data.get("selected_option_id")
+        if action not in ("save_next", "clear", "mark_review", "navigate"):
+            return JsonResponse({"error": "Invalid answer action."}, status=400)
+        try:
+            response_id = int(data.get("response_id"))
+            raw_option = data.get("selected_option_id")
+            selected_option_id = int(raw_option) if raw_option not in (None, "") else None
+            time_spent_delta = int(data.get("time_spent_delta", 0))
+        except (ValueError, TypeError, OverflowError):
+            return JsonResponse({"error": "Invalid answer or time spent."}, status=400)
         is_marked = data.get("is_marked_for_review", False)
-        time_spent_delta = int(data.get("time_spent_delta", 0))
 
         with transaction.atomic():
+            if attempt.exam.is_private_practice:
+                attempt = ExamAttempt.objects.select_for_update().select_related("exam").get(pk=attempt.pk)
+                if attempt.is_expired or attempt.status != ExamAttempt.AttemptStatus.IN_PROGRESS:
+                    if attempt.status == ExamAttempt.AttemptStatus.IN_PROGRESS and attempt.is_expired:
+                        attempt.submit_attempt(is_timeout=True)
+                    return JsonResponse({
+                        "status": "expired", "message": "Your examination session time has expired.",
+                        "redirect_url": reverse("exams:exam_completed", kwargs={"attempt_uuid": attempt.attempt_uuid}),
+                    })
             resp = (
                 ExamResponse.objects.select_for_update()
                 .filter(id=response_id, attempt=attempt)
@@ -415,6 +560,14 @@ class ExamSaveAnswerView(ActiveUserRequiredMixin, View):
             )
             if not resp:
                 return JsonResponse({"error": "Response record not found."}, status=404)
+
+            if selected_option_id is not None and action != "clear":
+                from apps.questions.models import QuestionOption
+                valid_opt = QuestionOption.objects.filter(id=selected_option_id, question=resp.exam_question.question).first()
+                if not valid_opt:
+                    return JsonResponse({"error": "Invalid option for this question."}, status=400)
+            else:
+                valid_opt = None
 
             # Mark visited
             resp.is_visited = True
@@ -425,22 +578,11 @@ class ExamSaveAnswerView(ActiveUserRequiredMixin, View):
                 resp.is_marked_for_review = False
             elif action == "mark_review":
                 resp.is_marked_for_review = True
-                if selected_option_id:
-                    # Validate option belongs to this question
-                    from apps.questions.models import QuestionOption
-                    valid_opt = QuestionOption.objects.filter(
-                        id=selected_option_id,
-                        question=resp.exam_question.question,
-                    ).first()
+                if selected_option_id is not None:
                     resp.selected_option = valid_opt
             else:
                 # Normal save or navigate
-                if selected_option_id:
-                    from apps.questions.models import QuestionOption
-                    valid_opt = QuestionOption.objects.filter(
-                        id=selected_option_id,
-                        question=resp.exam_question.question,
-                    ).first()
+                if selected_option_id is not None:
                     resp.selected_option = valid_opt
                 elif action == "save_next" and not selected_option_id:
                     # Saved without selecting an option
@@ -526,6 +668,9 @@ class ExamSecurityLogView(ActiveUserRequiredMixin, View):
         if attempt.student != request.user:
             return JsonResponse({"error": "Forbidden"}, status=403)
 
+        if attempt.exam.is_private_practice and attempt.is_expired:
+            attempt.auto_timeout_if_expired()
+            return JsonResponse({"status": "ignored"}, status=200)
         if attempt.status != ExamAttempt.AttemptStatus.IN_PROGRESS:
             return JsonResponse({"status": "ignored"}, status=200)
 
@@ -572,27 +717,63 @@ class ExamSubmitView(ActiveUserRequiredMixin, View):
         if attempt.student != request.user:
             raise PermissionDenied("You do not have permission to submit this examination.")
 
-        is_timeout = bool(request.POST.get("is_timeout") == "true")
-        if not is_timeout:
-            # Check if JSON payload sent
+        data = {}
+        is_timeout = False
+        if request.content_type == "application/json":
             try:
-                data = json.loads(request.body)
-                is_timeout = bool(data.get("is_timeout", False))
-            except Exception:
+                parsed = json.loads(request.body)
+                if isinstance(parsed, dict):
+                    data = parsed
+                    is_timeout = bool(data.get("is_timeout", False))
+            except (ValueError, TypeError):
                 pass
+        else:
+            is_timeout = request.POST.get("is_timeout") == "true"
 
         with transaction.atomic():
             # Lock attempt record
             locked_attempt = ExamAttempt.objects.select_for_update().get(id=attempt.id)
             if locked_attempt.status == ExamAttempt.AttemptStatus.IN_PROGRESS:
-                locked_attempt.submit_attempt(is_timeout=is_timeout)
+                if locked_attempt.exam.is_private_practice and not is_timeout and not locked_attempt.is_expired and "last_response" in data:
+                    # Save the final visible answer and its time atomically with
+                    # submission; a browser callback after expiry is never accepted.
+                    from apps.questions.models import QuestionOption
+                    last = data["last_response"]
+                    if not isinstance(last, dict):
+                        return JsonResponse({"error": "Invalid final answer."}, status=400)
+                    try:
+                        response_id = int(last.get("response_id"))
+                        selected_id = int(last["selected_option_id"]) if last.get("selected_option_id") is not None else None
+                    except (TypeError, ValueError, OverflowError):
+                        return JsonResponse({"error": "Invalid final answer."}, status=400)
+                    response = ExamResponse.objects.select_for_update().filter(
+                        pk=response_id, attempt=locked_attempt).first()
+                    if not response:
+                        return JsonResponse({"error": "Final response not found."}, status=400)
+                    if selected_id is not None:
+                        selected = QuestionOption.objects.filter(pk=selected_id, question=response.exam_question.question).first()
+                        if not selected:
+                            return JsonResponse({"error": "Invalid final option."}, status=400)
+                        response.selected_option = selected
+                    else:
+                        response.selected_option = None
+                    try:
+                        seconds = max(0, min(int(last.get("time_spent_delta", 0)), 600))
+                    except (TypeError, ValueError, OverflowError):
+                        return JsonResponse({"error": "Invalid final time."}, status=400)
+                    response.time_spent_seconds += seconds
+                    response.is_visited = True
+                    response.is_marked_for_review = bool(last.get("is_marked_for_review", False))
+                    response.save(update_fields=["selected_option", "time_spent_seconds", "is_visited", "is_marked_for_review"])
+                locked_attempt.submit_attempt(is_timeout=is_timeout or (locked_attempt.exam.is_private_practice and locked_attempt.is_expired))
 
-                log_audit(
-                    request.user,
-                    "EXAM_SESSION_SUBMITTED",
-                    f"Candidate submitted exam '{locked_attempt.exam.title}' (Score: {locked_attempt.score_obtained}/{locked_attempt.total_marks})",
-                    request=request,
-                )
+                if not locked_attempt.exam.is_private_practice:
+                    log_audit(
+                        request.user,
+                        "EXAM_SESSION_SUBMITTED",
+                        f"Candidate submitted exam '{locked_attempt.exam.title}' (Score: {locked_attempt.score_obtained}/{locked_attempt.total_marks})",
+                        request=request,
+                    )
 
         completed_url = reverse("exams:exam_completed", kwargs={"attempt_uuid": attempt.attempt_uuid})
 
@@ -626,6 +807,15 @@ class ExamCompletedView(ActiveUserRequiredMixin, DetailView):
 
         return attempt
 
+    def get(self, request, *args, **kwargs):
+        attempt = self.get_object()
+        if attempt.exam.is_private_practice and attempt.status == ExamAttempt.AttemptStatus.IN_PROGRESS:
+            return redirect("exams:exam_session", attempt_uuid=attempt.attempt_uuid)
+        response = super().get(request, *args, **kwargs)
+        if attempt.exam.is_private_practice:
+            patch_cache_control(response, private=True, no_store=True)
+        return response
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         attempt = self.object
@@ -639,7 +829,7 @@ class ExamCompletedView(ActiveUserRequiredMixin, DetailView):
                 "unanswered_count": attempt.total_questions_count - attempt.answered_count,
                 "marked_review_count": attempt.marked_review_count,
                 "time_taken_minutes": round(attempt.time_taken_seconds / 60, 1),
-                "show_results": exam.show_result_immediately,
+                "show_results": exam.show_result_immediately and not exam.is_private_practice,
             }
         )
         return context

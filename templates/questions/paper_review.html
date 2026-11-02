@@ -1,12 +1,13 @@
 {% extends 'dashboard_base.html' %}
+{% load static %}
 
 {% block title %}Review & Edit: {{ paper.title }} | {{ PLATFORM_NAME }}{% endblock %}
 
 {% block extra_head %}
 <!-- KaTeX for crisp mathematical equation rendering in review workspace -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous">
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3TX4437n" crossorigin="anonymous"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZko/WgHgoVICvIK1Pe49yi36XXgn74CEvTxmKjH" crossorigin="anonymous" onload="renderMathInElement(document.body);"></script>
+<link rel="stylesheet" href="{% static 'vendor/katex/katex.min.css' %}" integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous">
+<script defer src="{% static 'vendor/katex/katex.min.js' %}" integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg" crossorigin="anonymous"></script>
+<script defer src="{% static 'vendor/katex/contrib/auto-render.min.js' %}" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk" crossorigin="anonymous" onload="renderMathInElement(document.body, {delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false},{left:'\\[',right:'\\]',display:true}],throwOnError:false});"></script>
 {% endblock %}
 
 {% block dashboard_content %}
@@ -43,6 +44,23 @@
     </div>
 </div>
 
+{% if paper.status == 'processing' or paper.status == 'pending' %}
+<div class="alert alert-info">Extraction is queued or running. Refresh this page to check progress. Provider processing may take several minutes.</div>
+{% elif paper.status == 'failed' %}
+<div class="alert alert-danger">Extraction did not complete. Existing review work was preserved; see the extraction log below. No automatic local fallback was used.</div>
+{% endif %}
+<div class="alert alert-info small" role="alert">
+    <strong>Review against the original PDF before approval.</strong> Formulas, tables and diagrams can require correction,
+    and a question may continue on the next page. Flagged or incomplete questions are skipped during bulk approval.
+</div>
+{% if paper.mathpix_document_id %}<p class="small text-muted">Mathpix document reference: <code>{{ paper.mathpix_document_id }}</code>. Check the extraction log for deletion status.</p>{% endif %}
+{% if extraction_warnings %}
+<div class="alert alert-warning small" role="alert">
+    <strong>Extraction limitations:</strong>
+    <ul class="mb-0">{% for warning in extraction_warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
 <!-- Review Progress Bar & Key Actions -->
 <div class="card border shadow-sm mb-4">
     <div class="card-body p-3">
@@ -58,6 +76,8 @@
             </div>
 
             <div class="col-md-7 d-flex flex-wrap justify-content-md-end gap-2">
+                <a href="{% url 'questions:extracted_add' paper.pk %}" class="btn btn-sm btn-outline-primary">Add missing question</a>
+                <a href="{% url 'questions:figure_pool' paper.pk %}" class="btn btn-sm btn-outline-secondary">Image pool ({{ unassigned_figure_count }})</a>
                 <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#answerKeyDrawer" aria-expanded="false">
                     <i class="bi bi-key-fill me-1"></i> Import Answer Key
                 </button>
@@ -118,7 +138,7 @@
         <div class="card-header bg-white py-2 px-3 d-flex justify-content-between align-items-center">
             <div class="d-flex align-items-center gap-2">
                 <span class="badge bg-dark fw-bold">Q{{ q.question_number }}</span>
-                <span class="text-muted small">Page {{ q.page_number }}</span>
+                <span class="text-muted small">Page{% if q.source_pages|length > 1 %}s{% endif %} {% if q.source_pages %}{% for page in q.source_pages %}<a target="_blank" rel="noopener" href="{% url 'questions:paper_download' paper.pk %}#page={{ page }}">{{ page }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}{% else %}{{ q.page_number }}{% endif %}</span>
                 {% if q.status == 'approved' %}
                     <span class="badge bg-success"><i class="bi bi-check-circle-fill me-1"></i> In Question Bank</span>
                 {% elif q.status == 'reviewed' %}
@@ -148,12 +168,18 @@
                 {{ q.question_text|linebreaksbr }}
             </div>
 
+            {% if q.extraction_issues %}<details class="small text-muted mb-2"><summary>Original extraction notes</summary><ul class="mb-0">{% for issue in q.extraction_issues %}<li>{{ issue }}</li>{% endfor %}</ul></details>{% endif %}
+
             <!-- Optional Extracted Diagram -->
             {% if q.image %}
             <div class="mb-3">
                 <img src="{{ q.image.url }}" alt="Question Diagram" class="img-thumbnail" style="max-height: 180px; max-width: 100%;">
             </div>
             {% endif %}
+
+            {% for figure in q.figures.all %}{% if not figure.option_key %}
+            <div class="mb-3"><img src="{% url 'questions:figure_file' figure.pk %}" alt="Question figure" class="img-thumbnail" style="max-height:180px; max-width:100%;"></div>
+            {% endif %}{% endfor %}
 
             <!-- MCQ Options Grid -->
             <div class="row g-2 mb-3">
@@ -163,6 +189,9 @@
                         <span class="badge {% if opt.key == q.correct_option %}bg-success{% else %}bg-secondary{% endif %}">{{ opt.key }}</span>
                         <div class="flex-grow-1 text-dark">
                             {{ opt.text }}
+                            {% for figure in q.figures.all %}{% if figure.option_key == opt.key %}
+                            <img src="{% url 'questions:figure_file' figure.pk %}" alt="Option {{ opt.key }} image" class="img-fluid d-block mt-2 rounded border" style="max-height:140px;">
+                            {% endif %}{% endfor %}
                         </div>
                         {% if opt.key == q.correct_option %}
                             <i class="bi bi-check-circle-fill text-success" title="Correct Answer"></i>
@@ -190,7 +219,12 @@
                     <a href="{% url 'questions:extracted_edit' q.pk %}" class="btn btn-sm btn-outline-primary py-1 px-2">
                         <i class="bi bi-pencil-square me-1"></i> Edit Question
                     </a>
+                    <a href="{% url 'questions:figure_manage' q.pk %}" class="btn btn-sm btn-outline-primary py-1 px-2">Images / crop</a>
+                    <a href="{% url 'questions:paper_download' paper.pk %}#page={{ q.page_number }}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary py-1 px-2">
+                        <i class="bi bi-file-earmark-pdf me-1"></i> Source Page
+                    </a>
 
+                    {% if q.status != 'approved' %}
                     <form method="post" action="{% url 'questions:extracted_toggle_flag' q.pk %}" class="d-inline">
                         {% csrf_token %}
                         <button type="submit" class="btn btn-sm {% if q.is_flagged %}btn-outline-warning text-dark{% else %}btn-outline-secondary{% endif %} py-1 px-2" title="Toggle flag">
@@ -204,13 +238,14 @@
                             <i class="bi bi-trash"></i>
                         </button>
                     </form>
+                    {% endif %}
                 </div>
 
                 <div>
                     {% if q.status != 'approved' %}
                     <form method="post" action="{% url 'questions:extracted_approve' q.pk %}" class="d-inline">
                         {% csrf_token %}
-                        <button type="submit" class="btn btn-sm btn-success py-1 px-3 fw-bold">
+                        <button type="submit" class="btn btn-sm btn-success py-1 px-3 fw-bold" {% if q.is_flagged %}disabled title="Review and clear the flag before approval"{% endif %}>
                             <i class="bi bi-check-circle me-1"></i> Approve to Bank
                         </button>
                     </form>

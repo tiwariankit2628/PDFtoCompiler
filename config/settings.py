@@ -33,6 +33,11 @@ if DEBUG:
         if dev_host not in ALLOWED_HOSTS:
             ALLOWED_HOSTS.append(dev_host)
 
+# Configure trusted origins explicitly when behind a preview/reverse proxy.
+CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in os.environ.get("CSRF_TRUSTED_ORIGINS", "").split(",") if origin.strip()]
+if os.environ.get("TRUST_PROXY_HTTPS", "False").lower() in ("true", "1", "yes"):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
 # ------------------------------------------------------------------------------
 # PLATFORM BRANDING & CONFIGURATION
 # ------------------------------------------------------------------------------
@@ -186,18 +191,34 @@ STORAGES = {
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# Student PDFs and crops are never exposed through MEDIA_URL. Keep this folder
+# private in your web server and back it up as sensitive user data.
+PRIVATE_PRACTICE_ROOT = os.environ.get("PRIVATE_PRACTICE_ROOT", str(BASE_DIR / "private_practice"))
+PRACTICE_MIN_DURATION_MINUTES = int(os.environ.get("PRACTICE_MIN_DURATION_MINUTES", "5"))
+PRACTICE_MAX_DURATION_MINUTES = int(os.environ.get("PRACTICE_MAX_DURATION_MINUTES", "360"))
+PRACTICE_MAX_PDF_PAGES = int(os.environ.get("PRACTICE_MAX_PDF_PAGES", "100"))
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # ------------------------------------------------------------------------------
 # CELERY & REDIS
 # ------------------------------------------------------------------------------
 CELERY_ALWAYS_EAGER = os.environ.get("CELERY_ALWAYS_EAGER", "True").lower() in ("true", "1")
+# Celery's namespaced setting is TASK_ALWAYS_EAGER, not ALWAYS_EAGER.
+CELERY_TASK_ALWAYS_EAGER = CELERY_ALWAYS_EAGER
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/0")
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
+# Requires a running Celery worker AND beat; web requests also enforce expiry.
+CELERY_BEAT_SCHEDULE = {
+    "expire-private-practice-attempts": {
+        "task": "apps.exams.tasks.expire_private_practice_attempts",
+        "schedule": 30.0,
+    },
+}
 
 # ------------------------------------------------------------------------------
 # OCR & PDF PROCESSING
@@ -207,8 +228,8 @@ TESSERACT_CMD = os.environ.get("TESSERACT_CMD", "")
 # ------------------------------------------------------------------------------
 # RAZORPAY CONFIGURATION
 # ------------------------------------------------------------------------------
-RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "rzp_test_placeholder_key")
-RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "rzp_test_placeholder_secret")
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
 RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
 
 # ------------------------------------------------------------------------------
@@ -233,3 +254,13 @@ if not DEBUG:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
 
+
+# Optional, paid cloud PDF extraction. Disabled unless deliberately configured.
+PDF_CLOUD_ENABLED = os.environ.get("PDF_CLOUD_ENABLED", "False").lower() in ("true", "1", "yes")
+MATHPIX_APP_ID = os.environ.get("MATHPIX_APP_ID", "")
+MATHPIX_APP_KEY = os.environ.get("MATHPIX_APP_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-4-argon")
+PDF_CLOUD_MAX_PAGES = int(os.environ.get("PDF_CLOUD_MAX_PAGES", "50"))
+PDF_CLOUD_POLL_SECONDS = float(os.environ.get("PDF_CLOUD_POLL_SECONDS", "3"))
+PDF_CLOUD_TIMEOUT_SECONDS = int(os.environ.get("PDF_CLOUD_TIMEOUT_SECONDS", "900"))

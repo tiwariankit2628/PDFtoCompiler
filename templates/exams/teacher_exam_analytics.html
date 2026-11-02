@@ -1,10 +1,11 @@
 {% extends 'dashboard_base.html' %}
+{% load static %}
 
 {% block title %}Class Analytics - {{ exam.title }} | {{ PLATFORM_NAME }}{% endblock %}
 
 {% block extra_head %}
 <!-- Chart.js -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="{% static 'vendor/chartjs/chart.umd.min.js' %}"></script>
 {% endblock %}
 
 {% block dashboard_content %}

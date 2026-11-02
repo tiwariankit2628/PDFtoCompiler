@@ -97,6 +97,14 @@
 
                         {% if user.is_student %}
                         <li class="nav-item">
+                            <a class="nav-link text-dark {% if 'practice_' in request.resolver_match.url_name %}active bg-primary text-white fw-semibold{% endif %}" href="{% url 'questions:practice_list' %}">
+                                <i class="bi bi-file-earmark-pdf me-2 text-danger"></i> My PDF Practice
+                            </a>
+                        </li>
+                        <li class="nav-item"><a class="nav-link text-dark" href="{% url 'questions:practice_bank' %}"><i class="bi bi-collection me-2 text-success"></i> My Question Bank</a></li>
+                        <li class="nav-item"><a class="nav-link text-dark" href="{% url 'questions:practice_history' %}"><i class="bi bi-clock-history me-2 text-primary"></i> Practice History</a></li>
+                        <li class="nav-item"><a class="nav-link text-dark" href="{% url 'payments:plans' %}"><i class="bi bi-credit-card me-2 text-primary"></i> Plans & Usage</a></li>
+                        <li class="nav-item">
                             <a class="nav-link text-dark {% if request.resolver_match.url_name == 'exam_catalog' %}active bg-primary text-white fw-semibold{% endif %}" href="{% url 'exams:exam_catalog' %}">
                                 <i class="bi bi-journal-bookmark me-2 text-primary"></i> Available Exams
                             </a>

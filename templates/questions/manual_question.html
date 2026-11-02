@@ -1,0 +1,12 @@
+{% extends 'dashboard_base.html' %}
+{% block title %}Add missing question | {{ PLATFORM_NAME }}{% endblock %}
+{% block dashboard_content %}
+<div class="d-flex justify-content-between mb-4"><div><h2 class="fw-bold">Add a missing question</h2><p class="text-muted">{{ paper.title }} · {{ paper.total_pages }} pages</p></div><a class="btn btn-outline-secondary align-self-start" href="{% url 'questions:paper_review' paper.pk %}">Back to review</a></div>
+<div class="card p-4 shadow-sm"><p>Enter the question as printed. You can add options and crop diagrams on the next screen. The answer key will be blank.</p>
+<form method="post">{% csrf_token %}
+  <div class="row g-3"><div class="col-md-3"><label class="form-label" for="number">Question number</label><input id="number" name="question_number" type="number" min="1" max="100000" class="form-control" value="{{ values.question_number }}" required></div>
+  <div class="col-md-3"><label class="form-label" for="page">Source page</label><input id="page" name="page_number" type="number" min="1" max="{{ paper.total_pages }}" class="form-control" value="{{ values.page_number }}" required></div>
+  <div class="col-12"><label class="form-label" for="text">Question text</label><textarea id="text" name="question_text" class="form-control" rows="5" required>{{ values.question_text }}</textarea></div></div>
+  <button class="btn btn-primary mt-3">Add and edit options</button>
+</form></div>
+{% endblock %}

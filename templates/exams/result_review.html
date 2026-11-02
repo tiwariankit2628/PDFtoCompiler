@@ -1,12 +1,13 @@
 {% extends 'base.html' %}
+{% load static %}
 
 {% block title %}Solution Review - {{ exam.title }} | {{ PLATFORM_NAME }}{% endblock %}
 
 {% block extra_head %}
 <!-- KaTeX -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" onload="renderMathInElement(document.body);"></script>
+<link rel="stylesheet" href="{% static 'vendor/katex/katex.min.css' %}">
+<script defer src="{% static 'vendor/katex/katex.min.js' %}"></script>
+<script defer src="{% static 'vendor/katex/contrib/auto-render.min.js' %}" onload="renderMathInElement(document.body, {delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false},{left:'\\[',right:'\\]',display:true}],throwOnError:false});"></script>
 <style>
     .review-opt-card {
         border: 1.5px solid #e2e8f0;
@@ -143,6 +144,8 @@
             </div>
             {% endif %}
 
+            {% for figure in q_data.question.figures.all %}{% if not figure.option_id %}<div class="mb-3 text-center"><img src="{{ figure.image.url }}" alt="Question figure" class="img-fluid rounded border" style="max-height:280px;"></div>{% endif %}{% endfor %}
+
             <!-- Options Review Grid -->
             <div class="mb-3">
                 {% for opt in q_data.options %}
@@ -155,6 +158,7 @@
                         {% if opt.image %}
                         <img src="{{ opt.image.url }}" alt="Option Image" class="img-fluid d-block mt-2 rounded border" style="max-height: 120px;">
                         {% endif %}
+                        {% for figure in opt.figures.all %}<img src="{{ figure.image.url }}" alt="Option image" class="img-fluid d-block mt-2 rounded border" style="max-height:120px;">{% endfor %}
                     </div>
                     <div>
                         {% if opt.is_correct and q_data.selected_option.id == opt.id %}

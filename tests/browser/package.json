@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "description": "Optional isolated Chromium smoke test for private PDF practice",
+  "devDependencies": {
+    "playwright-core": "1.64.1"
+  }
+}

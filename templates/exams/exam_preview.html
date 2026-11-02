@@ -1,12 +1,13 @@
 {% extends 'dashboard_base.html' %}
+{% load static %}
 
 {% block title %}Examination Preview: {{ exam.title }} | {{ PLATFORM_NAME }}{% endblock %}
 
 {% block extra_head %}
 <!-- KaTeX for live equation rendering -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous">
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3TX4437n" crossorigin="anonymous"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZko/WgHgoVICvIK1Pe49yi36XXgn74CEvTxmKjH" crossorigin="anonymous" onload="renderMathInElement(document.body);"></script>
+<link rel="stylesheet" href="{% static 'vendor/katex/katex.min.css' %}" integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous">
+<script defer src="{% static 'vendor/katex/katex.min.js' %}" integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg" crossorigin="anonymous"></script>
+<script defer src="{% static 'vendor/katex/contrib/auto-render.min.js' %}" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk" crossorigin="anonymous" onload="renderMathInElement(document.body, {delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false},{left:'\\[',right:'\\]',display:true}],throwOnError:false});"></script>
 {% endblock %}
 
 {% block dashboard_content %}
@@ -99,13 +100,18 @@
             </div>
             {% endif %}
 
+            {% for figure in eq.question.figures.all %}{% if not figure.option_id %}<div class="mb-3 text-center"><img src="{{ figure.image.url }}" alt="Question figure" class="img-fluid rounded border" style="max-height:240px;"></div>{% endif %}{% endfor %}
+
             <!-- Options -->
             <div class="row g-2 mb-3">
                 {% for opt in eq.question.options.all %}
                 <div class="col-md-6">
                     <div class="p-3 border rounded-3 d-flex align-items-center gap-3 {% if opt.is_correct %}border-success bg-success bg-opacity-10{% else %}bg-light{% endif %}">
                         <span class="badge {% if opt.is_correct %}bg-success{% else %}bg-secondary{% endif %} fs-6 px-3 py-2">{{ opt.option_key }}</span>
-                        <span class="flex-grow-1 text-dark fs-6">{{ opt.option_text }}</span>
+                        <span class="flex-grow-1 text-dark fs-6">{{ opt.option_text|linebreaksbr }}
+                            {% if opt.image %}<img src="{{ opt.image.url }}" alt="Option image" class="img-fluid d-block mt-2" style="max-height:140px;">{% endif %}
+                            {% for figure in opt.figures.all %}<img src="{{ figure.image.url }}" alt="Option image" class="img-fluid d-block mt-2" style="max-height:140px;">{% endfor %}
+                        </span>
                         {% if opt.is_correct %}
                             <i class="bi bi-check2-circle text-success fs-5" title="Correct Answer Key"></i>
                         {% endif %}

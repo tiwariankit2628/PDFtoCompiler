@@ -1,0 +1,32 @@
+{% extends 'dashboard_base.html' %}
+{% block title %}My PDF Practice | {{ PLATFORM_NAME }}{% endblock %}
+{% block dashboard_content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+  <div><h2 class="fw-bold mb-1">My PDF practice</h2><p class="text-muted mb-0">Your personal papers and timed tests, separate from the public catalog.</p></div>
+  <div class="d-flex flex-wrap gap-2"><a class="btn btn-outline-primary" href="{% url 'questions:practice_bank' %}">Question bank</a><a class="btn btn-outline-secondary" href="{% url 'questions:practice_history' %}">All history</a><a class="btn btn-primary" href="{% url 'questions:practice_upload' %}"><i class="bi bi-plus-circle me-1"></i> Create from PDF</a></div>
+</div>
+<div class="alert alert-info small">PDF extraction can make mistakes. Check text, formulas, options and images before taking a test. Missing answer keys stay ungraded. Private tests do not use your free trial.</div>
+{% for paper in papers %}
+<div class="card border shadow-sm mb-3"><div class="card-body">
+  <div class="d-flex flex-wrap justify-content-between gap-3 align-items-center">
+    <div><h5 class="fw-bold mb-1">{{ paper.title }}</h5><span class="small text-muted">{{ paper.created_at|date:'d M Y' }} · {{ paper.questions_found }} extracted · {{ paper.get_status_display }}</span>
+      {% if paper.practice_exam %}<div class="small mt-1">{{ paper.practice_exam.total_questions_count }} questions · {{ paper.practice_exam.total_marks }} total marks · {{ paper.practice_exam.duration_minutes }} minutes</div>{% endif %}
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+      {% if paper.practice_exam %}<a class="btn btn-primary" href="{% url 'exams:exam_instructions' paper.practice_exam.slug %}">Start or resume</a>
+      {% else %}<a class="btn btn-outline-primary" href="{% url 'questions:practice_settings' paper.pk %}">Review & settings</a>{% endif %}
+      <a class="btn btn-outline-secondary" target="_blank" rel="noopener" href="{% url 'questions:practice_pdf' paper.pk %}">Source PDF</a>
+      {% if paper.status != 'pending' and paper.status != 'processing' %}<form method="post" action="{% url 'questions:practice_delete' paper.pk %}" onsubmit="return confirm('Delete this private PDF, its original test and all its attempts? Bank-made tests retain the questions and images they need. This cannot be undone.');">{% csrf_token %}<button class="btn btn-outline-danger">Delete</button></form>{% endif %}
+    </div>
+  </div>
+  {% if paper.practice_exam %}
+  <div class="mt-3 border-top pt-2 small"><strong>Attempts:</strong>
+    {% for attempt in paper.practice_exam.attempts.all %}
+      {% if attempt.status == 'in_progress' %}<a class="ms-2" href="{% url 'exams:exam_session' attempt.attempt_uuid %}">Resume ({{ attempt.started_at|date:'d M H:i' }})</a>
+      {% else %}<a class="ms-2" href="{% url 'questions:practice_result' attempt.attempt_uuid %}">Review {{ attempt.started_at|date:'d M H:i' }}</a>{% endif %}
+    {% empty %}<span class="text-muted">No attempts yet.</span>{% endfor %}
+  </div>{% endif %}
+</div></div>
+{% empty %}<div class="card p-5 text-center border shadow-sm"><h5>No PDF practice tests yet</h5><p class="text-muted">Upload a question paper to get started.</p><div><a class="btn btn-primary" href="{% url 'questions:practice_upload' %}">Upload a PDF</a></div></div>{% endfor %}
+{% if bank_tests %}<div class="mt-4 mb-3"><h4 class="fw-bold">Tests from your bank</h4><p class="text-muted small">These tests preserve the question versions you selected.</p></div>{% for test in bank_tests %}<div class="card border shadow-sm mb-3"><div class="card-body d-flex flex-wrap justify-content-between gap-2"><div><h5 class="fw-bold mb-1">{{ test.title }}</h5><span class="small text-muted">{{ test.total_questions_count }} questions · {{ test.duration_minutes }} minutes · {{ test.attempts.count }} attempts</span></div><a class="btn btn-primary align-self-center" href="{% url 'exams:exam_instructions' test.slug %}">Start or resume</a></div></div>{% endfor %}{% endif %}
+{% endblock %}

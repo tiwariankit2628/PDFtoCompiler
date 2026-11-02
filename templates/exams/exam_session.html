@@ -1,3 +1,4 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -7,13 +8,14 @@
     <title>Exam: {{ exam.title }} | {{ PLATFORM_NAME }}</title>
 
     <!-- Bootstrap 5.3 CSS -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <link href="{% static 'vendor/bootstrap/bootstrap.min.css' %}" rel="stylesheet">
+    <link rel="stylesheet" href="{% static 'vendor/bootstrap-icons/bootstrap-icons.min.css' %}">
 
     <!-- KaTeX CSS -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+    <link rel="stylesheet" href="{% static 'vendor/katex/katex.min.css' %}">
 
     <style>
+        @font-face { font-family: "CBT Devanagari"; src: url("{% static 'fonts/NotoSansDevanagari.ttf' %}") format("truetype"); font-weight: 100 900; font-display: swap; }
         :root {
             --cbt-primary: #0d6efd;
             --cbt-answered: #198754;
@@ -27,7 +29,7 @@
             -webkit-user-select: none;
             -moz-user-select: none;
             overflow-x: hidden;
-            font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, "CBT Devanagari", sans-serif;
         }
         /* Top Examination Bar */
         .cbt-topbar {
@@ -262,7 +264,7 @@
 
                 <!-- Diagram Image Container (Hidden if no diagram) -->
                 <div class="mb-4 text-center d-none" id="question-diagram-box">
-                    <img src="" alt="Question Diagram" class="img-fluid rounded border shadow-sm" style="max-height: 320px;" id="question-diagram-img">
+                    <!-- Images are inserted as DOM nodes by the CBT renderer. -->
                 </div>
 
                 <!-- MCQ Options List -->
@@ -398,10 +400,12 @@
     </div>
 
     <!-- SCRIPTS -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+    <script src="{% static 'vendor/bootstrap/bootstrap.bundle.min.js' %}"></script>
+    <script src="{% static 'vendor/katex/katex.min.js' %}"></script>
+    <script src="{% static 'vendor/katex/contrib/auto-render.min.js' %}"></script>
 
+    <!-- Script-safe JSON prevents question text from escaping the data block. -->
+    {{ questions_data|json_script:"questions-data" }}
     <!-- CBT Examination Engine JavaScript -->
     <script>
         (function() {
@@ -415,12 +419,15 @@
             const COMPLETED_URL = "{% url 'exams:exam_completed' attempt.attempt_uuid %}";
 
             // Questions Payload from Server (SECURITY: Answer keys are not present in this dataset)
-            const questions = {{ questions_json|safe }};
+            const questions = JSON.parse(document.getElementById('questions-data').textContent);
             let currentIndex = {{ initial_index }};
             let remainingSeconds = {{ remaining_seconds }};
             let activeTimer = null;
             let questionStartTime = Date.now();
             let isSubmitting = false;
+            const IS_PRIVATE_PRACTICE = {% if exam.is_private_practice %}true{% else %}false{% endif %};
+            let saveQueue = Promise.resolve();
+            const failedSaves = new Set();
 
             // DOM Elements
             const timerEl = document.getElementById('exam-timer');
@@ -429,7 +436,6 @@
             const negMarksEl = document.getElementById('q-negative-marks');
             const statementBox = document.getElementById('question-statement-box');
             const diagramBox = document.getElementById('question-diagram-box');
-            const diagramImg = document.getElementById('question-diagram-img');
             const optionsContainer = document.getElementById('options-container');
             const paletteGrid = document.getElementById('palette-grid');
             const activeSectionBadge = document.getElementById('active-section-badge');
@@ -446,7 +452,7 @@
                 buildPaletteGrid();
                 renderQuestion(currentIndex);
                 startCountdown();
-                initAntiCheat();
+                if (!IS_PRIVATE_PRACTICE) initAntiCheat();
                 initHeartbeat();
                 updateCounters();
             }
@@ -489,17 +495,21 @@
                 activeSectionBadge.textContent = `Section: ${q.section}`;
 
                 // Statement with LaTeX rendering
-                statementBox.innerHTML = q.question_text.replace(/\n/g, '<br>');
+                statementBox.textContent = q.question_text;
+                statementBox.style.whiteSpace = 'pre-line';
                 renderKaTeX(statementBox);
 
-                // Diagram image
-                if (q.image_url) {
-                    diagramImg.src = q.image_url;
-                    diagramBox.classList.remove('d-none');
-                } else {
-                    diagramBox.classList.add('d-none');
-                    diagramImg.src = '';
-                }
+                // Preserve both legacy and additional original question images.
+                diagramBox.replaceChildren();
+                (q.image_urls || []).forEach(url => {
+                    const image = document.createElement('img');
+                    image.src = url;
+                    image.alt = 'Question diagram';
+                    image.className = 'img-fluid rounded border shadow-sm m-1';
+                    image.style.maxHeight = '320px';
+                    diagramBox.appendChild(image);
+                });
+                diagramBox.classList.toggle('d-none', !(q.image_urls || []).length);
 
                 // Render MCQ Options
                 optionsContainer.innerHTML = '';
@@ -509,18 +519,22 @@
                     card.className = `option-card ${isSelected ? 'selected' : ''}`;
                     card.setAttribute('data-option-id', opt.id);
 
-                    card.innerHTML = `
-                        <span class="option-badge">${opt.key}</span>
-                        <div class="option-text flex-grow-1">${opt.text ? opt.text.replace(/\n/g, '<br>') : ''}</div>
-                    `;
-
-                    if (opt.image_url) {
+                    const badge = document.createElement('span');
+                    badge.className = 'option-badge';
+                    badge.textContent = opt.key;
+                    const content = document.createElement('div');
+                    content.className = 'option-text flex-grow-1';
+                    content.style.whiteSpace = 'pre-line';
+                    content.textContent = opt.text || '';
+                    card.append(badge, content);
+                    (opt.image_urls || []).forEach(url => {
                         const optImg = document.createElement('img');
-                        optImg.src = opt.image_url;
+                        optImg.src = url;
+                        optImg.alt = 'Option ' + opt.key + ' image';
                         optImg.className = 'img-fluid d-block mt-2 rounded border';
                         optImg.style.maxHeight = '140px';
-                        card.appendChild(optImg);
-                    }
+                        content.appendChild(optImg);
+                    });
 
                     // Card click handler
                     card.addEventListener('click', () => {
@@ -574,12 +588,14 @@
                         card.classList.remove('selected');
                     }
                 });
+                if (IS_PRIVATE_PRACTICE) saveAndNavigate(null, 'navigate');
             }
 
             // 4. Save and Navigate
             function saveAndNavigate(targetIndex, action = 'navigate') {
                 const q = questions[currentIndex];
                 const timeSpentDelta = Math.round((Date.now() - questionStartTime) / 1000);
+                questionStartTime = Date.now();
 
                 // Compute updated palette status locally for snappy response
                 if (action === 'clear') {
@@ -600,43 +616,41 @@
                 // Update palette button style immediately
                 const paletteBtn = document.getElementById(`palette-btn-${currentIndex}`);
                 if (paletteBtn) {
-                    paletteBtn.className = `palette-btn palette-${q.palette_status}`;
+                    paletteBtn.className = `palette-btn palette-${q.palette_status}${targetIndex === null ? ' active-q' : ''}`;
                 }
+                if (targetIndex === null) updateCounters();
 
-                // Send AJAX save payload to server
+                // Queue private saves so a quick submit cannot overtake an
+                // earlier navigation save. The payload is frozen at the click.
                 showSyncStatus('Saving...', 'text-warning');
-                fetch(SAVE_URL, {
+                const responseId = q.response_id;
+                const saveBody = JSON.stringify({
+                    response_id: responseId, action: action,
+                    selected_option_id: q.selected_option_id,
+                    is_marked_for_review: q.is_marked_for_review,
+                    time_spent_delta: timeSpentDelta
+                });
+                const sendSave = () => fetch(SAVE_URL, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRFToken': CSRF_TOKEN,
-                        'X-Requested-With': 'XMLHttpRequest'
-                    },
-                    body: JSON.stringify({
-                        response_id: q.response_id,
-                        action: action,
-                        selected_option_id: q.selected_option_id,
-                        is_marked_for_review: q.is_marked_for_review,
-                        time_spent_delta: timeSpentDelta
-                    })
-                })
-                .then(res => res.json())
-                .then(data => {
+                    headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN,
+                              'X-Requested-With': 'XMLHttpRequest'},
+                    body: saveBody
+                }).then(res => res.json()).then(data => {
                     if (data.status === 'expired') {
                         window.location.href = data.redirect_url || COMPLETED_URL;
                         return;
                     }
-                    if (data.status === 'success') {
-                        showSyncStatus('Connected', 'text-success');
-                        if (typeof data.remaining_seconds === 'number') {
-                            remainingSeconds = data.remaining_seconds;
-                        }
-                    }
-                })
-                .catch(err => {
+                    if (data.status !== 'success') throw new Error('Save was rejected');
+                    failedSaves.delete(responseId);
+                    showSyncStatus('Connected', 'text-success');
+                    if (typeof data.remaining_seconds === 'number') remainingSeconds = data.remaining_seconds;
+                }).catch(err => {
                     console.error('Save failed:', err);
-                    showSyncStatus('Reconnecting...', 'text-danger');
+                    if (IS_PRIVATE_PRACTICE) failedSaves.add(responseId);
+                    showSyncStatus('Save failed — retry this question', 'text-danger');
                 });
+                if (IS_PRIVATE_PRACTICE) saveQueue = saveQueue.then(sendSave);
+                else sendSave();
 
                 // Advance to target question
                 if (targetIndex !== null && targetIndex >= 0 && targetIndex < questions.length) {
@@ -754,6 +768,7 @@
                             // Sync client timer with authoritative server time
                             remainingSeconds = data.remaining_seconds;
                         }
+                        if (IS_PRIVATE_PRACTICE && !isSubmitting) saveAndNavigate(null, 'navigate');
                     })
                     .catch(() => {});
                 }, 30000);
@@ -842,23 +857,42 @@
                 const submitBtn = document.getElementById('btn-confirm-submit');
                 if (submitBtn) submitBtn.disabled = true;
 
-                fetch(SUBMIT_URL, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRFToken': CSRF_TOKEN,
-                        'X-Requested-With': 'XMLHttpRequest'
-                    },
-                    body: JSON.stringify({ is_timeout: isTimeout })
-                })
-                .then(res => res.json())
-                .then(data => {
-                    window.location.href = data.redirect_url || COMPLETED_URL;
-                })
-                .catch(() => {
-                    // Fallback to direct navigation
-                    window.location.href = COMPLETED_URL;
-                });
+                const submitRequest = () => {
+                    const payload = {is_timeout: isTimeout};
+                    if (IS_PRIVATE_PRACTICE && !isTimeout && questions[currentIndex]) {
+                        const q = questions[currentIndex];
+                        payload.last_response = {response_id:q.response_id, selected_option_id:q.selected_option_id,
+                            is_marked_for_review:q.is_marked_for_review,
+                            time_spent_delta:Math.round((Date.now()-questionStartTime)/1000)};
+                    }
+                    fetch(SUBMIT_URL, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN,
+                                  'X-Requested-With': 'XMLHttpRequest'},
+                        body: JSON.stringify(payload)
+                    }).then(async res => {
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.error || 'Submission failed');
+                        window.location.href = data.redirect_url || COMPLETED_URL;
+                    }).catch(() => {
+                        // Do not claim a submission or navigate away on a network error.
+                        isSubmitting = false;
+                        if (submitBtn) submitBtn.disabled = false;
+                        startCountdown();
+                        showSyncStatus('Submission failed — retry', 'text-danger');
+                    });
+                };
+                if (IS_PRIVATE_PRACTICE && !isTimeout) {
+                    saveQueue.then(() => {
+                        if (failedSaves.size) {
+                            const numbers = questions.filter(q => failedSaves.has(q.response_id)).map(q => q.order).join(', ');
+                            isSubmitting = false;
+                            if (submitBtn) submitBtn.disabled = false;
+                            startCountdown();
+                            alert('Some answers could not be saved. Revisit and save question(s) ' + numbers + ' before submitting.');
+                        } else submitRequest();
+                    });
+                } else submitRequest();
             }
 
             // Launch Engine on DOM Load

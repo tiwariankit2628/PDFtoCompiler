@@ -1,0 +1,14 @@
+{% extends 'dashboard_base.html' %}
+{% block title %}Unassigned image candidates | {{ PLATFORM_NAME }}{% endblock %}
+{% block dashboard_content %}
+<div class="d-flex flex-wrap justify-content-between gap-2 mb-4"><div><h2 class="fw-bold">Unassigned image candidates</h2><p class="text-muted">{{ paper.title }}</p></div><a href="{% if student_practice %}{% url 'questions:practice_settings' paper.pk %}{% else %}{% url 'questions:paper_review' paper.pk %}{% endif %}" class="btn btn-outline-secondary align-self-start">Back to review</a></div>
+<div class="alert alert-info small">These are original-PDF crops that could not be confidently assigned. They can include logos, watermarks or unrelated content. Attach only after checking the source; remove irrelevant candidates.</div>
+<div class="row g-3">{% for figure in figures %}<div class="col-md-6 col-xl-4"><div class="card h-100 p-3 shadow-sm">
+  <strong>Page {{ figure.page_number }}</strong><span class="small text-muted">{{ figure.source }}</span>
+  <img class="img-fluid border my-2" src="{% if student_practice %}{% url 'questions:practice_figure_file' figure.pk %}{% else %}{% url 'questions:figure_file' figure.pk %}{% endif %}" alt="Unassigned image candidate on page {{ figure.page_number }}" style="max-height:220px; object-fit:contain;">
+  <a class="small mb-2" target="_blank" rel="noopener" href="{% if student_practice %}{% url 'questions:practice_pdf' paper.pk %}{% else %}{% url 'questions:paper_download' paper.pk %}{% endif %}#page={{ figure.page_number }}">Open source page</a>
+  <form method="post">{% csrf_token %}<input type="hidden" name="figure_id" value="{{ figure.pk }}">
+    <label class="small" for="q-{{ figure.pk }}">Question</label><select id="q-{{ figure.pk }}" name="question_id" class="form-select form-select-sm mb-2"><option value="">Choose a question</option>{% for q in questions %}<option value="{{ q.pk }}">Q{{ q.question_number }} (page {{ q.page_number }})</option>{% endfor %}</select>
+    <div class="d-flex gap-2"><select name="target" class="form-select form-select-sm" aria-label="Attach to"><option value="">Question</option><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option></select><button class="btn btn-sm btn-primary" name="action" value="assign">Attach</button><button class="btn btn-sm btn-outline-danger" name="action" value="delete" onclick="return confirm('Remove this candidate?')">Remove</button></div>
+  </form></div></div>{% empty %}<div class="col-12"><p class="text-muted">No unassigned candidates.</p></div>{% endfor %}</div>
+{% endblock %}

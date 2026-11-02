@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from .private_storage import private_practice_storage
 
 
 class QuestionPaperUpload(models.Model):
@@ -15,7 +16,25 @@ class QuestionPaperUpload(models.Model):
         COMPLETED = "completed", "Imported to Question Bank"
         FAILED = "failed", "Extraction Failed"
 
+    class ExtractionMode(models.TextChoices):
+        LOCAL = "local", "Local PyMuPDF / Tesseract"
+        CLOUD = "cloud", "Mathpix + Gemini"
+
+    # Private student material is stored separately from the teacher media tree.
+    is_student_private = models.BooleanField(default=False, db_index=True)
+    practice_exam = models.OneToOneField(
+        "exams.Exam", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="private_source_paper",
+    )
+    private_pdf_file = models.FileField(
+        upload_to="papers/%Y/%m/", storage=private_practice_storage, blank=True
+    )
     title = models.CharField("Paper Title", max_length=255)
+    extraction_mode = models.CharField(
+        max_length=12, choices=ExtractionMode.choices, default=ExtractionMode.LOCAL
+    )
+    cloud_consent_at = models.DateTimeField(null=True, blank=True)
+    mathpix_document_id = models.CharField(max_length=160, blank=True, help_text="Provider reference for status/deletion; not an API credential.")
     category = models.ForeignKey(
         "exams.Category",
         on_delete=models.CASCADE,
@@ -87,6 +106,15 @@ class Question(models.Model):
         MCQ_MULTIPLE = "mcq_multiple", "Multiple Choice (Multiple Correct)"
         NUMERICAL = "numerical", "Numerical / Integer Value"
 
+    is_private_practice = models.BooleanField(default=False, db_index=True)
+    # Student bank edits use copy-on-write. Archived versions remain attached to
+    # existing exams and preserve the text, options and answers of past attempts.
+    is_bank_archived = models.BooleanField(default=False, db_index=True)
+    # Private keys are explicitly entered/confirmed by the student, never guessed.
+    key_verified = models.BooleanField(default=False)
+    private_image = models.ImageField(
+        upload_to="question_images/%Y/%m/", storage=private_practice_storage, blank=True
+    )
     category = models.ForeignKey(
         "exams.Category",
         on_delete=models.CASCADE,
@@ -231,7 +259,13 @@ class ExtractedQuestion(models.Model):
         blank=True,
         null=True,
     )
+    private_image = models.ImageField(
+        upload_to="extracted_images/%Y/%m/", storage=private_practice_storage, blank=True
+    )
+    include_in_practice = models.BooleanField(default=True)
     page_number = models.PositiveIntegerField("Source Page", default=1)
+    source_pages = models.JSONField(default=list, blank=True, help_text="Pages containing this question, including continuations.")
+    extraction_issues = models.JSONField(default=list, blank=True, help_text="Original extraction diagnostics for review.")
     status = models.CharField(
         "Review Status",
         max_length=20,
@@ -259,3 +293,43 @@ class ExtractedQuestion(models.Model):
 
     def __str__(self):
         return f"Q{self.question_number} (Page {self.page_number}) - {self.status}"
+
+
+class ExtractedFigure(models.Model):
+    """An original-PDF crop in the staging workspace, assigned or awaiting review."""
+
+    paper = models.ForeignKey(QuestionPaperUpload, on_delete=models.CASCADE, related_name="figures")
+    question = models.ForeignKey(
+        ExtractedQuestion, on_delete=models.SET_NULL, related_name="figures", null=True, blank=True
+    )
+    option_key = models.CharField(max_length=10, blank=True, default="")
+    image = models.ImageField(upload_to="extracted_figures/%Y/%m/", blank=True)
+    private_image = models.ImageField(
+        upload_to="figures/%Y/%m/", storage=private_practice_storage, blank=True
+    )
+    page_number = models.PositiveIntegerField(default=1)
+    # Source rectangle in normalized page coordinates [x0, y0, x1, y1].
+    bounding_box = models.JSONField(default=list, blank=True)
+    source = models.CharField(max_length=20, default="manual")
+    order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["page_number", "order", "id"]
+
+
+class QuestionFigure(models.Model):
+    """Additional bank image; an optional option links it to that choice."""
+
+    question = models.ForeignKey(Question, on_delete=models.CASCADE, related_name="figures")
+    option = models.ForeignKey(
+        QuestionOption, on_delete=models.CASCADE, related_name="figures", null=True, blank=True
+    )
+    image = models.ImageField(upload_to="question_figures/%Y/%m/", blank=True)
+    private_image = models.ImageField(
+        upload_to="figures/%Y/%m/", storage=private_practice_storage, blank=True
+    )
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["order", "id"]

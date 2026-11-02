@@ -3,6 +3,13 @@
    Designed for high-performance, modern educational SaaS aesthetics
    ------------------------------------------------------------------------- */
 
+@font-face {
+  font-family: "CBT Devanagari";
+  src: url("../fonts/NotoSansDevanagari.ttf") format("truetype");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
 :root {
   --cbt-primary: #1e3a8a;
   --cbt-primary-dark: #0f172a;
@@ -21,7 +28,7 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "CBT Devanagari", sans-serif;
   color: var(--cbt-text-dark);
   background-color: var(--cbt-bg-light);
   min-height: 100vh;

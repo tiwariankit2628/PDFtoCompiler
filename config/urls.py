@@ -13,6 +13,7 @@ urlpatterns = [
     path("auth/", include("apps.accounts.urls", namespace="accounts")),
     path("exams/", include("apps.exams.urls", namespace="exams")),
     path("questions/", include("apps.questions.urls", namespace="questions")),
+    path("payments/", include("apps.payments.urls", namespace="payments")),
 ]
 
 if settings.DEBUG:

@@ -9,6 +9,80 @@ A high-performance, commercial-grade Computer-Based Testing (CBT) and online exa
 
 ---
 
+## Student PDF practice & duration
+
+A signed-in student can open **My PDF Practice → Create from PDF**, upload a PDF, review or edit extracted questions and images, add missing questions, and include/exclude items. The settings page requires a whole-minute duration and previews the included question count, total possible marks, and duration. Presets are 15, 30, 45, 60, 90 and 120 minutes; custom values default to **5–360 minutes**. Set `PRACTICE_MIN_DURATION_MINUTES` and `PRACTICE_MAX_DURATION_MINUTES` to change the range (`1 <= min <= max <= 10080`). Uploads default to a maximum of 25 MB and `PRACTICE_MAX_PDF_PAGES=100`.
+
+Students can explicitly delete a finished upload together with its original test and attempts; deletion is unavailable while extraction is running. Questions and image files still referenced by separately created bank tests are retained to preserve those tests and their history. Django admin blocks deletion of accounts or categories containing private practice data, and disables their bulk-delete action, to avoid exposing or accidentally cascading private material. Backups and any data previously sent to opted-in providers have their own retention policies.
+
+A single-answer key can be entered per question or pasted as `1: A, 2: B`. Keys are **never guessed**. Questions without a key are displayed as **ungraded**, not incorrect; the private score covers keyed questions only. Question and option images may be cropped from the source or uploaded, and unassigned cloud image candidates can be reviewed in the image pool. Always compare the text, formulas, options, keys and figures against the original: both local and cloud extraction can miss or misread content. PDF practice currently supports single-answer MCQs only.
+
+Each private test stores its chosen duration. On start, the server stores one absolute expiry; reloads, resuming and reconnecting do not reset it. The database prevents two simultaneous active private attempts for the same student and test; an explicit new attempt after submission uses the same test duration and consumes an attempt from the student's plan. Selecting an answer is autosaved, and manual submission also saves the last visible answer atomically. Private tests do not consume the free trial, do not enter public catalog/leaderboards or institutional results, and are excluded from teacher/admin management views. Existing institutional exam duration settings remain unchanged.
+
+### Auto-submit operations
+
+The CBT server refuses answer changes after the stored expiry and finalizes overdue attempts on session, heartbeat, result, start, or practice-list requests. **For offline auto-submission when the student has closed their browser, run a worker and Celery beat**, with a shared database, private storage and Redis broker, for example:
+
+```sh
+# Set CELERY_ALWAYS_EAGER=False and CELERY_BROKER_URL appropriately first.
+celery -A config worker -l INFO
+# Run as a separate supervised service:
+celery -A config beat -l INFO
+```
+
+Beat schedules `expire_private_practice_attempts` every 30 seconds; finalization may be delayed by scheduling or broker/worker availability, but expired answers remain locked. Monitor both services. As an alternative or recovery mechanism, schedule `python manage.py expire_practice_attempts` with cron. With development `CELERY_ALWAYS_EAGER=True` and no worker/beat or cron, offline attempts finalize on the next request rather than in the background. The new periodic sweep covers **student private practice only**, not institutional exams.
+
+### Private files and optional providers
+
+Private PDFs and figures are stored under `PRIVATE_PRACTICE_ROOT` (default `private_practice/`), separate from `MEDIA_ROOT` and `STATIC_ROOT`, and served only through owner-authorized views. New files use restrictive filesystem permissions; configure a protected persistent volume, access-controlled backups, and a web server that does **not** serve or symlink that directory. This is application-level isolation, not encryption against administrators with direct database/filesystem access. Deployments must also address authentication, HTTPS, quotas, abuse controls and user-data retention.
+
+Local extraction is the default and does not send a student's PDF to Mathpix or Gemini. If the server enables and configures cloud extraction, a student may explicitly choose it and consent for that upload. The PDF is then sent to Mathpix and OCR/page images to Google Gemini, with provider charges and retention policies; deletion is requested from Mathpix but caches/metadata may remain. No real provider calls are made by the test suite. See the cloud setup section below, and verify current terms and pricing before use.
+
+### Results, bank and data protection
+
+- **Practice history** lists the student's attempts. A finished attempt has a scorecard, question-wise selections, the confirmed key and explanation where available, time, subject/topic/difficulty breakdowns, and comparison with other attempts. Scores and percentage use *confirmed-key marks* as the denominator. Accuracy uses only answered questions with confirmed keys. Questions without a key remain ungraded; they are not incorrect. A practice pass/fail outcome is shown only when a target is configured and every question has a confirmed key. The key is *student-confirmed*, not independently certified by the platform.
+- Question time is an estimate based on browser save/heartbeat events; disconnects, a closed browser or time after the last save may not be recorded. Total time is measured separately from the server start and submit/expiry timestamps. Institutional examinations retain their existing behavior.
+- **My Question Bank** is private to the owner. Included, approved PDF items are added when a private test is created; students can search/filter by subject, topic, chapter and difficulty, edit or remove an item and create a new test from selected items. Each bank edit uses copy-on-write if an existing test refers to the item, so existing question text, options, images, marks and attempt results remain unchanged. Removing an item from the bank retains its historical version where a test needs it. Deleting the original paper/test is explicitly destructive for its own attempts, but independent bank tests retain their referenced questions and images. Operators must account for these retained versions in their retention and erasure procedures.
+- All result, report, source-paper and bank views require the owner. To avoid disclosing keys during a reattempt, these answer-bearing areas are temporarily blocked while **any** private test for that student is active. Other students, teachers and application-admin views cannot access private material. These controls do not protect against a server/database operator with direct access, or the student's own copy of the PDF or previously downloaded report.
+- Downloadable reports include the scorecard, breakdowns, question-wise text, selected/confirmed answers, explanations, images and recorded times. PyMuPDF shapes English/Hindi using the embedded Noto Sans Devanagari font (SIL Open Font License, included in `static/fonts/`). Some complex Devanagari ligatures can render correctly while copy/search text extraction is imperfect; verify accessibility requirements for your use case. LaTeX is included as text in the report rather than typeset math, and missing source images are noted. Browser assets and their licences are in `static/vendor/`.
+
+### Practice plans and Razorpay test mode
+
+The migration creates a single default **Free practice** plan: 3 PDF uploads, 5 test creations and 10 new attempts per calendar month, plus 3 attempts per test. PDF reports, the bank and the cloud-extraction permission are enabled by default (cloud still needs configuration and per-upload consent). A Django superuser can edit limits, feature switches, availability and pricing in **Django admin → Practice plans** without code changes. Blank limits mean unlimited; `0` means none. Usage is counted in the `Asia/Kolkata` calendar month, includes both PDF- and bank-created tests, and is not refunded by deleting data. Resuming an existing attempt does not consume another attempt. The stricter of a test's own and the plan's per-test limits applies. Existing institutional/free-trial rules are separate. No paid plan or price is silently seeded; publish one only after deciding its terms.
+
+Paid plans can be **one-time prepaid access** for a configured number of days, or **recurring** access tied to a Razorpay plan. A recurring plan's Razorpay test plan ID, currency, price in paise, period and interval must match the configured plan; the maximum cycle count is disclosed to the student. A student can request cancellation at cycle end, and verified paid access remains through its paid period. Overlapping plans do not stack; an earlier recurring subscription keeps renewing until cancelled. Same-plan duplicate purchases are blocked while access is active.
+
+Set the following only in the server's secret manager or private environment, **not in Git or chat**:
+
+```text
+RAZORPAY_KEY_ID=<test key beginning rzp_test_>
+RAZORPAY_KEY_SECRET=<test key secret>
+RAZORPAY_WEBHOOK_SECRET=<separate test webhook secret>
+```
+
+The integration deliberately rejects missing, placeholder and `rzp_live_` credentials. Configure a dedicated HTTPS **test-mode** webhook at `/payments/razorpay/webhook/` for `payment.captured`, `order.paid`, `payment.failed`, `subscription.charged`, `subscription.cancelled`, `subscription.completed`, `subscription.halted`, and `refund.processed`. Test keys must correspond to the account that signs those webhooks. The public key ID alone is sent to Checkout. A browser callback is insufficient: the server verifies the SDK signature and fetches the captured payment, or verifies the signed raw webhook, then checks provider IDs, amount, currency and the paid subscription period. Payment records, webhook idempotency and entitlement creation are transactional. Full refunds revoke applicable access; partial refunds are recorded. For a recurring plan, a refund of an older paid period does not revoke a later separately paid period.
+
+If a provider creation response is lost, the checkout is left **initiating**, no access is granted, and automatic retries are blocked to avoid accidentally creating another subscription. Investigate in the Razorpay *test* dashboard using the local checkout UUID (order receipt or subscription notes). An operator can link a matching provider record without activating access:
+
+```sh
+python manage.py reconcile_practice_checkout <checkout-uuid> <order-or-subscription-id>
+```
+
+The command verifies the provider record and frozen terms. It does **not** grant access; replay the original signed webhook or complete the normal server-verified checkout. Monitor failed webhooks and unresolved records, and never assume that a network timeout means the provider did nothing.
+
+**Testing and deployment status:** automated billing tests exercise real HMAC/signature logic with mocked Razorpay API responses, including retries, expiry, recurring renewal and refunds. They do **not** perform an actual Razorpay sandbox transaction or prove provider compatibility, cancellation timing, refund behavior or webhook delivery in a merchant account. A real test-mode checkout, webhook replay and operations/security review are required before use; live mode is intentionally disabled. Configure `ALLOWED_HOSTS`, exact `CSRF_TRUSTED_ORIGINS`, HTTPS and, only behind a trusted proxy that strips client-supplied forwarding headers, `TRUST_PROXY_HTTPS=True`. Use PostgreSQL and durable protected storage in production; add rate limiting, monitoring, reconciliation, backup and retention policies. Preview/development settings are not production-ready.
+
+Run the suite with `python manage.py test`; no real payment or OCR-provider calls are made by the tests. The real-browser smoke test is optional because it requires Node 20+ and a compatible Chromium binary:
+
+```sh
+(cd tests/browser && npm ci)
+RUN_BROWSER_E2E=1 CHROMIUM_PATH=/path/to/chromium python manage.py test apps.questions.test_browser_practice
+```
+
+The browser test starts Django's isolated test server/database, generates a synthetic PDF with images, and uses temporary private storage. It checks registration, upload/review, autosave/refresh, CBT, results, report, reattempt/privacy, history, bank, quotas UI and the unconfigured payment state without contacting providers. It deletes its temporary test data afterward. Some container-only Chromium distributions also require system libraries, `LD_LIBRARY_PATH`, and `CHROMIUM_SINGLE_PROCESS=1`.
+
+---
+
 ## 1. System Architecture
 
 The project is structured according to Django enterprise best practices with clean modular separation:
@@ -71,7 +145,7 @@ TESTgen/
 | **PostgreSQL** | Primary Database | **Not Running on 5432** | Dual-mode: SQLite fallback for local dev; switches to PostgreSQL when `DB_ENGINE=postgres` is set. |
 | **Tesseract OCR** | Scanned PDF Extraction | **Not Detected in PATH** | PyTesseract wrapper installed. Path configurable via `TESSERACT_CMD` in `.env`. |
 | **Redis** | Celery Message Broker | **Not Running on 6379** | `CELERY_ALWAYS_EAGER=True` for synchronous background task execution during dev and testing. |
-| **Razorpay** | Payment Gateway | **Client Library Installed** | Configured with test credentials in `.env`. |
+| **Razorpay** | Test-mode practice billing | **SDK installed; real transaction not verified** | Supply test credentials and webhook secret in server environment; unconfigured or live keys are rejected. |
 
 ---
 
@@ -109,13 +183,51 @@ python manage.py migrate
 python manage.py seed_categories
 python manage.py seed_admin
 
-# 4. Run Automated Tests (27 tests across all apps)
+# 4. Run Automated Tests
 python manage.py test
 
 # 5. Start Development Server
 python manage.py runserver 127.0.0.1:8000
 ```
 Visit `http://127.0.0.1:8000/` in your browser.
+
+---
+
+## PDF extraction: setup, privacy and review
+
+**The default is local extraction.** It does not send the PDF to Mathpix or Google. Digital layout extraction is heuristic; scanned pages require a separately installed Tesseract executable and appropriate English/Hindi language packs. The local automatic parser may miss equations, diagrams, option images, and difficult layouts. Manual cropping/attachment is available regardless of extraction mode.
+
+The optional **Mathpix + Gemini** pipeline is disabled by default. To enable it, an administrator must configure the server's private `.env` or secret manager (never put real credentials in Git or send them in chat):
+
+```dotenv
+PDF_CLOUD_ENABLED=True
+MATHPIX_APP_ID=<your-server-side-app-id>
+MATHPIX_APP_KEY=<your-server-side-app-key>
+GEMINI_API_KEY=<your-server-side-api-key>
+GEMINI_MODEL=gemini-4-argon
+PDF_CLOUD_MAX_PAGES=50
+PDF_CLOUD_POLL_SECONDS=3
+PDF_CLOUD_TIMEOUT_SECONDS=900
+```
+
+1. Install the project requirements and apply migrations: `python manage.py migrate`.
+2. For background processing, run a Redis broker and a Celery worker, set `CELERY_ALWAYS_EAGER=False`, configure `CELERY_BROKER_URL`, and start `celery -A config worker --loglevel=INFO`. Use PostgreSQL for production concurrency; SQLite is intended for local development. Web and worker processes need the same database, private settings and shared media storage.
+3. With `CELERY_ALWAYS_EAGER=True` (the development default), cloud extraction runs **synchronously inside the upload request** and can take several minutes or exceed web-server timeouts. Do not use that setting for long-running production jobs.
+4. In **Upload Question Paper**, choose **Mathpix + Gemini** and explicitly consent for that specific upload. Merely configuring keys does not send existing PDFs. A 25 MB upload limit and the configurable cloud page limit apply. Refresh the review page while a background task is pending or running; examine its log for errors. If a worker dies, check the broker/worker and the paper's status. To retry, upload a fresh copy and consent again; it may be billed again.
+
+Cloud processing uploads the full PDF to Mathpix. It sends the OCR text, normalized layout regions and rendered page images to Google's Gemini API, in two-primary-page batches with neighboring-page context. Images used in Gemini calls are compressed previews; figures saved in the app are cropped from the original PDF with PyMuPDF, not generated by AI. An uploaded paper is never sent without the cloud option and explicit per-upload consent. The app requests deletion of the Mathpix document after OCR, including on processing errors when the provider ID is known. Deletion can fail, a timed-out submission can have an unknown ID, or a killed worker may not run cleanup. A known Mathpix document reference is recorded on the paper as soon as the provider returns it; check the paper log/reference and contact Mathpix if needed. CDN caches and minimal billing/audit metadata may remain. Review [Mathpix retention and deletion](https://docs.mathpix.com/concepts/data-retention) and [Google's Gemini API terms and privacy](https://ai.google.dev/gemini-api/terms) for your account and region before uploading sensitive material. The PDF, review data and crops are also stored in the app's media/database until managed by the operator; this feature does not implement a complete retention policy.
+
+Both services can charge your accounts. As listed by Mathpix on 2026-11-02, PDF OCR was $0.005/page for the first tier, with a one-time $19.99 setup fee; taxes and other fees may apply. Gemini is billed separately, and overlapping page context increases image/input usage. Pricing and terms can change: check [Mathpix pricing](https://mathpix.com/pricing/api) and [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) before use. A provider failure stops the run and is reported; there is no silent local fallback and submission is not automatically retried.
+
+### Review workflow
+
+- Compare all questions, English/Hindi text, formulas, tables, options and images with their source pages. The cloud model can hallucinate, omit or rearrange content; its structured JSON is validated but is not a guarantee of accuracy. Every cloud-derived question is flagged until a teacher reviews and clears it. Local extraction also reports some uncertainties, but unflagged local items still need review.
+- Question source links include continuation pages when detected. Use **Add missing question** if a label is missing and the extraction log/numbering indicates a gap. Numbers, options and flags are editable. No answer key is guessed: import or enter the actual key separately, or leave it blank. Questions without an answer key are not ready for automatic scoring.
+- The cloud pipeline matches candidate figure regions to question or option IDs, keeps ambiguous/unmatched candidates in **Image pool** (which may contain logos), and rejects shared or invalid matches. Region alignment checks are heuristic, not proof. A teacher can drag a crop rectangle over a source page, attach or replace image files, move images to a question or option, or return them to the pool. Multiple images and image-only options are supported in staging, the bank, exam preview/session and result review.
+- Image changes re-flag staging questions. Approve only after review; flagged, incomplete or structurally invalid items are skipped by bulk approval. Approved staging images become read-only; use **Manage images** in the question bank for later corrections. Changes to bank questions can affect exams and historical displays. Duplicate linking is conservative when content, marks, keys or figures differ.
+- Extraction never replaces an existing staging workspace. To run a fresh extraction, upload a new copy rather than overwriting teacher edits. Provider tests use synthetic PDFs and mocks; no real-provider accuracy or cost benchmark is implied.
+
+**Deployment warning:** the development configuration serves `MEDIA_ROOT` directly when `DEBUG=True`, which can expose uploaded PDFs and image files by URL despite protected review endpoints. Do not use it for confidential papers. Configure access-controlled private storage and media delivery, secrets, HTTPS, retention/backup policies, and a full security review before production. The broader examination and payment features have not been established as production-ready.
 
 ---
 
@@ -141,22 +253,22 @@ Visit `http://127.0.0.1:8000/` in your browser.
   - Full automated test suite (27 tests passing, 0 system check issues).
 - [x] **Phase 3: PDF Upload & Question Extraction System (PyMuPDF + OCR)** (Completed)
   - **Secure PDF Upload** (`/questions/papers/upload/`): 25MB file validation, MIME check, and PyMuPDF stream integrity verification.
-  - **Automated Extraction Pipeline** (`apps/questions/extractor.py`):
-    - Multi-page extraction with question number pattern recognition (`Q.1`, `Question 1:`, `1.`, `प्रश्न 1:`, etc.).
-    - MCQ options parsing across single/multiple lines and inline formatting (`(A)-(D)`, `1-4`, Hindi Devanagari `क-घ`).
-    - Mathematical equation and scientific symbol preservation (with KaTeX preview in review workspace).
-    - Diagram and equation image extraction from PDF streams to local storage.
-    - Scanned PDF detection with Tesseract OCR fallback and language data handling.
+  - **Automated Extraction Pipeline** (`apps/questions/extractor.py`, `apps/questions/pdf_layout.py`):
+    - Digital papers with explicit `Q1` / `Question 1` / `प्रश्न 1` labels are read in page and column order; questions can continue into the next column or page.
+    - Embedded figures are matched by position and rendered from the original PDF. Repeated footer logos and page watermarks are excluded where identifiable.
+    - A basic text/Tesseract fallback supports other numbering styles and scanned pages, but does not automatically assign diagrams and flags its results for review. Install Tesseract and the required language data for OCR; unavailable OCR is reported in the review page and log.
+    - Local extraction is heuristic; mathematical notation, tables and image associations may need manual correction. The optional consent-gated Mathpix + Gemini pipeline and the manual image editor support multiple question and option images.
+    - No answer key is guessed. Review every question against the source PDF, including items without an automatic flag. Upload a fresh copy to apply extraction changes to a previously processed paper; existing review items are not automatically reprocessed.
   - **Interactive Review Workspace** (`/questions/papers/<pk>/review/`):
-    - Staging review table with filter tabs (`all`, `pending`, `flagged`, `approved`).
+    - Staging review table with filter tabs (`all`, `pending`, `flagged`, `approved`) and a source-page link for each question.
     - Editable question editor (`/questions/extracted/<pk>/edit/`): modify text, options, marks, diagrams.
-    - Automatic incomplete question flagging (e.g. `< 2` MCQ options or missing statements).
-    - Single question approval and bulk approval into permanent Question Bank.
-    - Accidental duplicate question prevention with automatic bank item linking.
+    - Automatic flags for incomplete questions and some potentially unreliable math, tables, or diagrams; flags do not detect every error.
+    - Flagged and structurally incomplete questions cannot be approved until corrected; bulk approval skips them.
+    - Conservative duplicate linking only when the question, options, answer, marks and other content match; image-bearing questions are not silently linked.
     - Quick answer-key importer supporting standard formats (`1: A, 2: B` or newline delimited).
-  - **Access Control & Protected Media**:
+  - **Access Control** (development media serving is not private; see the deployment warning above):
     - Scoped access: Admins see all papers; Teachers see authored/assigned category papers; Students blocked (403 Forbidden).
-    - Protected PDF streaming endpoint (`/questions/papers/<pk>/pdf/`) preventing unauthorized file downloads.
+    - Role-checked PDF streaming endpoint (`/questions/papers/<pk>/pdf/`); direct development media URLs can bypass it and must not be used for confidential data.
   - **Question Bank** (`/questions/bank/`): Searchable, filterable question catalog with category and difficulty tags.
   - Full automated test suite (45 tests passing, 0 system check issues).
 - [x] **Phase 4: Question Bank & Examination Creation** (Completed)
@@ -211,10 +323,10 @@ Visit `http://127.0.0.1:8000/` in your browser.
     - Server-stored `started_at` and `expires_at` timestamps.
     - 30-second periodic heartbeat synchronization with server clock.
     - Visual urgency alert: Timer transitions to animated red pulse when $< 5$ minutes remain.
-    - Autonomous server-side timeout: Automatically submits exam and transitions status to `TIMED_OUT` when time expires, independent of client browser state.
+    - Server-side deadline enforcement: overdue answers are rejected and attempts are finalized on a subsequent request. Private-practice offline finalization additionally requires the worker/beat or cron setup described above.
   - **Reliable Answer Persistence & Concurrency Safety**:
     - Real-time AJAX response autosave (`/exams/session/<uuid>/save-answer/`) with database row locking (`select_for_update`).
-    - Complete browser refresh and network disconnection recovery: 100% of candidate responses, review flags, and palette states restored.
+    - Browser refresh and network reconnection restore responses, review flags, and palette states that were successfully saved to the server.
     - Edit lock: Immediately rejects response edits after session submission or expiry.
   - **Commercial-Grade Examination Security**:
     - **Answer Protection:** Answer keys, correctness flags (`is_correct`), and solution explanations are strictly stripped from client HTML and JSON payloads.
@@ -264,5 +376,5 @@ Visit `http://127.0.0.1:8000/` in your browser.
   - **Data Privacy & Candidate Isolation**:
     - Server-side candidate ownership verification: Unauthorized candidates attempting to inspect another student's result or review are rejected with `HTTP 403 Forbidden`.
   - Full automated test suite (82 tests passing across all apps).
-- [ ] **Phase 7: Freemium Subscription & Razorpay Payment Integration**
+- [ ] **Phase 7: Student insights, private bank and test-mode billing** — implemented and covered by automated tests; a real Razorpay test-mode checkout and webhook still require merchant credentials and provider verification.
 - [ ] **Phase 8: Security Testing, Performance Optimization & Cloud Deployment**

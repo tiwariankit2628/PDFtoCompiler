@@ -1,6 +1,7 @@
 import json
 import pymupdf as fitz
 from django import forms
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from apps.exams.models import Category
 from .models import ExtractedQuestion, QuestionPaperUpload
@@ -30,6 +31,16 @@ class QuestionPaperUploadForm(BootstrapFormMixin, forms.ModelForm):
     """
 
     MAX_FILE_SIZE_MB = 25
+    extraction_mode = forms.ChoiceField(
+        choices=QuestionPaperUpload.ExtractionMode.choices,
+        initial=QuestionPaperUpload.ExtractionMode.LOCAL,
+        required=False,
+        label="Extraction method",
+    )
+    cloud_consent = forms.BooleanField(
+        required=False,
+        label="I authorize sending this PDF to Mathpix and its pages/OCR to Google Gemini, and accept the related charges and provider policies.",
+    )
 
     class Meta:
         model = QuestionPaperUpload
@@ -77,13 +88,27 @@ class QuestionPaperUploadForm(BootstrapFormMixin, forms.ModelForm):
         try:
             file_bytes = uploaded_file.read()
             uploaded_file.seek(0)
-            doc = fitz.open(stream=file_bytes, filetype="pdf")
-            if len(doc) == 0:
-                raise ValidationError("The uploaded PDF has 0 pages or is corrupted.")
+            with fitz.open(stream=file_bytes, filetype="pdf") as doc:
+                if len(doc) == 0 or doc.needs_pass:
+                    raise ValidationError("The uploaded PDF is empty or password protected.")
+                self.pdf_page_count = len(doc)
         except Exception as exc:
             raise ValidationError(f"Invalid or corrupted PDF file: {str(exc)}")
 
         return uploaded_file
+
+    def clean(self):
+        cleaned = super().clean()
+        mode = cleaned.get("extraction_mode") or QuestionPaperUpload.ExtractionMode.LOCAL
+        cleaned["extraction_mode"] = mode
+        if mode == QuestionPaperUpload.ExtractionMode.CLOUD:
+            if not cleaned.get("cloud_consent"):
+                self.add_error("cloud_consent", "Explicit consent is required for cloud extraction.")
+            if not (settings.PDF_CLOUD_ENABLED and settings.MATHPIX_APP_ID and settings.MATHPIX_APP_KEY and settings.GEMINI_API_KEY):
+                self.add_error("extraction_mode", "Cloud extraction is not configured on this server. Choose local or ask an administrator to configure it.")
+            if getattr(self, "pdf_page_count", 0) > settings.PDF_CLOUD_MAX_PAGES:
+                self.add_error("pdf_file", f"Cloud extraction is limited to {settings.PDF_CLOUD_MAX_PAGES} pages per upload.")
+        return cleaned
 
 
 class ExtractedQuestionEditForm(BootstrapFormMixin, forms.ModelForm):
@@ -143,12 +168,12 @@ class QuestionBankForm(BootstrapFormMixin, forms.ModelForm):
     option_text_A = forms.CharField(
         label="Option A",
         widget=forms.TextInput(attrs={"placeholder": "Option A statement / formula"}),
-        required=True,
+        required=False,
     )
     option_text_B = forms.CharField(
         label="Option B",
         widget=forms.TextInput(attrs={"placeholder": "Option B statement / formula"}),
-        required=True,
+        required=False,
     )
     option_text_C = forms.CharField(
         label="Option C",
@@ -160,11 +185,13 @@ class QuestionBankForm(BootstrapFormMixin, forms.ModelForm):
         widget=forms.TextInput(attrs={"placeholder": "Option D statement / formula"}),
         required=False,
     )
+    option_text_E = forms.CharField(label="Option E", required=False,
+                                    widget=forms.TextInput(attrs={"placeholder": "Option E statement / formula"}))
     correct_option = forms.ChoiceField(
-        label="Correct Answer",
-        choices=[("A", "Option A"), ("B", "Option B"), ("C", "Option C"), ("D", "Option D")],
-        widget=forms.Select(),
-        required=True,
+        label="Correct Answer (optional)",
+        choices=[("", "No answer key"), ("A", "Option A"), ("B", "Option B"),
+                 ("C", "Option C"), ("D", "Option D"), ("E", "Option E")],
+        widget=forms.Select(), required=False,
     )
 
     class Meta:
@@ -228,6 +255,8 @@ class QuestionBankForm(BootstrapFormMixin, forms.ModelForm):
                 self.fields["option_text_C"].initial = opts["C"].option_text
             if "D" in opts:
                 self.fields["option_text_D"].initial = opts["D"].option_text
+            if "E" in opts:
+                self.fields["option_text_E"].initial = opts["E"].option_text
 
             correct = self.instance.options.filter(is_correct=True).first()
             if correct:
@@ -239,15 +268,19 @@ class QuestionBankForm(BootstrapFormMixin, forms.ModelForm):
         opt_b = cleaned_data.get("option_text_B", "").strip()
         opt_c = cleaned_data.get("option_text_C", "").strip()
         opt_d = cleaned_data.get("option_text_D", "").strip()
+        opt_e = cleaned_data.get("option_text_E", "").strip()
         correct = cleaned_data.get("correct_option")
 
-        options_map = {"A": opt_a, "B": opt_b, "C": opt_c, "D": opt_d}
-        valid_opts = [k for k, v in options_map.items() if v]
+        options_map = {"A": opt_a, "B": opt_b, "C": opt_c, "D": opt_d, "E": opt_e}
+        image_keys = set()
+        if self.instance and self.instance.pk:
+            image_keys = {opt.option_key for opt in self.instance.options.all() if opt.image or opt.figures.exists()}
+        valid_opts = [k for k, v in options_map.items() if v or k in image_keys]
 
         if len(valid_opts) < 2:
             raise ValidationError("An MCQ question must provide at least 2 non-empty options.")
 
-        if correct not in valid_opts:
+        if correct and correct not in valid_opts:
             raise ValidationError(
                 f"Selected correct answer ({correct}) cannot be empty. Please provide text for Option {correct}."
             )

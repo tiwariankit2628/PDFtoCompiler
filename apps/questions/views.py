@@ -1,10 +1,12 @@
 import json
 import re
 from django.contrib import messages
+from django.conf import settings
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import Count, Q
 from django.http import FileResponse, Http404
+from django.utils import timezone
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
 from django.views.generic import CreateView, DetailView, ListView, UpdateView, View
@@ -17,7 +19,82 @@ from .forms import (
     ExtractedQuestionEditForm,
     QuestionPaperUploadForm,
 )
-from .models import ExtractedQuestion, Question, QuestionOption, QuestionPaperUpload
+from .models import (ExtractedFigure, ExtractedQuestion, Question, QuestionFigure, QuestionOption, QuestionPaperUpload)
+
+
+def _approval_error(question):
+    """Keep known-bad extraction results out of the question bank."""
+    if question.is_flagged:
+        return "Review this flagged question and clear the flag before approval."
+    if not question.question_text.strip():
+        return "A question statement is required."
+    options = question.options if isinstance(question.options, list) else []
+    if any(not isinstance(option, dict) for option in options):
+        return "The options are invalid. Edit them before approval."
+    keys = [option.get("key", "").strip().upper() if isinstance(option.get("key"), str) else "" for option in options]
+    if not all(keys) or len(keys) != len(set(keys)):
+        return "Option labels must be present and unique."
+    image_keys = set(question.figures.exclude(option_key="").values_list("option_key", flat=True))
+    if image_keys - set(keys):
+        return "An image is assigned to an option that no longer exists."
+    if len(options) < 2 or any(
+        not isinstance(option.get("text"), str) or (not option["text"].strip() and key not in image_keys)
+        for option, key in zip(options, keys)
+    ):
+        return "At least two options with text or an image are required."
+    if question.correct_option and question.correct_option.strip().upper() not in keys:
+        return "The answer key does not match an option."
+    return ""
+
+
+def _infer_language(staged):
+    """Conservative metadata hint; the teacher can change it in the bank."""
+    text = " ".join([staged.question_text] + [o.get("text", "") for o in staged.options])
+    has_hindi = bool(re.search(r"[\u0900-\u097f]", text))
+    # Avoid counting LaTeX command names such as \frac as English prose.
+    prose = re.sub(r"\\[A-Za-z]+", "", text)
+    has_english = bool(re.search(r"[A-Za-z]{2,}", prose))
+    return Question.Language.BILINGUAL if has_hindi and has_english else Question.Language.HINDI if has_hindi else Question.Language.ENGLISH
+
+
+def _equivalent_bank_question(question):
+    """Only link an existing question when doing so cannot discard content."""
+    if question.image or question.figures.exists():
+        return None
+    correct = question.correct_option.strip().upper()
+    staged = [(o["key"].strip().upper(), o.get("text", ""), o["key"].strip().upper() == correct and bool(correct))
+              for o in question.options]
+    for existing in Question.objects.filter(is_private_practice=False, category=question.paper.category, question_text__iexact=question.question_text.strip()):
+        if (existing.image or existing.figures.exists()
+                or existing.explanation != question.explanation
+                or existing.positive_marks != question.positive_marks
+                or existing.negative_marks != question.negative_marks
+                or existing.subject != (question.paper.subject or "General")
+                or existing.topic != (question.paper.target_exam or "")
+                or existing.language != _infer_language(question)):
+            continue
+        opts = list(existing.options.all())
+        if any(opt.image for opt in opts):
+            continue
+        if [(o.option_key, o.option_text, o.is_correct) for o in opts] == staged:
+            return existing
+    return None
+
+
+def _create_bank_options_and_figures(staged, bank):
+    correct = (staged.correct_option or "").strip().upper()
+    options = {}
+    for index, opt in enumerate(staged.options):
+        key = opt["key"].strip().upper()
+        options[key] = QuestionOption.objects.create(
+            question=bank, option_key=key, option_text=opt.get("text", ""),
+            is_correct=(key == correct and bool(correct)), order=index,
+        )
+    for figure in staged.figures.all():
+        QuestionFigure.objects.create(
+            question=bank, option=options.get(figure.option_key) if figure.option_key else None,
+            image=figure.image.name, order=figure.order,
+        )
 
 
 class QuestionPaperListView(TeacherRequiredMixin, ListView):
@@ -45,7 +122,7 @@ class QuestionPaperListView(TeacherRequiredMixin, ListView):
             else:
                 qs = QuestionPaperUpload.objects.filter(uploaded_by=user)
 
-        qs = qs.select_related("category", "uploaded_by").annotate(
+        qs = qs.filter(is_student_private=False).select_related("category", "uploaded_by").annotate(
             total_extracted=Count("extracted_questions")
         ).order_by("-created_at")
 
@@ -90,6 +167,10 @@ class QuestionPaperUploadView(TeacherRequiredMixin, CreateView):
         paper = form.save(commit=False)
         paper.uploaded_by = self.request.user
         paper.file_size_bytes = form.cleaned_data["pdf_file"].size
+        paper.total_pages = getattr(form, "pdf_page_count", 0)
+        paper.extraction_mode = form.cleaned_data["extraction_mode"]
+        if paper.extraction_mode == QuestionPaperUpload.ExtractionMode.CLOUD:
+            paper.cloud_consent_at = timezone.now()
         paper.save()
 
         log_audit(
@@ -99,20 +180,30 @@ class QuestionPaperUploadView(TeacherRequiredMixin, CreateView):
             request=self.request,
         )
 
-        # Execute automatic question extraction
-        extractor = PDFQuestionExtractor(paper)
-        questions_count = extractor.extract()
+        if paper.extraction_mode == QuestionPaperUpload.ExtractionMode.CLOUD:
+            from .tasks import extract_cloud_paper
 
-        if questions_count > 0:
-            messages.success(
-                self.request,
-                f"Paper '{paper.title}' successfully processed! {questions_count} questions extracted into review workspace.",
-            )
+            # Enqueue after commit so a worker never sees an uncommitted upload.
+            def enqueue():
+                try:
+                    extract_cloud_paper.delay(paper.pk)
+                except Exception:
+                    QuestionPaperUpload.objects.filter(pk=paper.pk).update(
+                        status=QuestionPaperUpload.ProcessingStatus.FAILED,
+                        extraction_log="Could not queue cloud extraction. Check the worker/broker configuration; no local fallback was run.",
+                    )
+            transaction.on_commit(enqueue)
+            if settings.CELERY_TASK_ALWAYS_EAGER:
+                messages.info(self.request, "Cloud extraction is running in the request in development mode. Review the result and diagnostics below.")
+            else:
+                messages.info(self.request, "Cloud extraction was queued. Refresh this page to see its status; review all results before approval.")
         else:
-            messages.warning(
-                self.request,
-                f"Paper '{paper.title}' uploaded, but no structured questions could be automatically identified. You can review the extraction logs or manually add questions.",
-            )
+            extractor = PDFQuestionExtractor(paper)
+            questions_count = extractor.extract()
+            if questions_count > 0:
+                messages.success(self.request, f"Paper '{paper.title}' processed: {questions_count} questions are ready for review.")
+            else:
+                messages.warning(self.request, "No structured questions could be identified. Review the extraction log or add questions manually.")
 
         return redirect("questions:paper_review", pk=paper.pk)
 
@@ -130,6 +221,8 @@ class QuestionPaperReviewView(TeacherRequiredMixin, DetailView):
 
     def get_object(self, queryset=None):
         paper = super().get_object(queryset)
+        if paper.is_student_private:
+            raise Http404()
         user = self.request.user
         # Authorization check: Admin or paper uploader or permitted category
         if not user.is_admin_role and paper.uploaded_by != user:
@@ -143,7 +236,7 @@ class QuestionPaperReviewView(TeacherRequiredMixin, DetailView):
 
         # Questions filter
         filter_mode = self.request.GET.get("filter", "all")
-        qs = paper.extracted_questions.all().order_by("question_number")
+        qs = paper.extracted_questions.prefetch_related("figures").order_by("question_number")
 
         if filter_mode == "flagged":
             qs = qs.filter(is_flagged=True)
@@ -160,6 +253,12 @@ class QuestionPaperReviewView(TeacherRequiredMixin, DetailView):
             status=ExtractedQuestion.Status.APPROVED
         ).count()
         context["answer_key_form"] = AnswerKeyImportForm()
+        context["unassigned_figure_count"] = paper.figures.filter(question__isnull=True).count()
+        context["extraction_warnings"] = [
+            line.removeprefix("Warning: ")
+            for line in paper.extraction_log.splitlines()
+            if line.startswith("Warning: ")
+        ]
         return context
 
 
@@ -171,7 +270,7 @@ class QuestionPaperDownloadView(TeacherRequiredMixin, View):
     """
 
     def get(self, request, pk):
-        paper = get_object_or_404(QuestionPaperUpload, pk=pk)
+        paper = get_object_or_404(QuestionPaperUpload, pk=pk, is_student_private=False)
         user = request.user
         if not user.is_admin_role and paper.uploaded_by != user:
             if not user.assigned_categories.filter(pk=paper.category_id).exists():
@@ -203,6 +302,8 @@ class ExtractedQuestionEditView(TeacherRequiredMixin, UpdateView):
 
     def get_object(self, queryset=None):
         q = super().get_object(queryset)
+        if (isinstance(q, ExtractedQuestion) and q.paper.is_student_private) or (isinstance(q, Question) and q.is_private_practice):
+            raise Http404()
         user = self.request.user
         if not user.is_admin_role and q.paper.uploaded_by != user:
             if not user.assigned_categories.filter(pk=q.paper.category_id).exists():
@@ -211,21 +312,24 @@ class ExtractedQuestionEditView(TeacherRequiredMixin, UpdateView):
 
     def form_valid(self, form):
         extracted_q = form.save(commit=False)
+        if extracted_q.status == ExtractedQuestion.Status.APPROVED:
+            messages.warning(self.request, "This question is already in the bank. Edit the bank item instead.")
+            return redirect("questions:question_edit", pk=extracted_q.approved_question_id) if extracted_q.approved_question_id else redirect("questions:paper_review", pk=extracted_q.paper_id)
 
         # Process dynamic option inputs from POST data
         # Reads option_key_*, option_text_*
         options = []
         for key in ["A", "B", "C", "D", "E"]:
             opt_text = self.request.POST.get(f"option_text_{key}", "").strip()
-            if opt_text:
+            if opt_text or extracted_q.figures.filter(option_key=key).exists():
                 options.append({"key": key, "text": opt_text})
 
-        if options:
-            extracted_q.options = options
-            # If at least 2 options now exist, auto-clear incomplete flag
-            if len(options) >= 2 and extracted_q.flag_reason.startswith("Only"):
-                extracted_q.is_flagged = False
-                extracted_q.flag_reason = ""
+        # Allow all options to be cleared as well as changed. The reviewer
+        # controls the flag in the form; unrelated warnings must not be
+        # silently cleared merely because two options were entered.
+        extracted_q.options = options
+        if not extracted_q.is_flagged:
+            extracted_q.flag_reason = ""
 
         # Set status to reviewed if was in extracted
         if extracted_q.status == ExtractedQuestion.Status.EXTRACTED:
@@ -242,11 +346,14 @@ class ExtractedQuestionDeleteView(TeacherRequiredMixin, View):
     """Deletes an incorrectly extracted question from the staging workspace."""
 
     def post(self, request, pk):
-        q = get_object_or_404(ExtractedQuestion, pk=pk)
+        q = get_object_or_404(ExtractedQuestion, pk=pk, paper__is_student_private=False)
         paper = q.paper
         if not request.user.is_admin_role and paper.uploaded_by != request.user:
             raise PermissionDenied("You cannot delete questions from this paper.")
 
+        if q.status == ExtractedQuestion.Status.APPROVED:
+            messages.warning(request, "This item is already approved; its staging record is kept as source provenance.")
+            return redirect("questions:paper_review", pk=paper.pk)
         q_num = q.question_number
         q.delete()
         # Decrement counter
@@ -261,10 +368,13 @@ class ExtractedQuestionFlagToggleView(TeacherRequiredMixin, View):
     """Flags or unflags a question for manual inspection."""
 
     def post(self, request, pk):
-        q = get_object_or_404(ExtractedQuestion, pk=pk)
+        q = get_object_or_404(ExtractedQuestion, pk=pk, paper__is_student_private=False)
         if not request.user.is_admin_role and q.paper.uploaded_by != request.user:
             raise PermissionDenied()
 
+        if q.status == ExtractedQuestion.Status.APPROVED:
+            messages.warning(request, "This item is already approved. Edit the bank item instead.")
+            return redirect("questions:paper_review", pk=q.paper.pk)
         q.is_flagged = not q.is_flagged
         if not q.is_flagged:
             q.flag_reason = ""
@@ -283,7 +393,7 @@ class ExtractedQuestionApproveView(TeacherRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        q = get_object_or_404(ExtractedQuestion, pk=pk)
+        q = get_object_or_404(ExtractedQuestion, pk=pk, paper__is_student_private=False)
         paper = q.paper
         if not request.user.is_admin_role and paper.uploaded_by != request.user:
             raise PermissionDenied("You cannot approve questions from this paper.")
@@ -291,13 +401,16 @@ class ExtractedQuestionApproveView(TeacherRequiredMixin, View):
         if q.status == ExtractedQuestion.Status.APPROVED:
             messages.info(request, f"Question #{q.question_number} is already in the Question Bank.")
             return redirect("questions:paper_review", pk=paper.pk)
+        if q.status == ExtractedQuestion.Status.REJECTED:
+            messages.warning(request, f"Question #{q.question_number} was rejected and cannot be approved.")
+            return redirect("questions:paper_review", pk=paper.pk)
+        error = _approval_error(q)
+        if error:
+            messages.warning(request, f"Question #{q.question_number}: {error}")
+            return redirect("questions:paper_review", pk=paper.pk)
 
         # Check for duplicate question already existing in the Question Bank
-        clean_text = q.question_text.strip()
-        existing_bank_q = Question.objects.filter(
-            category=paper.category,
-            question_text__iexact=clean_text,
-        ).first()
+        existing_bank_q = _equivalent_bank_question(q)
 
         if existing_bank_q:
             # Prevent accidental duplicate import - link existing item
@@ -319,6 +432,7 @@ class ExtractedQuestionApproveView(TeacherRequiredMixin, View):
                 subject=paper.subject or "General",
                 topic=paper.target_exam or "",
                 question_text=q.question_text,
+                language=_infer_language(q),
                 explanation=q.explanation,
                 positive_marks=q.positive_marks,
                 negative_marks=q.negative_marks,
@@ -330,17 +444,7 @@ class ExtractedQuestionApproveView(TeacherRequiredMixin, View):
                 bank_q.image = q.image
                 bank_q.save(update_fields=["image"])
 
-            # Create options
-            correct_opt = (q.correct_option or "").strip().upper()
-            for idx, opt in enumerate(q.options):
-                opt_key = opt.get("key", "").upper()
-                QuestionOption.objects.create(
-                    question=bank_q,
-                    option_key=opt_key,
-                    option_text=opt.get("text", ""),
-                    is_correct=(opt_key == correct_opt and bool(correct_opt)),
-                    order=idx,
-                )
+            _create_bank_options_and_figures(q, bank_q)
 
             q.status = ExtractedQuestion.Status.APPROVED
             q.approved_question = bank_q
@@ -373,7 +477,7 @@ class QuestionPaperBulkApproveView(TeacherRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        paper = get_object_or_404(QuestionPaperUpload, pk=pk)
+        paper = get_object_or_404(QuestionPaperUpload, pk=pk, is_student_private=False)
         if not request.user.is_admin_role and paper.uploaded_by != request.user:
             raise PermissionDenied("You cannot bulk approve this paper.")
 
@@ -383,14 +487,14 @@ class QuestionPaperBulkApproveView(TeacherRequiredMixin, View):
 
         count = 0
         duplicate_count = 0
+        skipped_count = 0
         with transaction.atomic():
             for q in questions_to_approve:
+                if _approval_error(q):
+                    skipped_count += 1
+                    continue
                 # Check for existing duplicate in Question Bank
-                clean_text = q.question_text.strip()
-                existing_bank_q = Question.objects.filter(
-                    category=paper.category,
-                    question_text__iexact=clean_text,
-                ).first()
+                existing_bank_q = _equivalent_bank_question(q)
 
                 if existing_bank_q:
                     q.status = ExtractedQuestion.Status.APPROVED
@@ -407,6 +511,7 @@ class QuestionPaperBulkApproveView(TeacherRequiredMixin, View):
                     subject=paper.subject or "General",
                     topic=paper.target_exam or "",
                     question_text=q.question_text,
+                    language=_infer_language(q),
                     explanation=q.explanation,
                     positive_marks=q.positive_marks,
                     negative_marks=q.negative_marks,
@@ -417,16 +522,7 @@ class QuestionPaperBulkApproveView(TeacherRequiredMixin, View):
                     bank_q.image = q.image
                     bank_q.save(update_fields=["image"])
 
-                correct_opt = (q.correct_option or "").strip().upper()
-                for idx, opt in enumerate(q.options):
-                    opt_key = opt.get("key", "").upper()
-                    QuestionOption.objects.create(
-                        question=bank_q,
-                        option_key=opt_key,
-                        option_text=opt.get("text", ""),
-                        is_correct=(opt_key == correct_opt and bool(correct_opt)),
-                        order=idx,
-                    )
+                _create_bank_options_and_figures(q, bank_q)
 
                 q.status = ExtractedQuestion.Status.APPROVED
                 q.approved_question = bank_q
@@ -438,7 +534,13 @@ class QuestionPaperBulkApproveView(TeacherRequiredMixin, View):
             paper.questions_approved = paper.extracted_questions.filter(
                 status=ExtractedQuestion.Status.APPROVED
             ).count()
-            paper.status = QuestionPaperUpload.ProcessingStatus.COMPLETED
+            pending_review = paper.extracted_questions.exclude(
+                status__in=[ExtractedQuestion.Status.APPROVED, ExtractedQuestion.Status.REJECTED]
+            ).exists()
+            paper.status = (
+                QuestionPaperUpload.ProcessingStatus.EXTRACTED
+                if pending_review else QuestionPaperUpload.ProcessingStatus.COMPLETED
+            )
             paper.save(update_fields=["questions_approved", "status"])
 
         log_audit(
@@ -451,6 +553,8 @@ class QuestionPaperBulkApproveView(TeacherRequiredMixin, View):
         if duplicate_count > 0:
             msg += f" ({duplicate_count} existing duplicate questions were automatically linked without redundancy)."
         messages.success(request, msg)
+        if skipped_count:
+            messages.warning(request, f"{skipped_count} flagged or incomplete question(s) were skipped. Review them before approval.")
         return redirect("questions:paper_review", pk=paper.pk)
 
 
@@ -464,7 +568,7 @@ class AnswerKeyImportView(TeacherRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        paper = get_object_or_404(QuestionPaperUpload, pk=pk)
+        paper = get_object_or_404(QuestionPaperUpload, pk=pk, is_student_private=False)
         if not request.user.is_admin_role and paper.uploaded_by != request.user:
             raise PermissionDenied("You cannot import answer keys for this paper.")
 
@@ -515,7 +619,7 @@ class QuestionBankListView(TeacherRequiredMixin, ListView):
     paginate_by = 12
 
     def get_queryset(self):
-        qs = Question.objects.select_related("category", "source_paper", "creator").prefetch_related("options")
+        qs = Question.objects.filter(is_private_practice=False).select_related("category", "source_paper", "creator").prefetch_related("options")
 
         user = self.request.user
         if not user.is_admin_role:
@@ -595,11 +699,12 @@ class QuestionCreateView(TeacherRequiredMixin, CreateView):
                 "B": form.cleaned_data.get("option_text_B", "").strip(),
                 "C": form.cleaned_data.get("option_text_C", "").strip(),
                 "D": form.cleaned_data.get("option_text_D", "").strip(),
+                "E": form.cleaned_data.get("option_text_E", "").strip(),
             }
             correct_key = form.cleaned_data.get("correct_option")
 
             idx = 0
-            for key in ["A", "B", "C", "D"]:
+            for key in ["A", "B", "C", "D", "E"]:
                 text = opt_map[key]
                 if text:
                     QuestionOption.objects.create(
@@ -636,6 +741,8 @@ class QuestionUpdateView(TeacherRequiredMixin, UpdateView):
 
     def get_object(self, queryset=None):
         q = super().get_object(queryset)
+        if (isinstance(q, ExtractedQuestion) and q.paper.is_student_private) or (isinstance(q, Question) and q.is_private_practice):
+            raise Http404()
         user = self.request.user
         if not user.is_admin_role and q.creator != user:
             if not user.assigned_categories.filter(pk=q.category_id).exists():
@@ -664,23 +771,30 @@ class QuestionUpdateView(TeacherRequiredMixin, UpdateView):
                 "B": form.cleaned_data.get("option_text_B", "").strip(),
                 "C": form.cleaned_data.get("option_text_C", "").strip(),
                 "D": form.cleaned_data.get("option_text_D", "").strip(),
+                "E": form.cleaned_data.get("option_text_E", "").strip(),
             }
             correct_key = form.cleaned_data.get("correct_option")
 
-            # Re-create options cleanly
-            question.options.all().delete()
-            idx = 0
-            for key in ["A", "B", "C", "D"]:
+            # Update options in place: candidate responses and figure
+            # associations refer to their IDs and must not be silently lost.
+            existing = {opt.option_key: opt for opt in question.options.all()}
+            for idx, key in enumerate(["A", "B", "C", "D", "E"]):
                 text = opt_map[key]
-                if text:
-                    QuestionOption.objects.create(
-                        question=question,
-                        option_key=key,
-                        option_text=text,
-                        is_correct=(key == correct_key),
-                        order=idx,
-                    )
-                    idx += 1
+                opt = existing.get(key)
+                has_image = bool(opt and (opt.image or opt.figures.exists()))
+                if opt and not text and not has_image and opt.selected_in_responses.exists():
+                    # Preserve historical selections and their original text.
+                    text = opt.option_text
+                    messages.warning(self.request, f"Option {key} was retained because candidates have selected it.")
+                if text or has_image:
+                    if opt:
+                        opt.option_text, opt.is_correct, opt.order = text, key == correct_key, idx
+                        opt.save(update_fields=["option_text", "is_correct", "order"])
+                    else:
+                        QuestionOption.objects.create(question=question, option_key=key,
+                                                      option_text=text, is_correct=(key == correct_key), order=idx)
+                elif opt:
+                    opt.delete()
 
             log_audit(
                 self.request.user,
@@ -699,7 +813,7 @@ class QuestionDeleteView(TeacherRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        question = get_object_or_404(Question, pk=pk)
+        question = get_object_or_404(Question, pk=pk, is_private_practice=False)
         user = request.user
         if not user.is_admin_role and question.creator != user:
             if not user.assigned_categories.filter(pk=question.category_id).exists():
@@ -744,6 +858,8 @@ class QuestionPreviewView(TeacherRequiredMixin, DetailView):
 
     def get_object(self, queryset=None):
         q = super().get_object(queryset)
+        if (isinstance(q, ExtractedQuestion) and q.paper.is_student_private) or (isinstance(q, Question) and q.is_private_practice):
+            raise Http404()
         user = self.request.user
         if not user.is_admin_role and q.creator != user:
             if not user.assigned_categories.filter(pk=q.category_id).exists():
