@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+
+{% block title %}Contact & Institutional Inquiries | {{ PLATFORM_NAME }}{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <div class="text-center mb-5">
+                <span class="badge text-bg-primary-subtle text-primary border border-primary-subtle mb-2 px-3 py-1">Get In Touch</span>
+                <h1 class="fw-bold">Contact {{ PLATFORM_NAME }}</h1>
+                <p class="text-muted">Questions about setting up exams for your institution, coaching center, or university? Let us know.</p>
+            </div>
+
+            <div class="card p-4 p-md-5 shadow-sm border rounded-4">
+                <form method="post" action="#">
+                    {% csrf_token %}
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Your Full Name</label>
+                            <input type="text" class="form-control" placeholder="e.g. Dr. Rajesh Sharma" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Work / Personal Email</label>
+                            <input type="email" class="form-control" placeholder="name@institute.edu" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Organization / Institute Name</label>
+                            <input type="text" class="form-control" placeholder="e.g. Apex Academy" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Inquiry Type</label>
+                            <select class="form-select">
+                                <option value="institutional">Institutional Partnership</option>
+                                <option value="coaching">Coaching Institute CBT Setup</option>
+                                <option value="support">Candidate Technical Support</option>
+                                <option value="billing">Subscription & Billing</option>
+                                <option value="other">Other Inquiry</option>
+                            </select>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-semibold">Message / Requirements</label>
+                            <textarea class="form-control" rows="5" placeholder="Tell us about the candidate volume, examination types, or custom needs..." required></textarea>
+                        </div>
+                        <div class="col-12 mt-4">
+                            <button type="button" class="btn btn-primary btn-lg w-100 fw-bold" onclick="alert('Thank you for contacting us! Our institutional onboarding team will review your inquiry shortly.');">
+                                <i class="bi bi-send-fill me-2"></i> Submit Inquiry
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

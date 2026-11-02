@@ -1,0 +1,132 @@
+{% extends 'dashboard_base.html' %}
+
+{% block title %}Instructor: {{ teacher.username }} | {{ PLATFORM_NAME }}{% endblock %}
+
+{% block dashboard_content %}
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom">
+    <div>
+        <div class="d-flex align-items-center gap-2 mb-1">
+            <h2 class="fw-bold mb-0">{{ teacher.get_full_name|default:teacher.username }}</h2>
+            <span class="badge bg-success text-uppercase px-2 py-1">Teaching Faculty</span>
+            {% if teacher.is_active %}
+                <span class="badge bg-success">Active</span>
+            {% else %}
+                <span class="badge bg-danger">Deactivated</span>
+            {% endif %}
+        </div>
+        <p class="text-muted mb-0">Institute: <strong>{{ teacher.institute_name|default:"Independent Educator" }}</strong> | Email: <strong>{{ teacher.email }}</strong></p>
+    </div>
+    <div class="mt-3 mt-md-0 d-flex gap-2">
+        <a href="{% url 'accounts:teacher_edit' teacher.pk %}" class="btn btn-sm btn-cbt-primary">
+            <i class="bi bi-pencil-square me-1"></i> Edit Profile & Categories
+        </a>
+        <a href="{% url 'accounts:teacher_list' %}" class="btn btn-sm btn-cbt-outline">
+            <i class="bi bi-arrow-left me-1"></i> Back to Instructors
+        </a>
+    </div>
+</div>
+
+<div class="row g-4 mb-4">
+    <div class="col-lg-4">
+        <div class="card border shadow-sm h-100">
+            <div class="card-header bg-white py-3">
+                <h6 class="fw-bold mb-0"><i class="bi bi-person-badge text-success me-2"></i> Faculty Overview</h6>
+            </div>
+            <div class="card-body">
+                <ul class="list-unstyled small mb-0 d-flex flex-column gap-3">
+                    <li class="d-flex justify-content-between">
+                        <span class="text-muted">Username</span>
+                        <span class="fw-semibold">{{ teacher.username }}</span>
+                    </li>
+                    <li class="d-flex justify-content-between">
+                        <span class="text-muted">Affiliation</span>
+                        <span class="fw-semibold">{{ teacher.institute_name|default:"Independent" }}</span>
+                    </li>
+                    <li class="d-flex justify-content-between">
+                        <span class="text-muted">Phone</span>
+                        <span>{{ teacher.phone|default:"Not specified" }}</span>
+                    </li>
+                    <li class="d-flex justify-content-between">
+                        <span class="text-muted">Tests Created</span>
+                        <span class="fw-bold text-primary">{{ total_exams }}</span>
+                    </li>
+                    <li class="d-flex justify-content-between">
+                        <span class="text-muted">Student Attempts</span>
+                        <span class="fw-bold text-success">{{ total_student_attempts }}</span>
+                    </li>
+                </ul>
+
+                <hr class="my-3">
+
+                <h6 class="fw-bold small mb-2">Permitted Categories:</h6>
+                {% if teacher.assigned_categories.all %}
+                    <div class="d-flex flex-wrap gap-1">
+                        {% for cat in teacher.assigned_categories.all %}
+                            <span class="badge bg-light text-dark border small">{{ cat.name }}</span>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <span class="badge text-bg-warning">All Categories Permitted</span>
+                {% endif %}
+
+                {% if teacher.bio %}
+                <div class="mt-3 pt-3 border-top small">
+                    <span class="fw-bold text-muted d-block mb-1">Faculty Bio:</span>
+                    <p class="text-muted mb-0">{{ teacher.bio }}</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Examinations Created by Teacher -->
+    <div class="col-lg-8">
+        <div class="card border shadow-sm h-100">
+            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                <h6 class="fw-bold mb-0"><i class="bi bi-journal-text text-primary me-2"></i> Authored Examinations</h6>
+                <span class="badge bg-light text-dark border small">{{ total_exams }} Tests</span>
+            </div>
+            <div class="card-body p-0">
+                {% if created_exams %}
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0 small">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Exam Title</th>
+                                <th>Category</th>
+                                <th>Status</th>
+                                <th>Duration</th>
+                                <th>Created</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for exam in created_exams %}
+                            <tr>
+                                <td class="fw-semibold text-dark">{{ exam.title }}</td>
+                                <td><span class="badge bg-light text-dark border">{{ exam.category.name }}</span></td>
+                                <td>
+                                    {% if exam.status == 'published' %}
+                                        <span class="badge bg-success">Published</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">{{ exam.get_status_display }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ exam.duration_minutes }} mins</td>
+                                <td class="text-muted">{{ exam.created_at|date:"M d, Y" }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="p-5 text-center text-muted">
+                    <i class="bi bi-file-earmark-x fs-2 text-muted d-block mb-2"></i>
+                    This instructor has not authored any examinations yet.
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

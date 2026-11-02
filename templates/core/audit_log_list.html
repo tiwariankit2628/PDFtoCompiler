@@ -1,0 +1,116 @@
+{% extends 'dashboard_base.html' %}
+
+{% block title %}Audit Logs & Governance | {{ PLATFORM_NAME }}{% endblock %}
+
+{% block dashboard_content %}
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom">
+    <div>
+        <div class="d-flex align-items-center gap-2 mb-1">
+            <h2 class="fw-bold mb-0">System Audit Logs</h2>
+            <span class="badge bg-danger text-uppercase px-2 py-1">Super Administrator</span>
+        </div>
+        <p class="text-muted mb-0">Complete historical audit trail of user actions, account state modifications, and administrative operations.</p>
+    </div>
+    <div class="mt-3 mt-md-0">
+        <a href="{% url 'core:super_admin_dashboard' %}" class="btn btn-sm btn-cbt-outline">
+            <i class="bi bi-arrow-left me-1"></i> Back to Dashboard
+        </a>
+    </div>
+</div>
+
+<!-- Search & Action Filters -->
+<div class="card border shadow-sm mb-4">
+    <div class="card-body p-3">
+        <form method="get" class="row g-2 align-items-center">
+            <div class="col-md-6">
+                <div class="input-group input-group-sm">
+                    <span class="input-group-text bg-white"><i class="bi bi-search text-muted"></i></span>
+                    <input type="text" name="q" value="{{ search_query }}" class="form-control" placeholder="Search by action, actor, description, or IP address...">
+                </div>
+            </div>
+            <div class="col-md-4">
+                <select name="action" class="form-select form-select-sm">
+                    <option value="">All Action Types</option>
+                    {% for act in distinct_actions %}
+                        <option value="{{ act }}" {% if action_filter == act %}selected{% endif %}>{{ act }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2 d-flex gap-2">
+                <button type="submit" class="btn btn-sm btn-primary w-100">Filter</button>
+                {% if search_query or action_filter %}
+                    <a href="{% url 'core:audit_log_list' %}" class="btn btn-sm btn-outline-secondary">Reset</a>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Audit Log Table -->
+<div class="card border shadow-sm">
+    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+        <h6 class="fw-bold mb-0"><i class="bi bi-journal-text text-danger me-2"></i> Audit Records</h6>
+        <span class="text-muted small">Total {{ page_obj.paginator.count }} Events</span>
+    </div>
+    <div class="card-body p-0">
+        {% if logs %}
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0 small">
+                <thead class="table-light">
+                    <tr>
+                        <th>Date & Time</th>
+                        <th>Actor</th>
+                        <th>Action</th>
+                        <th>Details</th>
+                        <th>IP Address</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in logs %}
+                    <tr>
+                        <td class="text-muted text-nowrap">{{ log.created_at|date:"Y-m-d H:i:s" }}</td>
+                        <td class="fw-semibold">
+                            {% if log.user %}
+                                {{ log.user.username }}
+                                <span class="badge text-bg-light border small text-muted">{{ log.user.get_role_display }}</span>
+                            {% else %}
+                                <span class="text-muted">System / Anonymous</span>
+                            {% endif %}
+                        </td>
+                        <td><span class="badge text-bg-light border fw-semibold">{{ log.action }}</span></td>
+                        <td>{{ log.description }}</td>
+                        <td class="text-muted font-monospace">{{ log.ip_address|default:"-" }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        {% if is_paginated %}
+        <div class="p-3 border-top d-flex justify-content-between align-items-center">
+            <span class="text-muted small">
+                Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}
+            </span>
+            <ul class="pagination pagination-sm mb-0">
+                {% if page_obj.has_previous %}
+                    <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if search_query %}&q={{ search_query }}{% endif %}{% if action_filter %}&action={{ action_filter }}{% endif %}">&laquo;</a></li>
+                {% endif %}
+                <li class="page-item active"><span class="page-link">{{ page_obj.number }}</span></li>
+                {% if page_obj.has_next %}
+                    <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}{% if search_query %}&q={{ search_query }}{% endif %}{% if action_filter %}&action={{ action_filter }}{% endif %}">&raquo;</a></li>
+                {% endif %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% else %}
+        <div class="p-5 text-center text-muted">
+            <i class="bi bi-journal-x fs-2 text-muted d-block mb-2"></i>
+            No audit logs found matching criteria.
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+

@@ -1,0 +1,256 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Commercial CBT Platform & Online Examination System{% endblock %}
+
+{% block content %}
+<!-- Hero Section -->
+<section class="hero-gradient">
+    <div class="container position-relative" style="z-index: 2;">
+        <div class="row align-items-center g-5">
+            <div class="col-lg-7 text-center text-lg-start">
+                <div class="d-inline-flex align-items-center gap-2 px-3 py-1 rounded-pill bg-white bg-opacity-10 text-white mb-3 border border-white border-opacity-25 small">
+                    <span class="badge bg-primary">NEW</span>
+                    <span>High-Stakes Online CBT Engine & PDF Question Compiler</span>
+                </div>
+                <h1 class="display-4 fw-extrabold text-white mb-3 lh-sm">
+                    The Modern Standard for <span class="text-info">Computer-Based Testing</span>
+                </h1>
+                <p class="lead text-light text-opacity-75 mb-4">
+                    Host competitive, university, entrance, coding, and government examinations with millisecond-grade timer accuracy, zero client-side answer leakage, and an automated PDF-to-exam compiler.
+                </p>
+                <div class="d-flex flex-column flex-sm-row gap-3 justify-content-center justify-content-lg-start">
+                    {% if user.is_authenticated %}
+                        <a href="{% url 'core:dashboard_router' %}" class="btn btn-primary btn-lg px-4 py-3 fw-bold shadow">
+                            <i class="bi bi-speedometer2 me-2"></i> Go to Dashboard
+                        </a>
+                    {% else %}
+                        <a href="{% url 'accounts:register' %}" class="btn btn-primary btn-lg px-4 py-3 fw-bold shadow">
+                            <i class="bi bi-play-circle-fill me-2"></i> Take Free Trial Exam
+                        </a>
+                        <a href="{% url 'accounts:login' %}" class="btn btn-outline-light btn-lg px-4 py-3">
+                            <i class="bi bi-box-arrow-in-right me-2"></i> Teacher / Admin Sign In
+                        </a>
+                    {% endif %}
+                </div>
+                
+                <div class="mt-4 pt-3 border-top border-white border-opacity-10 d-flex flex-wrap gap-4 text-white text-opacity-75 small">
+                    <div><i class="bi bi-check-circle-fill text-success me-1"></i> No Credit Card Required</div>
+                    <div><i class="bi bi-check-circle-fill text-success me-1"></i> 1st Exam 100% Free</div>
+                    <div><i class="bi bi-check-circle-fill text-success me-1"></i> Anti-Tamper Secured</div>
+                </div>
+            </div>
+
+            <div class="col-lg-5">
+                <!-- Interactive Preview Card -->
+                <div class="card bg-white text-dark shadow-lg border-0 rounded-4 overflow-hidden">
+                    <div class="bg-dark text-white px-3 py-2 d-flex justify-content-between align-items-center small">
+                        <span class="fw-semibold"><i class="bi bi-laptop me-1"></i> Live CBT Interface Simulation</span>
+                        <span class="badge text-bg-warning"><i class="bi bi-clock me-1"></i> 01:59:45</span>
+                    </div>
+                    <div class="p-4">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <span class="badge text-bg-light border text-uppercase">Section: Physics / Mechanics</span>
+                            <span class="text-muted small">Question 14 of 90</span>
+                        </div>
+                        <h6 class="fw-bold mb-3">
+                            A block of mass 2 kg is placed on an inclined plane of angle 30°. What is the minimum coefficient of static friction to prevent slipping?
+                        </h6>
+                        <div class="d-flex flex-column gap-2 mb-4">
+                            <div class="p-2 border rounded d-flex align-items-center gap-2 bg-light">
+                                <span class="badge bg-secondary">A</span>
+                                <span>tan(30°) = 0.577</span>
+                            </div>
+                            <div class="p-2 border rounded d-flex align-items-center gap-2 border-primary bg-primary bg-opacity-10">
+                                <span class="badge bg-primary">B</span>
+                                <span class="fw-bold text-primary">sin(30°) / cos(30°) = 0.577 (Selected)</span>
+                            </div>
+                            <div class="p-2 border rounded d-flex align-items-center gap-2 bg-light">
+                                <span class="badge bg-secondary">C</span>
+                                <span>cos(30°) = 0.866</span>
+                            </div>
+                            <div class="p-2 border rounded d-flex align-items-center gap-2 bg-light">
+                                <span class="badge bg-secondary">D</span>
+                                <span>None of the above</span>
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-between gap-2">
+                            <button class="btn btn-sm btn-outline-secondary" disabled>Clear Response</button>
+                            <button class="btn btn-sm btn-outline-warning" disabled>Mark for Review</button>
+                            <button class="btn btn-sm btn-success" disabled>Save & Next <i class="bi bi-arrow-right"></i></button>
+                        </div>
+                    </div>
+                    <div class="card-footer bg-light border-0 py-2 text-center text-muted small">
+                        <i class="bi bi-shield-lock-fill text-success me-1"></i> Answers securely recorded & encrypted server-side
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Stats Metrics Bar -->
+<section class="py-4 bg-white border-bottom shadow-sm">
+    <div class="container">
+        <div class="row g-4 text-center">
+            {% for stat in stats %}
+            <div class="col-6 col-md-3">
+                <div class="p-2">
+                    <h3 class="fw-bolder text-primary mb-1">{{ stat.value }}</h3>
+                    <p class="text-muted mb-0 small fw-medium">{{ stat.label }}</p>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<!-- Examination Categories Section -->
+<section class="py-5" id="categories">
+    <div class="container py-4">
+        <div class="text-center max-w-700 mx-auto mb-5">
+            <span class="badge text-bg-primary-subtle text-primary border border-primary-subtle mb-2 px-3 py-1">Versatile & Scalable</span>
+            <h2 class="fw-bold">Dynamic Examination Categories</h2>
+            <p class="text-muted">Configurable by administrators to cater to schools, universities, state commissions, and corporate technical assessments.</p>
+        </div>
+
+        <div class="row g-4">
+            {% for cat in categories %}
+            <div class="col-md-6 col-lg-4">
+                <div class="card h-100 card-hover-effect p-4">
+                    <div class="d-flex justify-content-between align-items-start mb-3">
+                        <div class="icon-box-primary">
+                            <i class="bi {{ cat.icon }}"></i>
+                        </div>
+                        <span class="badge bg-light text-dark border">{{ cat.exams.count }} Tests</span>
+                    </div>
+                    <h5 class="fw-bold mb-2">{{ cat.name }}</h5>
+                    <p class="text-muted small mb-3 flex-grow-1">{{ cat.description }}</p>
+                    <a href="{% url 'accounts:register' %}" class="fw-semibold text-primary text-decoration-none small">
+                        Explore Category <i class="bi bi-chevron-right ms-1"></i>
+                    </a>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<!-- CBT Engine Showcase Section -->
+<section class="py-5 bg-white border-top border-bottom" id="features">
+    <div class="container py-4">
+        <div class="row align-items-center g-5">
+            <div class="col-lg-6">
+                <span class="badge text-bg-success-subtle text-success border border-success-subtle mb-2 px-3 py-1">Engine Specification</span>
+                <h2 class="fw-bold mb-3">Engineered for Realistic High-Stakes Assessments</h2>
+                <p class="text-muted mb-4">
+                    Modeled after national examination portals (NTA, TCS iON, UPSC). Gives students an authentic test environment while providing administrators iron-clad security.
+                </p>
+
+                <div class="d-flex flex-column gap-3">
+                    <div class="d-flex gap-3">
+                        <div class="icon-box-primary flex-shrink-0" style="width: 42px; height: 42px;">
+                            <i class="bi bi-shield-x text-danger"></i>
+                        </div>
+                        <div>
+                            <h6 class="fw-bold mb-1">Zero Client-Side Answer Leakage</h6>
+                            <p class="text-muted small mb-0">Correct answers, explanations, and scoring matrices remain strictly isolated on the backend. No browser developer tools or API packet sniffer can inspect answers during an active session.</p>
+                        </div>
+                    </div>
+
+                    <div class="d-flex gap-3">
+                        <div class="icon-box-primary flex-shrink-0" style="width: 42px; height: 42px;">
+                            <i class="bi bi-clock-history text-primary"></i>
+                        </div>
+                        <div>
+                            <h6 class="fw-bold mb-1">Server-Synced Countdown & Automatic Submission</h6>
+                            <p class="text-muted small mb-0">Exam time is verified continuously against server timestamps. When time expires, answers are automatically committed without student intervention.</p>
+                        </div>
+                    </div>
+
+                    <div class="d-flex gap-3">
+                        <div class="icon-box-primary flex-shrink-0" style="width: 42px; height: 42px;">
+                            <i class="bi bi-wifi-off text-warning"></i>
+                        </div>
+                        <div>
+                            <h6 class="fw-bold mb-1">Network Interruption & Power Failure Resilience</h6>
+                            <p class="text-muted small mb-0">Every choice is committed instantly to session state. If internet drops or the machine reboots, the student can resume from the exact state with remaining time intact.</p>
+                        </div>
+                    </div>
+
+                    <div class="d-flex gap-3">
+                        <div class="icon-box-primary flex-shrink-0" style="width: 42px; height: 42px;">
+                            <i class="bi bi-file-earmark-pdf text-info"></i>
+                        </div>
+                        <div>
+                            <h6 class="fw-bold mb-1">Advanced PDF Question Paper Compiler</h6>
+                            <p class="text-muted small mb-0">Upload paper PDFs, extract bilingual text, formula equations, and diagrams with PyMuPDF & OCR, verify in an editable workspace, and instantly create test papers.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-6">
+                <div class="p-4 bg-light rounded-4 border">
+                    <h5 class="fw-bold mb-3"><i class="bi bi-palette text-primary me-2"></i> National Exam Palette Legend</h5>
+                    <div class="row g-2 mb-4">
+                        <div class="col-6">
+                            <div class="p-2 bg-white rounded border d-flex align-items-center gap-2 small">
+                                <span class="badge bg-success">12</span>
+                                <span>Answered</span>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="p-2 bg-white rounded border d-flex align-items-center gap-2 small">
+                                <span class="badge bg-danger">08</span>
+                                <span>Not Answered</span>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="p-2 bg-white rounded border d-flex align-items-center gap-2 small">
+                                <span class="badge bg-secondary">35</span>
+                                <span>Not Visited</span>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="p-2 bg-white rounded border d-flex align-items-center gap-2 small">
+                                <span class="badge bg-warning text-dark">05</span>
+                                <span>Marked for Review</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <h6 class="fw-bold mb-2">Dynamic Question Navigation Grid</h6>
+                    <div class="d-flex flex-wrap gap-2 p-3 bg-white rounded border mb-3">
+                        {% for i in "12345678901234567890" %}
+                        <div class="d-flex align-items-center justify-content-center border rounded fw-bold small text-muted" style="width: 34px; height: 34px; font-size: 0.75rem;">
+                            {{ forloop.counter }}
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <p class="text-muted small mb-0"><i class="bi bi-info-circle me-1"></i> Instant 1-click jump to any question across sections.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Call to Action Banner -->
+<section class="py-5 bg-dark text-white text-center">
+    <div class="container py-4">
+        <h2 class="display-6 fw-bold mb-3">Ready to Experience Commercial-Grade CBT?</h2>
+        <p class="lead text-light text-opacity-75 mb-4 mx-auto" style="max-width: 650px;">
+            Join thousands of students and educators taking competitive tests, university mock examinations, and assessments today.
+        </p>
+        <div class="d-flex gap-3 justify-content-center">
+            <a href="{% url 'accounts:register' %}" class="btn btn-primary btn-lg px-4 fw-bold">
+                Create Free Student Account
+            </a>
+            <a href="{% url 'core:contact' %}" class="btn btn-outline-light btn-lg px-4">
+                Institutional Inquiry
+            </a>
+        </div>
+    </div>
+</section>
+{% endblock %}
+

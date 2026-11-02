@@ -1,0 +1,127 @@
+{% extends 'dashboard_base.html' %}
+
+{% block title %}{{ action_title }} | {{ PLATFORM_NAME }}{% endblock %}
+
+{% block dashboard_content %}
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom">
+    <div>
+        <h2 class="fw-bold mb-1">{{ action_title }}</h2>
+        <p class="text-muted mb-0">Configure instructor account, institution affiliation, and assigned examination categories.</p>
+    </div>
+    <div class="mt-3 mt-md-0">
+        <a href="{% url 'accounts:teacher_list' %}" class="btn btn-sm btn-cbt-outline">
+            <i class="bi bi-arrow-left me-1"></i> Back to Instructors
+        </a>
+    </div>
+</div>
+
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="card border shadow-sm rounded-4 p-4">
+            <form method="post">
+                {% csrf_token %}
+
+                {% if form.non_field_errors %}
+                <div class="alert alert-danger py-2 small mb-3">
+                    {% for err in form.non_field_errors %}
+                        <div><i class="bi bi-exclamation-triangle-fill me-1"></i> {{ err }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                <h5 class="fw-bold mb-3 border-bottom pb-2">Instructor Details</h5>
+                <div class="row g-3 mb-4">
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold small" for="{{ form.first_name.id_for_label }}">First Name *</label>
+                        {{ form.first_name }}
+                        {% if form.first_name.errors %}
+                            <div class="text-danger small mt-1">{{ form.first_name.errors.0 }}</div>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold small" for="{{ form.last_name.id_for_label }}">Last Name *</label>
+                        {{ form.last_name }}
+                        {% if form.last_name.errors %}
+                            <div class="text-danger small mt-1">{{ form.last_name.errors.0 }}</div>
+                        {% endif %}
+                    </div>
+                    {% if not is_edit %}
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold small" for="{{ form.username.id_for_label }}">Username *</label>
+                        {{ form.username }}
+                        {% if form.username.errors %}
+                            <div class="text-danger small mt-1">{{ form.username.errors.0 }}</div>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold small" for="{{ form.password.id_for_label }}">Initial Password *</label>
+                        {{ form.password }}
+                        {% if form.password.errors %}
+                            <div class="text-danger small mt-1">{{ form.password.errors.0 }}</div>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold small" for="{{ form.email.id_for_label }}">Email Address *</label>
+                        {{ form.email }}
+                        {% if form.email.errors %}
+                            <div class="text-danger small mt-1">{{ form.email.errors.0 }}</div>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold small" for="{{ form.phone.id_for_label }}">Phone Number</label>
+                        {{ form.phone }}
+                        {% if form.phone.errors %}
+                            <div class="text-danger small mt-1">{{ form.phone.errors.0 }}</div>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-12">
+                        <label class="form-label fw-semibold small" for="{{ form.institute_name.id_for_label }}">School / College / Coaching Institute</label>
+                        {{ form.institute_name }}
+                        {% if form.institute_name.errors %}
+                            <div class="text-danger small mt-1">{{ form.institute_name.errors.0 }}</div>
+                        {% endif %}
+                    </div>
+                    {% if is_edit %}
+                    <div class="col-12">
+                        <label class="form-label fw-semibold small" for="{{ form.bio.id_for_label }}">Instructor Bio / Profile</label>
+                        {{ form.bio }}
+                    </div>
+                    {% endif %}
+                </div>
+
+                <h5 class="fw-bold mb-3 border-bottom pb-2">Permitted Categories & Access Rights</h5>
+                <div class="row g-3 mb-4">
+                    <div class="col-12">
+                        <label class="form-label fw-semibold small" for="{{ form.assigned_categories.id_for_label }}">
+                            Authorized Examination Categories
+                        </label>
+                        {{ form.assigned_categories }}
+                        <small class="text-muted d-block mt-1">Hold Ctrl (or Cmd) to select multiple categories. Leaving blank permits all categories.</small>
+                        {% if form.assigned_categories.errors %}
+                            <div class="text-danger small mt-1">{{ form.assigned_categories.errors.0 }}</div>
+                        {% endif %}
+                    </div>
+
+                    <div class="col-md-6">
+                        <div class="form-check mt-2">
+                            {{ form.is_active }}
+                            <label class="form-check-label fw-semibold small" for="{{ form.is_active.id_for_label }}">
+                                Account Active (can login and author content)
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="d-flex justify-content-end gap-2 pt-2 border-top">
+                    <a href="{% url 'accounts:teacher_list' %}" class="btn btn-outline-secondary">Cancel</a>
+                    <button type="submit" class="btn btn-primary fw-bold px-4">
+                        <i class="bi bi-check-circle me-1"></i> Save Instructor
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

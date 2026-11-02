@@ -1,0 +1,240 @@
+{% extends 'dashboard_base.html' %}
+
+{% block title %}Examination Management | {{ PLATFORM_NAME }}{% endblock %}
+
+{% block dashboard_content %}
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom">
+    <div>
+        <div class="d-flex align-items-center gap-2 mb-1">
+            <h2 class="fw-bold mb-0">Examinations & Tests</h2>
+            <span class="badge bg-primary text-uppercase px-2 py-1">CBT Engine</span>
+        </div>
+        <p class="text-muted mb-0">Create, configure, schedule, and publish computer-based examinations with automated scoring.</p>
+    </div>
+    <div class="mt-3 mt-md-0 d-flex gap-2">
+        <a href="{% url 'questions:question_bank' %}" class="btn btn-sm btn-cbt-outline">
+            <i class="bi bi-journal-check me-1"></i> Question Bank
+        </a>
+        <a href="{% url 'exams:exam_create' %}" class="btn btn-sm btn-cbt-primary">
+            <i class="bi bi-plus-circle-fill me-1"></i> Create Examination
+        </a>
+    </div>
+</div>
+
+<!-- Status Tabs -->
+<ul class="nav nav-pills mb-4 gap-2 small">
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'all' or not tab %}active bg-primary text-white fw-semibold{% else %}text-dark bg-white border{% endif %}" href="?tab=all{% if search_query %}&q={{ search_query }}{% endif %}{% if selected_category %}&category={{ selected_category }}{% endif %}">
+            All Examinations <span class="badge bg-light text-dark ms-1">{{ count_all }}</span>
+        </a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'draft' %}active bg-warning text-dark fw-semibold{% else %}text-dark bg-white border{% endif %}" href="?tab=draft{% if search_query %}&q={{ search_query }}{% endif %}{% if selected_category %}&category={{ selected_category }}{% endif %}">
+            Drafts <span class="badge bg-light text-dark ms-1">{{ count_draft }}</span>
+        </a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'published' %}active bg-success text-white fw-semibold{% else %}text-dark bg-white border{% endif %}" href="?tab=published{% if search_query %}&q={{ search_query }}{% endif %}{% if selected_category %}&category={{ selected_category }}{% endif %}">
+            Published <span class="badge bg-light text-dark ms-1">{{ count_published }}</span>
+        </a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'scheduled' %}active bg-info text-dark fw-semibold{% else %}text-dark bg-white border{% endif %}" href="?tab=scheduled{% if search_query %}&q={{ search_query }}{% endif %}{% if selected_category %}&category={{ selected_category }}{% endif %}">
+            Scheduled <span class="badge bg-light text-dark ms-1">{{ count_scheduled }}</span>
+        </a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'expired' %}active bg-secondary text-white fw-semibold{% else %}text-dark bg-white border{% endif %}" href="?tab=expired{% if search_query %}&q={{ search_query }}{% endif %}{% if selected_category %}&category={{ selected_category }}{% endif %}">
+            Expired <span class="badge bg-light text-dark ms-1">{{ count_expired }}</span>
+        </a>
+    </li>
+</ul>
+
+<!-- Search & Category Filters -->
+<div class="card border shadow-sm mb-4">
+    <div class="card-body p-3">
+        <form method="get" class="row g-2 align-items-center">
+            <input type="hidden" name="tab" value="{{ tab }}">
+            <div class="col-md-6">
+                <div class="input-group input-group-sm">
+                    <span class="input-group-text bg-white"><i class="bi bi-search text-muted"></i></span>
+                    <input type="text" name="q" value="{{ search_query }}" class="form-control" placeholder="Search by exam title, subject, target exam...">
+                </div>
+            </div>
+            <div class="col-md-4">
+                <select name="category" class="form-select form-select-sm">
+                    <option value="">All Examination Categories</option>
+                    {% for cat in categories %}
+                        <option value="{{ cat.slug }}" {% if selected_category == cat.slug %}selected{% endif %}>{{ cat.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2 d-flex gap-2">
+                <button type="submit" class="btn btn-sm btn-primary w-100">Filter</button>
+                {% if search_query or selected_category %}
+                    <a href="?tab={{ tab }}" class="btn btn-sm btn-outline-secondary">Reset</a>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Examination Table -->
+<div class="card border shadow-sm">
+    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+        <h6 class="fw-bold mb-0"><i class="bi bi-card-checklist text-primary me-2"></i> Examination Catalog</h6>
+        <span class="text-muted small">Total {{ page_obj.paginator.count }} Tests</span>
+    </div>
+    <div class="card-body p-0">
+        {% if exams %}
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0 small">
+                <thead class="table-light">
+                    <tr>
+                        <th>Examination Title</th>
+                        <th>Category & Subject</th>
+                        <th>Questions</th>
+                        <th>Total Marks</th>
+                        <th>Duration</th>
+                        <th>Status</th>
+                        <th>Access</th>
+                        <th>Attempts</th>
+                        <th class="text-end pe-3">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for ex in exams %}
+                    <tr>
+                        <td>
+                            <div>
+                                <a href="{% url 'exams:exam_questions' ex.pk %}" class="fw-bold text-dark text-decoration-none d-block">
+                                    {{ ex.title }}
+                                </a>
+                                <span class="text-muted" style="font-size: 0.75rem;">
+                                    By {{ ex.creator.username }} | {{ ex.created_at|date:"M d, Y" }}
+                                    {% if ex.target_exam %}<span class="badge text-bg-light border ms-1">{{ ex.target_exam }}</span>{% endif %}
+                                </span>
+                            </div>
+                        </td>
+                        <td>
+                            <span class="badge bg-light text-dark border d-block mb-1 text-truncate" style="max-width: 170px;">{{ ex.category.name }}</span>
+                            <span class="text-muted small">{{ ex.subject|default:"General" }}</span>
+                        </td>
+                        <td>
+                            <a href="{% url 'exams:exam_questions' ex.pk %}" class="fw-bold text-primary text-decoration-none">
+                                <i class="bi bi-question-circle me-1"></i>{{ ex.total_q_count }}
+                            </a>
+                        </td>
+                        <td>
+                            <span class="fw-bold text-dark">{{ ex.total_marks }}</span>
+                            <span class="text-muted" style="font-size: 0.7rem;">(Pass: {{ ex.passing_percentage }}%)</span>
+                        </td>
+                        <td>
+                            <span class="text-dark">{{ ex.duration_minutes }} min</span>
+                        </td>
+                        <td>
+                            {% if ex.status == 'published' %}
+                                {% if ex.is_scheduled_upcoming %}
+                                    <span class="badge bg-info text-dark">Upcoming</span>
+                                {% elif ex.is_expired %}
+                                    <span class="badge bg-secondary">Expired</span>
+                                {% else %}
+                                    <span class="badge bg-success">Published</span>
+                                {% endif %}
+                            {% elif ex.status == 'scheduled' %}
+                                <span class="badge bg-info text-dark">Scheduled</span>
+                            {% elif ex.status == 'draft' %}
+                                <span class="badge bg-warning text-dark">Draft</span>
+                            {% else %}
+                                <span class="badge bg-secondary">{{ ex.get_status_display }}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if ex.is_free %}
+                                <span class="badge bg-success-subtle text-success border border-success-subtle">Free</span>
+                            {% else %}
+                                <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">Premium</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a href="{% url 'exams:teacher_exam_analytics' ex.pk %}" class="badge bg-light text-primary border text-decoration-none" title="View Exam Analytics">
+                                <i class="bi bi-graph-up me-1"></i>{{ ex.total_att_count }}
+                            </a>
+                        </td>
+                        <td class="text-end pe-3">
+                            <div class="btn-group btn-group-sm">
+                                <a href="{% url 'exams:teacher_exam_analytics' ex.pk %}" class="btn btn-outline-info" title="Class Performance Analytics">
+                                    <i class="bi bi-graph-up-arrow"></i>
+                                </a>
+                                <a href="{% url 'exams:exam_questions' ex.pk %}" class="btn btn-outline-primary" title="Question Builder">
+                                    <i class="bi bi-pencil-square"></i> Questions
+                                </a>
+                                <a href="{% url 'exams:exam_preview' ex.pk %}" class="btn btn-outline-secondary" title="Preview Examination">
+                                    <i class="bi bi-eye"></i>
+                                </a>
+                                <a href="{% url 'exams:exam_edit' ex.pk %}" class="btn btn-outline-secondary" title="Edit Settings">
+                                    <i class="bi bi-gear"></i>
+                                </a>
+                                <form method="post" action="{% url 'exams:exam_toggle_publish' ex.pk %}" class="d-inline">
+                                    {% csrf_token %}
+                                    {% if ex.status == 'published' or ex.status == 'scheduled' %}
+                                        <button type="submit" class="btn btn-outline-warning" title="Unpublish to Draft">
+                                            <i class="bi bi-pause-circle"></i>
+                                        </button>
+                                    {% else %}
+                                        <button type="submit" class="btn btn-outline-success" title="Publish Test">
+                                            <i class="bi bi-play-circle"></i>
+                                        </button>
+                                    {% endif %}
+                                </form>
+                                <form method="post" action="{% url 'exams:exam_duplicate' ex.pk %}" class="d-inline">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-outline-secondary" title="Duplicate Test">
+                                        <i class="bi bi-copy"></i>
+                                    </button>
+                                </form>
+                                {% if not ex.has_attempts %}
+                                <form method="post" action="{% url 'exams:exam_delete' ex.pk %}" class="d-inline" onsubmit="return confirm('Are you sure you want to delete examination \'{{ ex.title }}\'?');">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-outline-danger" title="Delete Examination">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if is_paginated %}
+        <div class="p-3 border-top d-flex justify-content-between align-items-center">
+            <span class="text-muted small">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+            <ul class="pagination pagination-sm mb-0">
+                {% if page_obj.has_previous %}
+                    <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}&tab={{ tab }}{% if search_query %}&q={{ search_query }}{% endif %}{% if selected_category %}&category={{ selected_category }}{% endif %}">&laquo;</a></li>
+                {% endif %}
+                <li class="page-item active"><span class="page-link">{{ page_obj.number }}</span></li>
+                {% if page_obj.has_next %}
+                    <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}&tab={{ tab }}{% if search_query %}&q={{ search_query }}{% endif %}{% if selected_category %}&category={{ selected_category }}{% endif %}">&raquo;</a></li>
+                {% endif %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% else %}
+        <div class="p-5 text-center text-muted">
+            <i class="bi bi-card-checklist fs-1 text-muted d-block mb-2"></i>
+            <h5 class="fw-bold">No Examinations Found</h5>
+            <p class="small text-muted mb-3">Create your first examination and populate questions from the Question Bank.</p>
+            <a href="{% url 'exams:exam_create' %}" class="btn btn-primary btn-sm">
+                <i class="bi bi-plus-circle-fill me-1"></i> Create Examination Now
+            </a>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+

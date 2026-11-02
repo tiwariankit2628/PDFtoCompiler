@@ -1,0 +1,146 @@
+{% extends 'dashboard_base.html' %}
+
+{% block title %}Edit Question #{{ question.question_number }} | {{ PLATFORM_NAME }}{% endblock %}
+
+{% block extra_head %}
+<!-- KaTeX for live mathematical formula preview -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3TX4437n" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZko/WgHgoVICvIK1Pe49yi36XXgn74CEvTxmKjH" crossorigin="anonymous" onload="renderMathInElement(document.body);"></script>
+{% endblock %}
+
+{% block dashboard_content %}
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom">
+    <div>
+        <div class="d-flex align-items-center gap-2 mb-1">
+            <h2 class="fw-bold mb-0">Edit Extracted Question #{{ question.question_number }}</h2>
+            <span class="badge bg-secondary text-uppercase">Page {{ question.page_number }}</span>
+        </div>
+        <p class="text-muted mb-0">Paper: <strong>{{ question.paper.title }}</strong> | Category: <strong>{{ question.paper.category.name }}</strong></p>
+    </div>
+    <div class="mt-3 mt-md-0">
+        <a href="{% url 'questions:paper_review' question.paper.pk %}" class="btn btn-sm btn-cbt-outline">
+            <i class="bi bi-arrow-left me-1"></i> Back to Review Workspace
+        </a>
+    </div>
+</div>
+
+<div class="row justify-content-center">
+    <div class="col-lg-9">
+        <div class="card border shadow-sm rounded-4 p-4 mb-4">
+            <form method="post" enctype="multipart/form-data">
+                {% csrf_token %}
+
+                {% if form.non_field_errors %}
+                <div class="alert alert-danger py-2 small mb-3">
+                    {% for err in form.non_field_errors %}
+                        <div><i class="bi bi-exclamation-triangle-fill me-1"></i> {{ err }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                <h5 class="fw-bold mb-3 border-bottom pb-2">Question Statement & Scoring</h5>
+                <div class="row g-3 mb-4">
+                    <div class="col-md-3">
+                        <label class="form-label fw-semibold small" for="{{ form.question_number.id_for_label }}">Question Number *</label>
+                        {{ form.question_number }}
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label fw-semibold small" for="{{ form.positive_marks.id_for_label }}">Positive Marks *</label>
+                        {{ form.positive_marks }}
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label fw-semibold small" for="{{ form.negative_marks.id_for_label }}">Negative Marks *</label>
+                        {{ form.negative_marks }}
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label fw-semibold small" for="{{ form.correct_option.id_for_label }}">Correct Option (Key)</label>
+                        {{ form.correct_option }}
+                        <small class="text-muted d-block">e.g. A, B, C, or D</small>
+                    </div>
+
+                    <div class="col-12">
+                        <label class="form-label fw-semibold small" for="{{ form.question_text.id_for_label }}">Question Text (supports LaTeX math formulas & Hindi) *</label>
+                        {{ form.question_text }}
+                        {% if form.question_text.errors %}
+                            <div class="text-danger small mt-1">{{ form.question_text.errors.0 }}</div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <h5 class="fw-bold mb-3 border-bottom pb-2">Multiple Choice Options (MCQ)</h5>
+                <p class="text-muted small mb-3">Edit option statements. Blank options will be omitted.</p>
+                <div class="row g-3 mb-4">
+                    <!-- Option A -->
+                    <div class="col-md-6">
+                        <div class="input-group">
+                            <span class="input-group-text bg-light fw-bold">A</span>
+                            <input type="text" name="option_text_A" class="form-control" value="{% for opt in question.options %}{% if opt.key == 'A' %}{{ opt.text }}{% endif %}{% endfor %}" placeholder="Option A content...">
+                        </div>
+                    </div>
+
+                    <!-- Option B -->
+                    <div class="col-md-6">
+                        <div class="input-group">
+                            <span class="input-group-text bg-light fw-bold">B</span>
+                            <input type="text" name="option_text_B" class="form-control" value="{% for opt in question.options %}{% if opt.key == 'B' %}{{ opt.text }}{% endif %}{% endfor %}" placeholder="Option B content...">
+                        </div>
+                    </div>
+
+                    <!-- Option C -->
+                    <div class="col-md-6">
+                        <div class="input-group">
+                            <span class="input-group-text bg-light fw-bold">C</span>
+                            <input type="text" name="option_text_C" class="form-control" value="{% for opt in question.options %}{% if opt.key == 'C' %}{{ opt.text }}{% endif %}{% endfor %}" placeholder="Option C content...">
+                        </div>
+                    </div>
+
+                    <!-- Option D -->
+                    <div class="col-md-6">
+                        <div class="input-group">
+                            <span class="input-group-text bg-light fw-bold">D</span>
+                            <input type="text" name="option_text_D" class="form-control" value="{% for opt in question.options %}{% if opt.key == 'D' %}{{ opt.text }}{% endif %}{% endfor %}" placeholder="Option D content...">
+                        </div>
+                    </div>
+                </div>
+
+                <h5 class="fw-bold mb-3 border-bottom pb-2">Diagram Image & Explanation</h5>
+                <div class="row g-3 mb-4">
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold small" for="{{ form.image.id_for_label }}">Question Diagram / Formula Image</label>
+                        {{ form.image }}
+                        {% if question.image %}
+                        <div class="mt-2">
+                            <img src="{{ question.image.url }}" alt="Existing diagram" class="img-thumbnail" style="max-height: 120px;">
+                        </div>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-check mt-3">
+                            {{ form.is_flagged }}
+                            <label class="form-check-label fw-semibold small" for="{{ form.is_flagged.id_for_label }}">
+                                Flag this question for manual review
+                            </label>
+                        </div>
+                        <div class="mt-2">
+                            <label class="form-label small text-muted">Flag Reason</label>
+                            {{ form.flag_reason }}
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label fw-semibold small" for="{{ form.explanation.id_for_label }}">Solution & Explanation</label>
+                        {{ form.explanation }}
+                    </div>
+                </div>
+
+                <div class="d-flex justify-content-end gap-2 pt-2 border-top">
+                    <a href="{% url 'questions:paper_review' question.paper.pk %}" class="btn btn-outline-secondary">Cancel</a>
+                    <button type="submit" class="btn btn-primary fw-bold px-4">
+                        <i class="bi bi-check-circle me-1"></i> Save Changes
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

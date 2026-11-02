@@ -1,0 +1,209 @@
+{% extends 'base.html' %}
+
+{% block title %}Instructions - {{ exam.title }} | {{ PLATFORM_NAME }}{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <!-- Breadcrumb -->
+    <nav aria-label="breadcrumb" class="mb-3">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="{% url 'core:home' %}">Home</a></li>
+            <li class="breadcrumb-item"><a href="{% url 'core:dashboard_router' %}">Dashboard</a></li>
+            <li class="breadcrumb-item"><a href="{% url 'exams:exam_catalog' %}">Examinations</a></li>
+            <li class="breadcrumb-item active" aria-current="page">{{ exam.title }}</li>
+        </ol>
+    </nav>
+
+    <!-- Header Card -->
+    <div class="card border-0 shadow-sm rounded-4 mb-4 overflow-hidden">
+        <div class="bg-primary text-white p-4 p-md-5">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                <span class="badge bg-white text-primary px-3 py-2 fw-bold text-uppercase">
+                    <i class="bi bi-tag-fill me-1"></i> {{ exam.category.name }}
+                </span>
+                {% if exam.is_free %}
+                    <span class="badge bg-success px-3 py-2 fw-bold">FREE TEST</span>
+                {% else %}
+                    <span class="badge bg-warning text-dark px-3 py-2 fw-bold">PREMIUM MOCK</span>
+                {% endif %}
+            </div>
+            <h2 class="fw-bold mb-2">{{ exam.title }}</h2>
+            <p class="text-white-50 mb-4 fs-6">
+                {{ exam.description|default:"Standard Computer-Based Assessment simulation designed for competitive excellence." }}
+            </p>
+
+            <!-- Metadata Metrics Grid -->
+            <div class="row g-3">
+                <div class="col-6 col-md-3">
+                    <div class="bg-white bg-opacity-10 rounded-3 p-3 text-center border border-white border-opacity-10">
+                        <small class="text-white-50 d-block mb-1">Duration</small>
+                        <h4 class="fw-bold mb-0"><i class="bi bi-clock-history me-1"></i> {{ exam.duration_minutes }} Min</h4>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="bg-white bg-opacity-10 rounded-3 p-3 text-center border border-white border-opacity-10">
+                        <small class="text-white-50 d-block mb-1">Total Questions</small>
+                        <h4 class="fw-bold mb-0"><i class="bi bi-ui-checks-grid me-1"></i> {{ total_questions }} Qs</h4>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="bg-white bg-opacity-10 rounded-3 p-3 text-center border border-white border-opacity-10">
+                        <small class="text-white-50 d-block mb-1">Maximum Marks</small>
+                        <h4 class="fw-bold mb-0"><i class="bi bi-award me-1"></i> {{ exam.total_marks }}</h4>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="bg-white bg-opacity-10 rounded-3 p-3 text-center border border-white border-opacity-10">
+                        <small class="text-white-50 d-block mb-1">Marking Scheme</small>
+                        <h4 class="fw-bold mb-0 text-white">
+                            +{{ exam.default_positive_marks }} / -{{ exam.default_negative_marks }}
+                        </h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Active Resume Alert -->
+    {% if active_attempt %}
+    <div class="alert alert-info border-info d-flex align-items-center justify-content-between p-3 mb-4 rounded-3 shadow-sm">
+        <div class="d-flex align-items-center">
+            <i class="bi bi-exclamation-circle-fill fs-3 text-info me-3"></i>
+            <div>
+                <h6 class="fw-bold mb-1">Active Examination Session in Progress</h6>
+                <p class="mb-0 small text-muted">
+                    You have an ongoing test session with <strong>{{ active_attempt.remaining_minutes }} minutes</strong> remaining.
+                </p>
+            </div>
+        </div>
+        <a href="{% url 'exams:exam_session' active_attempt.attempt_uuid %}" class="btn btn-primary fw-bold px-4 py-2">
+            <i class="bi bi-play-fill me-1"></i> Resume Test
+        </a>
+    </div>
+    {% endif %}
+
+    <div class="row g-4">
+        <!-- Main Instructions Column -->
+        <div class="col-lg-8">
+            <div class="card border-0 shadow-sm rounded-4 p-4 mb-4">
+                <h5 class="fw-bold text-dark border-bottom pb-3 mb-3">
+                    <i class="bi bi-file-earmark-text text-primary me-2"></i> General Instructions for Candidates
+                </h5>
+
+                <div class="prose text-secondary mb-4">
+                    {% if exam.instructions %}
+                        <div class="alert alert-light border p-3 rounded-3 mb-4 font-monospace small">
+                            {{ exam.instructions|linebreaks }}
+                        </div>
+                    {% endif %}
+
+                    <h6 class="fw-bold text-dark mb-2">1. Navigation & Palette Guide:</h6>
+                    <ul class="list-unstyled mb-4 ps-2">
+                        <li class="d-flex align-items-center mb-2">
+                            <span class="badge bg-secondary me-3" style="width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;">1</span>
+                            <span><strong>Gray:</strong> You have not visited this question yet.</span>
+                        </li>
+                        <li class="d-flex align-items-center mb-2">
+                            <span class="badge bg-danger me-3" style="width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;">2</span>
+                            <span><strong>Red:</strong> You have visited the question, but have not answered it.</span>
+                        </li>
+                        <li class="d-flex align-items-center mb-2">
+                            <span class="badge bg-success me-3" style="width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;">3</span>
+                            <span><strong>Green:</strong> You have selected an answer for this question.</span>
+                        </li>
+                        <li class="d-flex align-items-center mb-2">
+                            <span class="badge text-white me-3" style="background-color: #6f42c1; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;">4</span>
+                            <span><strong>Purple:</strong> Marked for Review (no option chosen).</span>
+                        </li>
+                        <li class="d-flex align-items-center mb-2">
+                            <span class="badge position-relative me-3" style="background-color: #6f42c1; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;">
+                                5
+                                <span class="position-absolute top-0 start-100 translate-middle p-1 bg-success border border-light rounded-circle"></span>
+                            </span>
+                            <span><strong>Purple with Green dot:</strong> Answered and Marked for Review (will be evaluated).</span>
+                        </li>
+                    </ul>
+
+                    <h6 class="fw-bold text-dark mb-2">2. Answering Questions:</h6>
+                    <ul class="mb-4 ps-3">
+                        <li class="mb-1">Click on the option radio button or text card to select your choice.</li>
+                        <li class="mb-1">Click <strong>Save & Next</strong> to securely save your answer and advance to the next question.</li>
+                        <li class="mb-1">To change an answered option, simply click on another option and click <strong>Save & Next</strong>.</li>
+                        <li class="mb-1">To deselect a chosen option, click <strong>Clear Response</strong>.</li>
+                        <li class="mb-1">To mark a question for future review, click <strong>Mark for Review & Next</strong>.</li>
+                    </ul>
+
+                    <h6 class="fw-bold text-dark mb-2">3. Server Timer & Auto-Submit:</h6>
+                    <ul class="mb-4 ps-3">
+                        <li class="mb-1">The server-synchronized countdown timer runs continuously in the top bar.</li>
+                        <li class="mb-1"><strong>Auto-Submit:</strong> When the countdown timer reaches zero, the examination will automatically submit, regardless of client browser activity.</li>
+                        <li class="mb-1">Ensure your responses are saved before the final minutes elapse.</li>
+                    </ul>
+
+                    <h6 class="fw-bold text-dark mb-2">4. Anti-Cheating & Proctoring Protocol:</h6>
+                    <div class="alert alert-warning border-warning p-3 rounded-3 small mb-0">
+                        <i class="bi bi-shield-exclamation text-warning fs-5 me-2"></i>
+                        <strong>Examination Proctoring Warning:</strong> This examination environment requests full-screen mode.
+                        Tab switching, minimizing the browser, copy-paste keystrokes, and right-click context menu actions are strictly monitored and logged into your examination audit profile. Repeated violations may be flagged for faculty review.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Start Checkpoint Column -->
+        <div class="col-lg-4">
+            <div class="card border-0 shadow-sm rounded-4 p-4 sticky-top" style="top: 85px;">
+                <h5 class="fw-bold text-dark mb-3">Examination Checklist</h5>
+
+                <ul class="list-group list-group-flush mb-4 small">
+                    <li class="list-group-item d-flex justify-content-between px-0">
+                        <span class="text-muted">Target Exam:</span>
+                        <strong class="text-dark">{{ exam.target_exam|default:"General Practice" }}</strong>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between px-0">
+                        <span class="text-muted">Subject:</span>
+                        <strong class="text-dark">{{ exam.subject|default:"Comprehensive" }}</strong>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between px-0">
+                        <span class="text-muted">Sections:</span>
+                        <span class="badge bg-light text-dark border">{{ sections|join:", " }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between px-0">
+                        <span class="text-muted">Passing Score:</span>
+                        <strong class="text-success">{{ exam.passing_percentage }}%</strong>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between px-0">
+                        <span class="text-muted">Attempt Limit:</span>
+                        <strong>{% if exam.max_attempts %}{{ completed_count }}/{{ exam.max_attempts }} Used{% else %}Unlimited{% endif %}</strong>
+                    </li>
+                </ul>
+
+                {% if can_start %}
+                    <form method="post" action="{% url 'exams:exam_start' exam.slug %}" id="start-exam-form">
+                        {% csrf_token %}
+                        <div class="form-check mb-4">
+                            <input class="form-check-input" type="checkbox" id="declaration-check" required>
+                            <label class="form-check-label small text-muted" for="declaration-check">
+                                I confirm that I have read and understood all the examination instructions above. I agree to comply with the platform testing rules and conduct.
+                            </label>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary btn-lg w-100 py-3 fw-bold rounded-3 shadow-sm d-flex align-items-center justify-content-center gap-2" id="start-btn">
+                            <i class="bi bi-play-circle fs-5"></i>
+                            {% if active_attempt %}Resume Examination{% else %}I am Ready to Begin{% endif %}
+                        </button>
+                    </form>
+                {% else %}
+                    <div class="alert alert-danger p-3 rounded-3 small mb-3">
+                        <i class="bi bi-slash-circle me-1"></i> {{ block_reason }}
+                    </div>
+                    <a href="{% url 'exams:exam_catalog' %}" class="btn btn-secondary w-100 py-2">
+                        <i class="bi bi-arrow-left me-1"></i> Return to Catalog
+                    </a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

@@ -1,0 +1,84 @@
+{% extends 'base.html' %}
+
+{% block title %}User Profile | {{ PLATFORM_NAME }}{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <div class="card border shadow-sm rounded-4 overflow-hidden">
+                <div class="bg-primary text-white p-4 d-flex align-items-center justify-content-between">
+                    <div>
+                        <h4 class="fw-bold mb-1">{{ user.get_full_name|default:user.username }}</h4>
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="badge bg-white text-primary text-uppercase">{{ user.get_role_display }}</span>
+                            {% if user.is_verified %}
+                                <span class="badge bg-success"><i class="bi bi-patch-check-fill me-1"></i> Verified</span>
+                            {% else %}
+                                <span class="badge bg-warning text-dark"><i class="bi bi-exclamation-circle me-1"></i> Unverified Email</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="text-white text-opacity-75 small">
+                        Member since {{ user.date_joined|date:"M Y" }}
+                    </div>
+                </div>
+
+                <div class="card-body p-4">
+                    <form method="post" enctype="multipart/form-data" action="{% url 'accounts:profile' %}">
+                        {% csrf_token %}
+
+                        <h5 class="fw-bold mb-3 border-bottom pb-2">Personal Information</h5>
+                        <div class="row g-3 mb-4">
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small">First Name</label>
+                                {{ form.first_name }}
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small">Last Name</label>
+                                {{ form.last_name }}
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small">Email Address</label>
+                                {{ form.email }}
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small">Phone Number</label>
+                                {{ form.phone }}
+                            </div>
+                        </div>
+
+                        <h5 class="fw-bold mb-3 border-bottom pb-2">Academic & Examination Details</h5>
+                        <div class="row g-3 mb-4">
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small">School / College / Institute</label>
+                                {{ form.institute_name }}
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small">Target Examination</label>
+                                {{ form.target_exam }}
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label fw-semibold small">Bio / Candidate Notes</label>
+                                {{ form.bio }}
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small">Profile Avatar</label>
+                                {{ form.avatar }}
+                            </div>
+                        </div>
+
+                        <div class="d-flex justify-content-end gap-2">
+                            <a href="{% url 'core:dashboard_router' %}" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-primary fw-bold px-4">
+                                <i class="bi bi-check2-circle me-1"></i> Save Changes
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

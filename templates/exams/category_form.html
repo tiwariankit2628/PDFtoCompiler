@@ -1,0 +1,115 @@
+{% extends 'dashboard_base.html' %}
+
+{% block title %}{{ action_title }} | {{ PLATFORM_NAME }}{% endblock %}
+
+{% block dashboard_content %}
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom">
+    <div>
+        <h2 class="fw-bold mb-1">{{ action_title }}</h2>
+        <p class="text-muted mb-0">Configure examination classification, visual icon, ordering, and SEO metadata.</p>
+    </div>
+    <div class="mt-3 mt-md-0">
+        <a href="{% url 'exams:category_list' %}" class="btn btn-sm btn-cbt-outline">
+            <i class="bi bi-arrow-left me-1"></i> Back to Categories
+        </a>
+    </div>
+</div>
+
+<div class="row justify-content-center">
+    <div class="col-lg-9">
+        <div class="card border shadow-sm rounded-4 p-4">
+            <form method="post" enctype="multipart/form-data">
+                {% csrf_token %}
+
+                {% if form.non_field_errors %}
+                <div class="alert alert-danger py-2 small mb-3">
+                    {% for err in form.non_field_errors %}
+                        <div><i class="bi bi-exclamation-triangle-fill me-1"></i> {{ err }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                <h5 class="fw-bold mb-3 border-bottom pb-2">Category Identification</h5>
+                <div class="row g-3 mb-4">
+                    <div class="col-md-7">
+                        <label class="form-label fw-semibold small" for="{{ form.name.id_for_label }}">Category Name *</label>
+                        {{ form.name }}
+                        {% if form.name.errors %}
+                            <div class="text-danger small mt-1">{{ form.name.errors.0 }}</div>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-5">
+                        <label class="form-label fw-semibold small" for="{{ form.slug.id_for_label }}">URL Slug (auto-generated if empty)</label>
+                        {{ form.slug }}
+                        {% if form.slug.errors %}
+                            <div class="text-danger small mt-1">{{ form.slug.errors.0 }}</div>
+                        {% endif %}
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label fw-semibold small" for="{{ form.description.id_for_label }}">Description</label>
+                        {{ form.description }}
+                        {% if form.description.errors %}
+                            <div class="text-danger small mt-1">{{ form.description.errors.0 }}</div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <h5 class="fw-bold mb-3 border-bottom pb-2">Visual & Display Order</h5>
+                <div class="row g-3 mb-4">
+                    <div class="col-md-4">
+                        <label class="form-label fw-semibold small" for="{{ form.icon.id_for_label }}">Bootstrap Icon Class</label>
+                        {{ form.icon }}
+                        <small class="text-muted d-block mt-1">E.g., <code>bi-trophy</code>, <code>bi-cpu</code>, <code>bi-mortarboard</code></small>
+                        {% if form.icon.errors %}
+                            <div class="text-danger small mt-1">{{ form.icon.errors.0 }}</div>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label fw-semibold small" for="{{ form.display_order.id_for_label }}">Display Sort Order</label>
+                        {{ form.display_order }}
+                        <small class="text-muted d-block mt-1">Lower numbers appear first</small>
+                        {% if form.display_order.errors %}
+                            <div class="text-danger small mt-1">{{ form.display_order.errors.0 }}</div>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-4 d-flex align-items-center">
+                        <div class="form-check mt-3">
+                            {{ form.is_active }}
+                            <label class="form-check-label fw-semibold small" for="{{ form.is_active.id_for_label }}">
+                                Active & Visible on Portal
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-md-12">
+                        <label class="form-label fw-semibold small" for="{{ form.image.id_for_label }}">Optional Category Image / Banner</label>
+                        {{ form.image }}
+                        {% if form.image.errors %}
+                            <div class="text-danger small mt-1">{{ form.image.errors.0 }}</div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <h5 class="fw-bold mb-3 border-bottom pb-2">Search Engine Optimization (SEO)</h5>
+                <div class="row g-3 mb-4">
+                    <div class="col-12">
+                        <label class="form-label fw-semibold small" for="{{ form.seo_title.id_for_label }}">SEO Page Title</label>
+                        {{ form.seo_title }}
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label fw-semibold small" for="{{ form.seo_description.id_for_label }}">SEO Meta Description</label>
+                        {{ form.seo_description }}
+                    </div>
+                </div>
+
+                <div class="d-flex justify-content-end gap-2 pt-2 border-top">
+                    <a href="{% url 'exams:category_list' %}" class="btn btn-outline-secondary">Cancel</a>
+                    <button type="submit" class="btn btn-primary fw-bold px-4">
+                        <i class="bi bi-check-circle me-1"></i> Save Category
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

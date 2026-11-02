@@ -1,0 +1,147 @@
+{% extends 'dashboard_base.html' %}
+
+{% block title %}Preview Question #{{ question.pk }} | {{ PLATFORM_NAME }}{% endblock %}
+
+{% block extra_head %}
+<!-- KaTeX for live equation rendering -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3TX4437n" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZko/WgHgoVICvIK1Pe49yi36XXgn74CEvTxmKjH" crossorigin="anonymous" onload="renderMathInElement(document.body);"></script>
+{% endblock %}
+
+{% block dashboard_content %}
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom">
+    <div>
+        <div class="d-flex align-items-center gap-2 mb-1">
+            <h2 class="fw-bold mb-0">Question Item #{{ question.pk }}</h2>
+            <span class="badge bg-primary text-uppercase px-2 py-1">Preview</span>
+        </div>
+        <p class="text-muted mb-0">High-fidelity examination preview with KaTeX equation rendering and answer-key validation.</p>
+    </div>
+    <div class="mt-3 mt-md-0 d-flex gap-2">
+        <a href="{% url 'questions:question_edit' question.pk %}" class="btn btn-sm btn-primary">
+            <i class="bi bi-pencil me-1"></i> Edit Question
+        </a>
+        <a href="{% url 'questions:question_bank' %}" class="btn btn-sm btn-cbt-outline">
+            <i class="bi bi-arrow-left me-1"></i> Back to Bank
+        </a>
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-8">
+        <div class="card border shadow-sm mb-4">
+            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                <div class="d-flex gap-2 align-items-center flex-wrap">
+                    <span class="badge bg-light text-dark border">{{ question.category.name }}</span>
+                    <span class="badge text-bg-light border text-muted">{{ question.subject }}</span>
+                    {% if question.topic %}<span class="badge bg-secondary bg-opacity-10 text-secondary border">{{ question.topic }}</span>{% endif %}
+                    <span class="badge {% if question.difficulty == 'easy' %}bg-success{% elif question.difficulty == 'medium' %}bg-warning text-dark{% else %}bg-danger{% endif %}">{{ question.get_difficulty_display }}</span>
+                    <span class="badge text-bg-light border text-muted">{{ question.get_language_display }}</span>
+                </div>
+                <span class="text-muted small">Marks: <strong>+{{ question.positive_marks }}</strong> / <strong>-{{ question.negative_marks }}</strong></span>
+            </div>
+            <div class="card-body p-4">
+                <!-- Question Text -->
+                <div class="fs-5 text-dark mb-4" style="line-height: 1.6;">
+                    {{ question.question_text|linebreaksbr }}
+                </div>
+
+                {% if question.image %}
+                <div class="mb-4 text-center p-3 bg-light rounded border">
+                    <img src="{{ question.image.url }}" alt="Diagram" class="img-fluid rounded" style="max-height: 280px;">
+                </div>
+                {% endif %}
+
+                <!-- Options -->
+                <h6 class="fw-bold text-muted small text-uppercase mb-3">Multiple Choice Options:</h6>
+                <div class="d-flex flex-column gap-2 mb-4">
+                    {% for opt in question.options.all %}
+                    <div class="p-3 border rounded-3 d-flex align-items-center gap-3 {% if opt.is_correct %}border-success bg-success bg-opacity-10{% else %}bg-light{% endif %}">
+                        <span class="badge {% if opt.is_correct %}bg-success{% else %}bg-secondary{% endif %} fs-6 px-3 py-2">{{ opt.option_key }}</span>
+                        <div class="flex-grow-1 fs-6 text-dark">{{ opt.option_text }}</div>
+                        {% if opt.is_correct %}
+                            <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1">
+                                <i class="bi bi-check2-circle me-1"></i> Correct Answer Key
+                            </span>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <!-- Explanation -->
+                {% if question.explanation %}
+                <div class="p-3 bg-info bg-opacity-10 border-start border-4 border-info rounded-end">
+                    <h6 class="fw-bold text-info mb-1"><i class="bi bi-lightbulb-fill me-1"></i> Pedagogical Explanation / Solution:</h6>
+                    <div class="text-dark small" style="line-height: 1.6;">{{ question.explanation|linebreaksbr }}</div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Metadata Sidebar -->
+    <div class="col-lg-4">
+        <div class="card border shadow-sm mb-4">
+            <div class="card-header bg-white py-3">
+                <h6 class="fw-bold mb-0"><i class="bi bi-info-circle text-primary me-2"></i> Question Properties</h6>
+            </div>
+            <div class="card-body p-0">
+                <ul class="list-group list-group-flush small">
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span class="text-muted">Item ID:</span>
+                        <strong>#{{ question.pk }}</strong>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span class="text-muted">Category:</span>
+                        <strong>{{ question.category.name }}</strong>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span class="text-muted">Subject:</span>
+                        <strong>{{ question.subject }}</strong>
+                    </li>
+                    {% if question.topic %}
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span class="text-muted">Topic:</span>
+                        <strong>{{ question.topic }}</strong>
+                    </li>
+                    {% endif %}
+                    {% if question.chapter %}
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span class="text-muted">Chapter:</span>
+                        <strong>{{ question.chapter }}</strong>
+                    </li>
+                    {% endif %}
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span class="text-muted">Difficulty:</span>
+                        <span class="badge {% if question.difficulty == 'easy' %}bg-success{% elif question.difficulty == 'medium' %}bg-warning text-dark{% else %}bg-danger{% endif %}">{{ question.get_difficulty_display }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span class="text-muted">Language:</span>
+                        <strong>{{ question.get_language_display }}</strong>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span class="text-muted">Author / Creator:</span>
+                        <strong>{{ question.creator.username|default:"System Imported" }}</strong>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span class="text-muted">Added On:</span>
+                        <strong>{{ question.created_at|date:"M d, Y" }}</strong>
+                    </li>
+                    {% if question.source_paper %}
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span class="text-muted">Source PDF:</span>
+                        <a href="{% url 'questions:paper_review' question.source_paper.pk %}" class="text-truncate" style="max-width: 160px;">{{ question.source_paper.title }}</a>
+                    </li>
+                    {% endif %}
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span class="text-muted">Assigned Exams:</span>
+                        <span class="badge bg-secondary">{{ question.assigned_exams.count }} Exams</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

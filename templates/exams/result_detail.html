@@ -1,0 +1,439 @@
+{% extends 'base.html' %}
+
+{% block title %}Result & Analytics - {{ exam.title }} | {{ PLATFORM_NAME }}{% endblock %}
+
+{% block extra_head %}
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<!-- KaTeX -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" onload="renderMathInElement(document.body);"></script>
+{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <!-- Breadcrumb & Nav -->
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4 gap-3">
+        <div>
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb mb-1">
+                    <li class="breadcrumb-item"><a href="{% url 'core:home' %}">Home</a></li>
+                    <li class="breadcrumb-item"><a href="{% url 'core:dashboard_router' %}">Dashboard</a></li>
+                    <li class="breadcrumb-item"><a href="{% url 'exams:exam_catalog' %}">Examinations</a></li>
+                    <li class="breadcrumb-item active" aria-current="page">Scorecard</li>
+                </ol>
+            </nav>
+            <h2 class="fw-bold text-dark mb-0">Examination Scorecard & Diagnostic Report</h2>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+            {% if can_view_scores %}
+            <a href="{% url 'exams:student_result_pdf' attempt.attempt_uuid %}" class="btn btn-outline-primary btn-sm fw-bold">
+                <i class="bi bi-file-earmark-pdf-fill me-1 text-danger"></i> Download PDF Report
+            </a>
+            <a href="{% url 'exams:student_result_review' attempt.attempt_uuid %}" class="btn btn-primary btn-sm fw-bold">
+                <i class="bi bi-journal-text me-1"></i> Review Solutions
+            </a>
+            <a href="{% url 'exams:exam_leaderboard' exam.slug %}" class="btn btn-outline-secondary btn-sm">
+                <i class="bi bi-trophy-fill text-warning me-1"></i> Leaderboard
+            </a>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if not can_view_scores %}
+    <!-- Evaluation In Progress Notice -->
+    <div class="card border-0 shadow-sm rounded-4 p-5 text-center mb-4">
+        <i class="bi bi-hourglass-split text-primary fs-1 mb-3"></i>
+        <h4 class="fw-bold text-dark mb-2">Results & Analytics Under Evaluation</h4>
+        <p class="text-muted mx-auto" style="max-width: 600px;">
+            Your responses for <strong>{{ exam.title }}</strong> have been securely recorded.
+            As configured by the institution, scorecards and detailed solutions will be made available once final grading is published.
+        </p>
+        <div>
+            <a href="{% url 'core:dashboard_router' %}" class="btn btn-primary px-4 py-2">
+                <i class="bi bi-speedometer2 me-1"></i> Return to Dashboard
+            </a>
+        </div>
+    </div>
+    {% else %}
+
+    <!-- Top Score Banner Card -->
+    <div class="card border-0 shadow-sm rounded-4 mb-4 overflow-hidden">
+        <div class="p-4 p-md-5 text-white {% if attempt.is_passed %}bg-primary{% else %}bg-secondary{% endif %}">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                <span class="badge bg-white text-dark px-3 py-1.5 fw-bold text-uppercase">
+                    {{ exam.category.name }}
+                </span>
+                {% if attempt.is_passed %}
+                    <span class="badge bg-success px-3 py-1.5 fw-bold fs-6">QUALIFIED / PASSED</span>
+                {% else %}
+                    <span class="badge bg-danger px-3 py-1.5 fw-bold fs-6">NOT QUALIFIED</span>
+                {% endif %}
+            </div>
+
+            <div class="row align-items-center">
+                <div class="col-lg-8">
+                    <h3 class="fw-bold mb-1">{{ exam.title }}</h3>
+                    <p class="text-white-50 mb-3 small">
+                        Candidate: <strong>{{ attempt.student.get_full_name|default:attempt.student.username }}</strong>
+                        {% if attempt.student.target_exam %} | Target: <strong>{{ attempt.student.target_exam }}</strong>{% endif %}
+                        | Submitted on: <strong>{{ attempt.submitted_at|date:"M d, Y at h:i A" }}</strong>
+                    </p>
+                </div>
+                <div class="col-lg-4 text-lg-end">
+                    <span class="text-white-50 small d-block mb-1">Marks Obtained</span>
+                    <h1 class="display-5 fw-bold mb-0 text-white">
+                        {{ attempt.score_obtained }} <span class="fs-4 text-white-50">/ {{ attempt.total_marks }}</span>
+                    </h1>
+                </div>
+            </div>
+
+            <!-- KPI Metric Counters Grid -->
+            <div class="row g-3 mt-3 pt-3 border-top border-white border-opacity-25">
+                <div class="col-6 col-md-2">
+                    <small class="text-white-50 d-block">Percentage</small>
+                    <h4 class="fw-bold mb-0">{{ attempt.percentage }}%</h4>
+                </div>
+                <div class="col-6 col-md-2">
+                    <small class="text-white-50 d-block">Accuracy</small>
+                    <h4 class="fw-bold mb-0 text-white">{{ analytics.accuracy_percentage }}%</h4>
+                </div>
+                <div class="col-6 col-md-2">
+                    <small class="text-white-50 d-block">Candidate Rank</small>
+                    <h4 class="fw-bold mb-0 text-warning">
+                        {% if attempt.rank %}#{{ attempt.rank }} <small class="text-white-50 fs-6">/ {{ analytics.total_cohort }}</small>{% else %}N/A{% endif %}
+                    </h4>
+                </div>
+                <div class="col-6 col-md-2">
+                    <small class="text-white-50 d-block">Percentile</small>
+                    <h4 class="fw-bold mb-0">{% if attempt.percentile %}{{ attempt.percentile }}%{% else %}N/A{% endif %}</h4>
+                </div>
+                <div class="col-6 col-md-2">
+                    <small class="text-white-50 d-block">Time Taken</small>
+                    <h4 class="fw-bold mb-0">{{ analytics.total_time_minutes }}m</h4>
+                </div>
+                <div class="col-6 col-md-2">
+                    <small class="text-white-50 d-block">Passing Benchmark</small>
+                    <h4 class="fw-bold mb-0 text-white-50">{{ exam.passing_percentage }}%</h4>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Question Distribution Counters -->
+    <div class="row g-3 mb-4">
+        <div class="col-sm-6 col-md-3">
+            <div class="card h-100 p-3 border-0 shadow-sm rounded-4 text-center">
+                <span class="text-muted small mb-1">Total Questions</span>
+                <h3 class="fw-bold text-dark mb-0">{{ analytics.total_questions }}</h3>
+            </div>
+        </div>
+        <div class="col-sm-6 col-md-3">
+            <div class="card h-100 p-3 border-0 shadow-sm rounded-4 text-center border-start border-4 border-success">
+                <span class="text-muted small mb-1">Correct Answers</span>
+                <h3 class="fw-bold text-success mb-0">+{{ analytics.correct_count }}</h3>
+            </div>
+        </div>
+        <div class="col-sm-6 col-md-3">
+            <div class="card h-100 p-3 border-0 shadow-sm rounded-4 text-center border-start border-4 border-danger">
+                <span class="text-muted small mb-1">Incorrect Deductions</span>
+                <h3 class="fw-bold text-danger mb-0">-{{ analytics.incorrect_count }}</h3>
+            </div>
+        </div>
+        <div class="col-sm-6 col-md-3">
+            <div class="card h-100 p-3 border-0 shadow-sm rounded-4 text-center border-start border-4 border-secondary">
+                <span class="text-muted small mb-1">Unattempted / Skipped</span>
+                <h3 class="fw-bold text-secondary mb-0">{{ analytics.unattempted_count }}</h3>
+            </div>
+        </div>
+    </div>
+
+    <!-- Visual Charts Row -->
+    <div class="row g-4 mb-4">
+        <!-- Question Outcome Doughnut -->
+        <div class="col-md-4">
+            <div class="card border-0 shadow-sm rounded-4 p-4 h-100">
+                <h6 class="fw-bold text-dark border-bottom pb-2 mb-3">
+                    <i class="bi bi-pie-chart-fill text-primary me-2"></i> Question Outcome
+                </h6>
+                <div class="d-flex align-items-center justify-content-center" style="height: 220px;">
+                    <canvas id="outcomeChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Subject Performance Bar Chart -->
+        <div class="col-md-8">
+            <div class="card border-0 shadow-sm rounded-4 p-4 h-100">
+                <h6 class="fw-bold text-dark border-bottom pb-2 mb-3">
+                    <i class="bi bi-bar-chart-fill text-primary me-2"></i> Subject Performance & Accuracy
+                </h6>
+                <div style="height: 220px;">
+                    <canvas id="subjectChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Subject-Wise Performance Table -->
+    <div class="card border-0 shadow-sm rounded-4 p-4 mb-4">
+        <h5 class="fw-bold text-dark border-bottom pb-3 mb-3">
+            <i class="bi bi-journal-check text-primary me-2"></i> Subject-Wise Detailed Diagnostic Breakdown
+        </h5>
+
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light small">
+                    <tr>
+                        <th>Subject</th>
+                        <th class="text-center">Total Qs</th>
+                        <th class="text-center">Attempted</th>
+                        <th class="text-center">Correct</th>
+                        <th class="text-center">Incorrect</th>
+                        <th class="text-center">Unattempted</th>
+                        <th class="text-center">Marks Obtained</th>
+                        <th class="text-center">Accuracy %</th>
+                        <th class="text-center">Time Spent</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for subj in analytics.subject_summary %}
+                    <tr>
+                        <td class="fw-bold text-dark">{{ subj.subject }}</td>
+                        <td class="text-center">{{ subj.total }}</td>
+                        <td class="text-center">{{ subj.attempted }}</td>
+                        <td class="text-center text-success fw-bold">{{ subj.correct }}</td>
+                        <td class="text-center text-danger fw-bold">{{ subj.incorrect }}</td>
+                        <td class="text-center text-muted">{{ subj.unattempted }}</td>
+                        <td class="text-center fw-bold">{{ subj.marks_obtained }} / {{ subj.max_marks }}</td>
+                        <td class="text-center">
+                            <span class="badge {% if subj.accuracy >= 70 %}bg-success{% elif subj.accuracy >= 50 %}bg-warning text-dark{% else %}bg-danger{% endif %} px-2.5 py-1">
+                                {{ subj.accuracy }}%
+                            </span>
+                        </td>
+                        <td class="text-center text-muted">{{ subj.time_spent_minutes }}m</td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="9" class="text-center text-muted py-3">No subject data available.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Strengths, Weaknesses, and Difficulty Matrix -->
+    <div class="row g-4 mb-4">
+        <!-- Strengths & Weaknesses Profiling -->
+        <div class="col-lg-6">
+            <div class="card border-0 shadow-sm rounded-4 p-4 h-100">
+                <h5 class="fw-bold text-dark border-bottom pb-3 mb-3">
+                    <i class="bi bi-compass-fill text-primary me-2"></i> Syllabus Diagnostic Profiling
+                </h5>
+
+                <!-- Key Strengths -->
+                <div class="mb-4">
+                    <h6 class="fw-bold text-success mb-2">
+                        <i class="bi bi-check-circle-fill me-1"></i> Key Strengths (&ge; 70% Accuracy)
+                    </h6>
+                    {% if analytics.strong_topics %}
+                    <div class="d-flex flex-column gap-2">
+                        {% for st in analytics.strong_topics %}
+                        <div class="p-2.5 rounded-3 bg-success bg-opacity-10 border border-success border-opacity-25 d-flex justify-content-between align-items-center">
+                            <span class="fw-semibold text-dark small">{{ st.topic }}</span>
+                            <span class="badge bg-success">{{ st.accuracy }}% Accuracy ({{ st.correct }}/{{ st.total }})</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="text-muted small mb-0">Continue practicing to establish high-confidence mastery topics.</p>
+                    {% endif %}
+                </div>
+
+                <!-- Weak Areas -->
+                <div>
+                    <h6 class="fw-bold text-danger mb-2">
+                        <i class="bi bi-exclamation-triangle-fill me-1"></i> Priority Revision Areas (&lt; 50% Accuracy)
+                    </h6>
+                    {% if analytics.weak_topics %}
+                    <div class="d-flex flex-column gap-2">
+                        {% for wt in analytics.weak_topics %}
+                        <div class="p-2.5 rounded-3 bg-danger bg-opacity-10 border border-danger border-opacity-25 d-flex justify-content-between align-items-center">
+                            <span class="fw-semibold text-dark small">{{ wt.topic }}</span>
+                            <span class="badge bg-danger">{{ wt.accuracy }}% Accuracy</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="text-muted small mb-0">No significant weaknesses identified across tested topics.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Difficulty Accuracy & Pacing -->
+        <div class="col-lg-6">
+            <div class="card border-0 shadow-sm rounded-4 p-4 h-100">
+                <h5 class="fw-bold text-dark border-bottom pb-3 mb-3">
+                    <i class="bi bi-speedometer text-primary me-2"></i> Difficulty & Pacing Analysis
+                </h5>
+
+                <!-- Difficulty Progress Bars -->
+                <div class="mb-4">
+                    {% for d in analytics.difficulty_summary %}
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-1 small">
+                            <span class="fw-bold text-dark">{{ d.level }} Questions ({{ d.total }} Qs)</span>
+                            <span class="text-muted">Accuracy: <strong class="text-dark">{{ d.accuracy }}%</strong> | Avg Time: {{ d.avg_time_seconds }}s</span>
+                        </div>
+                        <div class="progress" style="height: 10px;">
+                            <div class="progress-bar {% if d.level == 'Easy' %}bg-success{% elif d.level == 'Medium' %}bg-warning{% else %}bg-danger{% endif %}" role="progressbar" style="width: {{ d.accuracy }}%;"></div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <!-- Time Management Stats -->
+                <h6 class="fw-bold text-dark mb-2">Time Spent Diagnostics</h6>
+                <div class="row g-2 text-center small">
+                    <div class="col-4">
+                        <div class="bg-light p-2.5 rounded-3 border">
+                            <span class="text-muted d-block" style="font-size: 11px;">Correct Qs Avg</span>
+                            <strong class="text-success fs-6">{{ analytics.time_analysis.avg_time_correct }}s</strong>
+                        </div>
+                    </div>
+                    <div class="col-4">
+                        <div class="bg-light p-2.5 rounded-3 border">
+                            <span class="text-muted d-block" style="font-size: 11px;">Incorrect Qs Avg</span>
+                            <strong class="text-danger fs-6">{{ analytics.time_analysis.avg_time_incorrect }}s</strong>
+                        </div>
+                    </div>
+                    <div class="col-4">
+                        <div class="bg-light p-2.5 rounded-3 border">
+                            <span class="text-muted d-block" style="font-size: 11px;">Fastest Answer</span>
+                            <strong class="text-primary fs-6">{{ analytics.time_analysis.fastest_time }}s</strong>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Previous Attempts by this Student -->
+    {% if other_attempts %}
+    <div class="card border-0 shadow-sm rounded-4 p-4 mb-4">
+        <h6 class="fw-bold text-dark mb-3">
+            <i class="bi bi-clock-history text-secondary me-2"></i> Other Attempts on this Examination
+        </h6>
+        <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle mb-0 small">
+                <thead class="table-light">
+                    <tr>
+                        <th>Date & Time</th>
+                        <th>Score</th>
+                        <th>Percentage</th>
+                        <th>Result</th>
+                        <th>Rank</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for o_att in other_attempts %}
+                    <tr>
+                        <td class="text-muted">{{ o_att.started_at|date:"M d, Y H:i" }}</td>
+                        <td class="fw-bold">{{ o_att.score_obtained }} / {{ o_att.total_marks }}</td>
+                        <td>{{ o_att.percentage }}%</td>
+                        <td>
+                            {% if o_att.is_passed %}
+                                <span class="badge bg-success">Passed</span>
+                            {% else %}
+                                <span class="badge bg-danger">Not Qualified</span>
+                            {% endif %}
+                        </td>
+                        <td>{% if o_att.rank %}#{{ o_att.rank }}{% else %}-{% endif %}</td>
+                        <td>
+                            <a href="{% url 'exams:student_result_detail' o_att.attempt_uuid %}" class="btn btn-outline-primary btn-sm py-0 px-2">
+                                View
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Client-Side Chart.js Initialization -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // 1. Question Outcome Doughnut
+            const distData = {{ score_distribution_json|safe }};
+            const outcomeCtx = document.getElementById('outcomeChart');
+            if (outcomeCtx) {
+                new Chart(outcomeCtx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: Object.keys(distData),
+                        datasets: [{
+                            data: Object.values(distData),
+                            backgroundColor: ['#198754', '#dc3545', '#6c757d'],
+                            borderWidth: 2
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { position: 'bottom' }
+                        }
+                    }
+                });
+            }
+
+            // 2. Subject Bar Chart
+            const subjLabels = {{ subject_labels_json|safe }};
+            const subjScores = {{ subject_scores_json|safe }};
+            const subjAccuracy = {{ subject_accuracy_json|safe }};
+            const subjCtx = document.getElementById('subjectChart');
+            if (subjCtx && subjLabels.length > 0) {
+                new Chart(subjCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: subjLabels,
+                        datasets: [
+                            {
+                                label: 'Score %',
+                                data: subjScores,
+                                backgroundColor: '#0d6efd',
+                                borderRadius: 4
+                            },
+                            {
+                                label: 'Accuracy %',
+                                data: subjAccuracy,
+                                backgroundColor: '#20c997',
+                                borderRadius: 4
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                max: 100,
+                                ticks: { callback: v => v + '%' }
+                            }
+                        }
+                    }
+                });
+            }
+        });
+    </script>
+    {% endif %}
+</div>
+{% endblock %}
+

@@ -1,0 +1,253 @@
+{% extends 'dashboard_base.html' %}
+
+{% block title %}{% if form.instance.pk %}Edit Examination: {{ form.instance.title }}{% else %}Create Examination{% endif %} | {{ PLATFORM_NAME }}{% endblock %}
+
+{% block dashboard_content %}
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom">
+    <div>
+        <div class="d-flex align-items-center gap-2 mb-1">
+            <h2 class="fw-bold mb-0">{% if form.instance.pk %}Edit Examination{% else %}Create Examination{% endif %}</h2>
+            <span class="badge bg-primary text-uppercase px-2 py-1">CBT Setup</span>
+        </div>
+        <p class="text-muted mb-0">Configure examination duration, marking criteria, candidate restrictions, and scheduling windows.</p>
+    </div>
+    <div class="mt-3 mt-md-0 d-flex gap-2">
+        <a href="{% url 'exams:exam_list' %}" class="btn btn-sm btn-cbt-outline">
+            <i class="bi bi-arrow-left me-1"></i> Back to Catalog
+        </a>
+    </div>
+</div>
+
+<form method="post" novalidate>
+    {% csrf_token %}
+
+    {% if form.non_field_errors %}
+    <div class="alert alert-danger shadow-sm mb-4">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i>
+        {% for error in form.non_field_errors %}{{ error }}{% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="row g-4">
+        <!-- Left Column: Primary Details & CBT Configuration -->
+        <div class="col-lg-8">
+            <!-- Basic Details Card -->
+            <div class="card border shadow-sm mb-4">
+                <div class="card-header bg-white py-3">
+                    <h6 class="fw-bold mb-0"><i class="bi bi-card-heading text-primary me-2"></i> Examination Identification</h6>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-12">
+                            <label class="form-label small fw-bold">Examination Title <span class="text-danger">*</span></label>
+                            {{ form.title }}
+                            {% if form.title.errors %}<div class="text-danger small mt-1">{{ form.title.errors.0 }}</div>{% endif %}
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Examination Category <span class="text-danger">*</span></label>
+                            {{ form.category }}
+                            {% if form.category.errors %}<div class="text-danger small mt-1">{{ form.category.errors.0 }}</div>{% endif %}
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Subject / Domain</label>
+                            {{ form.subject }}
+                            {% if form.subject.errors %}<div class="text-danger small mt-1">{{ form.subject.errors.0 }}</div>{% endif %}
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Topics / Syllabus Covered</label>
+                            {{ form.topics }}
+                            {% if form.topics.errors %}<div class="text-danger small mt-1">{{ form.topics.errors.0 }}</div>{% endif %}
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Target Examination</label>
+                            {{ form.target_exam }}
+                            {% if form.target_exam.errors %}<div class="text-danger small mt-1">{{ form.target_exam.errors.0 }}</div>{% endif %}
+                        </div>
+
+                        <div class="col-12">
+                            <label class="form-label small fw-bold">Overview & Description</label>
+                            {{ form.description }}
+                            {% if form.description.errors %}<div class="text-danger small mt-1">{{ form.description.errors.0 }}</div>{% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CBT Engine Configuration Card -->
+            <div class="card border shadow-sm mb-4">
+                <div class="card-header bg-white py-3">
+                    <h6 class="fw-bold mb-0"><i class="bi bi-sliders text-primary me-2"></i> Engine Configuration & Scoring</h6>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label class="form-label small fw-bold">Duration (Minutes) <span class="text-danger">*</span></label>
+                            {{ form.duration_minutes }}
+                            {% if form.duration_minutes.errors %}<div class="text-danger small mt-1">{{ form.duration_minutes.errors.0 }}</div>{% endif %}
+                        </div>
+
+                        <div class="col-md-4">
+                            <label class="form-label small fw-bold">Total Marks</label>
+                            {{ form.total_marks }}
+                            {% if form.total_marks.errors %}<div class="text-danger small mt-1">{{ form.total_marks.errors.0 }}</div>{% endif %}
+                        </div>
+
+                        <div class="col-md-4">
+                            <label class="form-label small fw-bold">Passing Percentage (%)</label>
+                            {{ form.passing_percentage }}
+                            {% if form.passing_percentage.errors %}<div class="text-danger small mt-1">{{ form.passing_percentage.errors.0 }}</div>{% endif %}
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Default Positive Marks (+)</label>
+                            {{ form.default_positive_marks }}
+                            {% if form.default_positive_marks.errors %}<div class="text-danger small mt-1">{{ form.default_positive_marks.errors.0 }}</div>{% endif %}
+                            <div class="form-text small">Standard marks assigned to newly added questions.</div>
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Default Negative Marks (-)</label>
+                            {{ form.default_negative_marks }}
+                            {% if form.default_negative_marks.errors %}<div class="text-danger small mt-1">{{ form.default_negative_marks.errors.0 }}</div>{% endif %}
+                            <div class="form-text small">Penalty deducted for incorrect responses.</div>
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Max Attempts Allowed</label>
+                            {{ form.max_attempts }}
+                            {% if form.max_attempts.errors %}<div class="text-danger small mt-1">{{ form.max_attempts.errors.0 }}</div>{% endif %}
+                            <div class="form-text small">Set to 0 for unlimited attempts.</div>
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Initial Status</label>
+                            {{ form.status }}
+                            {% if form.status.errors %}<div class="text-danger small mt-1">{{ form.status.errors.0 }}</div>{% endif %}
+                        </div>
+                    </div>
+
+                    <hr class="my-4">
+
+                    <h6 class="fw-bold small text-muted text-uppercase mb-3">Anti-Cheat & Shuffling Settings</h6>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <div class="form-check form-switch">
+                                {{ form.shuffle_questions }}
+                                <label class="form-check-label small fw-bold" for="{{ form.shuffle_questions.id_for_label }}">
+                                    Shuffle Questions for Each Candidate
+                                </label>
+                                <div class="form-text small">Randomizes question presentation order to mitigate malpractice.</div>
+                            </div>
+                        </div>
+
+                        <div class="col-md-6">
+                            <div class="form-check form-switch">
+                                {{ form.shuffle_options }}
+                                <label class="form-check-label small fw-bold" for="{{ form.shuffle_options.id_for_label }}">
+                                    Shuffle MCQ Options (A, B, C, D)
+                                </label>
+                                <div class="form-text small">Permutes options independently for every attempt.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <hr class="my-4">
+
+                    <h6 class="fw-bold small text-muted text-uppercase mb-3">Result & Solution Disclosure</h6>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <div class="form-check form-switch">
+                                {{ form.show_result_immediately }}
+                                <label class="form-check-label small fw-bold" for="{{ form.show_result_immediately.id_for_label }}">
+                                    Show Instant Score Card on Submit
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="col-md-6">
+                            <div class="form-check form-switch">
+                                {{ form.allow_review_answers }}
+                                <label class="form-check-label small fw-bold" for="{{ form.allow_review_answers.id_for_label }}">
+                                    Allow Answer Key & Solution Review
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Instructions Card -->
+            <div class="card border shadow-sm mb-4">
+                <div class="card-header bg-white py-3">
+                    <h6 class="fw-bold mb-0"><i class="bi bi-info-circle-fill text-primary me-2"></i> Candidate Examination Instructions</h6>
+                </div>
+                <div class="card-body">
+                    {{ form.instructions }}
+                    {% if form.instructions.errors %}<div class="text-danger small mt-1">{{ form.instructions.errors.0 }}</div>{% endif %}
+                    <div class="form-text small">Shown to students on the confirmation screen before clicking "Start Examination".</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column: Monetization, Schedule & Action Controls -->
+        <div class="col-lg-4">
+            <!-- Access & Monetization Card -->
+            <div class="card border shadow-sm mb-4">
+                <div class="card-header bg-white py-3">
+                    <h6 class="fw-bold mb-0"><i class="bi bi-shield-check text-primary me-2"></i> Access & Subscription</h6>
+                </div>
+                <div class="card-body">
+                    <div class="form-check form-switch mb-3">
+                        {{ form.is_free }}
+                        <label class="form-check-label fw-bold small" for="{{ form.is_free.id_for_label }}">
+                            Free Access Test (Open Trial)
+                        </label>
+                    </div>
+                    <div class="form-text small">
+                        If unchecked, this test requires candidate subscription or paid enrollment (Phase 7 Razorpay gateway).
+                    </div>
+                </div>
+            </div>
+
+            <!-- Scheduled Window Card -->
+            <div class="card border shadow-sm mb-4">
+                <div class="card-header bg-white py-3">
+                    <h6 class="fw-bold mb-0"><i class="bi bi-calendar-event text-primary me-2"></i> Scheduling Window (Optional)</h6>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">Start Window (Opens)</label>
+                        {{ form.start_time }}
+                        {% if form.start_time.errors %}<div class="text-danger small mt-1">{{ form.start_time.errors.0 }}</div>{% endif %}
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">End Window (Closes)</label>
+                        {{ form.end_time }}
+                        {% if form.end_time.errors %}<div class="text-danger small mt-1">{{ form.end_time.errors.0 }}</div>{% endif %}
+                    </div>
+                    <div class="form-text small">
+                        Leave blank for on-demand continuous availability. If set, candidates can only sit for the exam within this window.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Submit Button Card -->
+            <div class="card border shadow-sm">
+                <div class="card-body">
+                    <button type="submit" class="btn btn-primary w-100 py-2 fw-semibold mb-2">
+                        <i class="bi bi-check-lg me-1"></i> {% if form.instance.pk %}Update Examination{% else %}Save & Build Questions &rarr;{% endif %}
+                    </button>
+                    <a href="{% url 'exams:exam_list' %}" class="btn btn-outline-secondary w-100">
+                        Cancel
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</form>
+{% endblock %}
+

@@ -1,0 +1,254 @@
+{% extends 'dashboard_base.html' %}
+
+{% block title %}Class Analytics - {{ exam.title }} | {{ PLATFORM_NAME }}{% endblock %}
+
+{% block extra_head %}
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block dashboard_content %}
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom gap-2">
+    <div>
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb mb-1 small">
+                <li class="breadcrumb-item"><a href="{% url 'core:dashboard_router' %}">Dashboard</a></li>
+                <li class="breadcrumb-item"><a href="{% url 'exams:exam_list' %}">Examinations</a></li>
+                <li class="breadcrumb-item active" aria-current="page">Analytics</li>
+            </ol>
+        </nav>
+        <h2 class="fw-bold text-dark mb-0">Institutional Examination Analytics</h2>
+        <p class="text-muted small mb-0">{{ exam.title }} (Category: {{ exam.category.name }})</p>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{% url 'exams:teacher_export_results_csv' exam.pk %}" class="btn btn-outline-success btn-sm fw-bold">
+            <i class="bi bi-file-earmark-spreadsheet-fill me-1"></i> Export Results CSV
+        </a>
+        <a href="{% url 'exams:exam_questions' exam.pk %}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-gear me-1"></i> Manage Questions
+        </a>
+    </div>
+</div>
+
+<!-- Cohort Performance Metrics Grid -->
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-3">
+        <div class="card h-100 p-3 border-0 shadow-sm rounded-4 text-center">
+            <span class="text-muted small mb-1">Total Submissions</span>
+            <h3 class="fw-bold text-primary mb-0">{{ analytics.total_attempts }}</h3>
+            <span class="text-muted small">Completed Attempts</span>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card h-100 p-3 border-0 shadow-sm rounded-4 text-center">
+            <span class="text-muted small mb-1">Class Average Score</span>
+            <h3 class="fw-bold text-dark mb-0">{{ analytics.avg_score }} <small class="fs-6 text-muted">/ {{ exam.total_marks }}</small></h3>
+            <span class="text-muted small">Average: {{ analytics.avg_percentage }}%</span>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card h-100 p-3 border-0 shadow-sm rounded-4 text-center">
+            <span class="text-muted small mb-1">Class Pass Rate</span>
+            <h3 class="fw-bold text-success mb-0">{{ analytics.pass_percentage }}%</h3>
+            <span class="text-muted small">{{ analytics.pass_count }} / {{ analytics.total_attempts }} Passed</span>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card h-100 p-3 border-0 shadow-sm rounded-4 text-center">
+            <span class="text-muted small mb-1">Score Range</span>
+            <h3 class="fw-bold text-dark mb-0">{{ analytics.lowest_score }} - {{ analytics.highest_score }}</h3>
+            <span class="text-muted small">Lowest to Highest</span>
+        </div>
+    </div>
+</div>
+
+<!-- Charts Row -->
+<div class="row g-4 mb-4">
+    <!-- Score Distribution Histogram -->
+    <div class="col-lg-8">
+        <div class="card border-0 shadow-sm rounded-4 p-4 h-100">
+            <h5 class="fw-bold text-dark border-bottom pb-3 mb-3">
+                <i class="bi bi-bar-chart-fill text-primary me-2"></i> Candidate Score Distribution
+            </h5>
+            <div style="height: 240px;">
+                <canvas id="scoreDistChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Question Difficulty Breakdown -->
+    <div class="col-lg-4">
+        <div class="card border-0 shadow-sm rounded-4 p-4 h-100">
+            <h5 class="fw-bold text-dark border-bottom pb-3 mb-3">
+                <i class="bi bi-pie-chart-fill text-primary me-2"></i> Question Pool Difficulty
+            </h5>
+            <div class="d-flex align-items-center justify-content-center" style="height: 240px;">
+                <canvas id="questionDiffChart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Question Discrimination & Difficulty Index Matrix -->
+<div class="card border-0 shadow-sm rounded-4 p-4 mb-4">
+    <div class="d-flex justify-content-between align-items-center border-bottom pb-3 mb-3">
+        <h5 class="fw-bold text-dark mb-0">
+            <i class="bi bi-sliders text-primary me-2"></i> Question Discrimination & Difficulty Matrix
+        </h5>
+        <span class="text-muted small">{{ analytics.question_stats|length }} Questions Analyzed</span>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0 small">
+            <thead class="table-light">
+                <tr>
+                    <th style="width: 50px;">#</th>
+                    <th>Question Excerpt</th>
+                    <th>Section</th>
+                    <th class="text-center">Observed Difficulty</th>
+                    <th class="text-center">Accuracy %</th>
+                    <th class="text-center">Attempts</th>
+                    <th>Top Distractor</th>
+                    <th class="text-center">Avg Time</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for q in analytics.question_stats %}
+                <tr>
+                    <td class="fw-bold text-muted">Q{{ q.order }}</td>
+                    <td class="text-dark">{{ q.question_text }}</td>
+                    <td><span class="badge bg-light text-dark border">{{ q.section }}</span></td>
+                    <td class="text-center">
+                        <span class="badge bg-{{ q.badge_class }}">{{ q.rating }}</span>
+                    </td>
+                    <td class="text-center fw-bold">{{ q.accuracy }}%</td>
+                    <td class="text-center">{{ q.correct_count }} / {{ q.attempted_count }}</td>
+                    <td class="text-muted">{{ q.distractor }}</td>
+                    <td class="text-center text-muted">{{ q.avg_time_seconds }}s</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="8" class="text-center text-muted py-4">No candidate attempt data available for this question set.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Candidate Performance Comparison Table -->
+<div class="card border-0 shadow-sm rounded-4 p-4 mb-4">
+    <div class="d-flex justify-content-between align-items-center border-bottom pb-3 mb-3">
+        <h5 class="fw-bold text-dark mb-0">
+            <i class="bi bi-people-fill text-primary me-2"></i> Candidate Performance Comparison
+        </h5>
+        <a href="{% url 'exams:teacher_export_results_csv' exam.pk %}" class="btn btn-sm btn-outline-primary">
+            <i class="bi bi-download me-1"></i> Export Full CSV
+        </a>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0 small">
+            <thead class="table-light">
+                <tr>
+                    <th>Rank</th>
+                    <th>Candidate</th>
+                    <th>Email</th>
+                    <th class="text-center">Score</th>
+                    <th class="text-center">Percentage</th>
+                    <th class="text-center">Result</th>
+                    <th class="text-center">Accuracy</th>
+                    <th class="text-center">Time Taken</th>
+                    <th class="text-end">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for att in analytics.leaderboard %}
+                <tr>
+                    <td class="fw-bold">#{{ att.rank|default:"-" }}</td>
+                    <td class="fw-semibold text-dark">{{ att.student.get_full_name|default:att.student.username }}</td>
+                    <td class="text-muted">{{ att.student.email }}</td>
+                    <td class="text-center fw-bold">{{ att.score_obtained }} / {{ exam.total_marks }}</td>
+                    <td class="text-center">{{ att.percentage }}%</td>
+                    <td class="text-center">
+                        <span class="badge {% if att.is_passed %}bg-success{% else %}bg-danger{% endif %}">
+                            {% if att.is_passed %}Passed{% else %}Failed{% endif %}
+                        </span>
+                    </td>
+                    <td class="text-center">{{ att.accuracy_percentage }}%</td>
+                    <td class="text-center text-muted">{{ att.time_taken_seconds|divisibleby:60 }}m</td>
+                    <td class="text-end">
+                        <a href="{% url 'exams:student_result_detail' att.attempt_uuid %}" class="btn btn-sm btn-outline-secondary py-0 px-2" title="View Candidate Scorecard">
+                            <i class="bi bi-eye"></i>
+                        </a>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="9" class="text-center text-muted py-4">No candidate attempts have been finalized yet.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Chart.js Scripts -->
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Score Distribution Bar Chart
+        const scoreLabels = {{ score_distribution_labels_json|safe }};
+        const scoreValues = {{ score_distribution_values_json|safe }};
+        const scoreCtx = document.getElementById('scoreDistChart');
+        if (scoreCtx) {
+            new Chart(scoreCtx, {
+                type: 'bar',
+                data: {
+                    labels: scoreLabels,
+                    datasets: [{
+                        label: 'Candidate Count',
+                        data: scoreValues,
+                        backgroundColor: '#0d6efd',
+                        borderRadius: 6
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: { stepSize: 1 }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Question Difficulty Doughnut
+        const diffData = {{ question_diff_json|safe }};
+        const diffCtx = document.getElementById('questionDiffChart');
+        if (diffCtx) {
+            new Chart(diffCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: Object.keys(diffData),
+                    datasets: [{
+                        data: Object.values(diffData),
+                        backgroundColor: ['#198754', '#ffc107', '#dc3545'],
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'bottom' }
+                    }
+                }
+            });
+        }
+    });
+</script>
+{% endblock %}
+

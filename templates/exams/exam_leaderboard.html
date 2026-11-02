@@ -1,0 +1,157 @@
+{% extends 'base.html' %}
+
+{% block title %}Leaderboard - {{ exam.title }} | {{ PLATFORM_NAME }}{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <!-- Header -->
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4 gap-3">
+        <div>
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb mb-1">
+                    <li class="breadcrumb-item"><a href="{% url 'core:home' %}">Home</a></li>
+                    <li class="breadcrumb-item"><a href="{% url 'core:dashboard_router' %}">Dashboard</a></li>
+                    <li class="breadcrumb-item"><a href="{% url 'exams:exam_catalog' %}">Examinations</a></li>
+                    <li class="breadcrumb-item active" aria-current="page">Leaderboard</li>
+                </ol>
+            </nav>
+            <h2 class="fw-bold text-dark mb-0">
+                <i class="bi bi-trophy-fill text-warning me-2"></i> Official Examination Leaderboard
+            </h2>
+            <p class="text-muted small mb-0">{{ exam.title }} | Category: {{ exam.category.name }}</p>
+        </div>
+        <div>
+            <a href="{% url 'exams:exam_catalog' %}" class="btn btn-outline-secondary btn-sm">
+                <i class="bi bi-arrow-left me-1"></i> Back to Catalog
+            </a>
+        </div>
+    </div>
+
+    <!-- Cohort Summary Metrics Grid -->
+    <div class="row g-3 mb-4">
+        <div class="col-6 col-md-3">
+            <div class="card h-100 p-3 border-0 shadow-sm rounded-4 text-center">
+                <span class="text-muted small mb-1">Total Candidates</span>
+                <h3 class="fw-bold text-dark mb-0"><i class="bi bi-people-fill text-primary me-1"></i> {{ total_candidates }}</h3>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card h-100 p-3 border-0 shadow-sm rounded-4 text-center">
+                <span class="text-muted small mb-1">Highest Score</span>
+                <h3 class="fw-bold text-success mb-0">{{ highest_score }} <small class="fs-6 text-muted">/ {{ exam.total_marks }}</small></h3>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card h-100 p-3 border-0 shadow-sm rounded-4 text-center">
+                <span class="text-muted small mb-1">Class Average</span>
+                <h3 class="fw-bold text-dark mb-0">{{ avg_score }}</h3>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card h-100 p-3 border-0 shadow-sm rounded-4 text-center">
+                <span class="text-muted small mb-1">Pass Benchmark</span>
+                <h3 class="fw-bold text-primary mb-0">{{ pass_percentage }}%</h3>
+            </div>
+        </div>
+    </div>
+
+    <!-- Student's Personal Standing Card (if candidate attempted) -->
+    {% if student_best_attempt %}
+    <div class="alert alert-primary border-primary d-flex flex-column flex-md-row justify-content-between align-items-md-center p-3.5 mb-4 rounded-4 shadow-sm gap-2">
+        <div class="d-flex align-items-center gap-3">
+            <div class="rounded-circle bg-primary text-white d-flex align-items-center justify-content-center" style="width: 48px; height: 48px; font-size: 1.25rem;">
+                #{{ student_best_attempt.rank|default:"-" }}
+            </div>
+            <div>
+                <h6 class="fw-bold text-dark mb-0">Your Best Examination Standing</h6>
+                <p class="text-muted small mb-0">
+                    Score: <strong>{{ student_best_attempt.score_obtained }} / {{ exam.total_marks }}</strong> ({{ student_best_attempt.percentage }}%)
+                    {% if student_best_attempt.percentile %} | Percentile: <strong>{{ student_best_attempt.percentile }}%</strong>{% endif %}
+                </p>
+            </div>
+        </div>
+        <div>
+            <a href="{% url 'exams:student_result_detail' student_best_attempt.attempt_uuid %}" class="btn btn-primary btn-sm fw-bold px-3">
+                <i class="bi bi-file-earmark-text me-1"></i> View My Scorecard
+            </a>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Leaderboard Table Card -->
+    <div class="card border-0 shadow-sm rounded-4 overflow-hidden mb-4">
+        <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+            <h5 class="fw-bold text-dark mb-0">Ranked Standings (Top Candidates)</h5>
+            <span class="badge bg-light text-dark border">{{ total_candidates }} Evaluated Submissions</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light small">
+                    <tr>
+                        <th class="ps-4" style="width: 80px;">Rank</th>
+                        <th>Candidate</th>
+                        <th>Target Exam</th>
+                        <th class="text-center">Score</th>
+                        <th class="text-center">Percentage</th>
+                        <th class="text-center">Accuracy %</th>
+                        <th class="text-center">Percentile</th>
+                        <th class="text-center">Time Taken</th>
+                        <th class="pe-4 text-end">Completion Date</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for att in leaderboard %}
+                    <tr {% if att.student == request.user %}class="table-primary fw-bold"{% endif %}>
+                        <td class="ps-4">
+                            {% if att.rank == 1 %}
+                                <span class="badge bg-warning text-dark px-2.5 py-1.5"><i class="bi bi-trophy-fill me-1"></i> #1</span>
+                            {% elif att.rank == 2 %}
+                                <span class="badge bg-secondary text-white px-2.5 py-1.5"><i class="bi bi-award-fill me-1"></i> #2</span>
+                            {% elif att.rank == 3 %}
+                                <span class="badge text-white px-2.5 py-1.5" style="background-color: #cd7f32;"><i class="bi bi-award me-1"></i> #3</span>
+                            {% else %}
+                                <span class="fw-bold text-muted ps-2">#{{ att.rank }}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="d-flex align-items-center gap-2">
+                                <div class="rounded-circle bg-light border d-flex align-items-center justify-content-center text-dark fw-bold" style="width: 30px; height: 30px; font-size: 11px;">
+                                    {{ att.student.username|slice:":1"|upper }}
+                                </div>
+                                <div>
+                                    <span class="d-block text-dark">{{ att.student.get_full_name|default:att.student.username }}</span>
+                                    {% if att.student == request.user %}
+                                        <span class="badge bg-primary text-uppercase" style="font-size: 9px;">You</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </td>
+                        <td class="small text-muted">{{ att.student.target_exam|default:"General" }}</td>
+                        <td class="text-center fw-bold">{{ att.score_obtained }} / {{ exam.total_marks }}</td>
+                        <td class="text-center">
+                            <span class="badge {% if att.is_passed %}bg-success{% else %}bg-danger{% endif %} px-2.5 py-1">
+                                {{ att.percentage }}%
+                            </span>
+                        </td>
+                        <td class="text-center">{{ att.accuracy_percentage }}%</td>
+                        <td class="text-center text-primary fw-bold">
+                            {% if att.percentile %}{{ att.percentile }}%{% else %}N/A{% endif %}
+                        </td>
+                        <td class="text-center text-muted small">{{ att.time_taken_seconds|divisibleby:60 }}m</td>
+                        <td class="pe-4 text-end text-muted small">{{ att.submitted_at|date:"M d, Y" }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="9" class="text-center text-muted py-5">
+                            <i class="bi bi-trophy fs-1 text-muted d-block mb-2"></i>
+                            No eligible candidates have finalized attempts on this examination yet.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

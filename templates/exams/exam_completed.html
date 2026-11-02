@@ -1,0 +1,125 @@
+{% extends 'base.html' %}
+
+{% block title %}Examination Submitted - {{ exam.title }} | {{ PLATFORM_NAME }}{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-lg-8 col-md-10">
+            <!-- Submission Confirmation Card -->
+            <div class="card border-0 shadow-sm rounded-4 text-center p-4 p-md-5 mb-4">
+                <div class="mb-3">
+                    {% if attempt.status == 'timed_out' %}
+                        <div class="rounded-circle bg-warning bg-opacity-10 text-warning d-inline-flex align-items-center justify-content-center" style="width: 80px; height: 80px;">
+                            <i class="bi bi-clock-history fs-1"></i>
+                        </div>
+                        <h2 class="fw-bold text-dark mt-3 mb-1">Examination Session Ended</h2>
+                        <span class="badge bg-warning text-dark px-3 py-1.5 fw-bold text-uppercase">Time Limit Reached</span>
+                    {% else %}
+                        <div class="rounded-circle bg-success bg-opacity-10 text-success d-inline-flex align-items-center justify-content-center" style="width: 80px; height: 80px;">
+                            <i class="bi bi-check-circle-fill fs-1"></i>
+                        </div>
+                        <h2 class="fw-bold text-dark mt-3 mb-1">Examination Submitted Successfully!</h2>
+                        <span class="badge bg-success px-3 py-1.5 fw-bold text-uppercase">Recorded on Server</span>
+                    {% endif %}
+                </div>
+
+                <p class="text-secondary fs-6 mb-4">
+                    Thank you, <strong>{{ attempt.student.get_full_name|default:attempt.student.username }}</strong>.
+                    Your answers for <strong>{{ exam.title }}</strong> have been securely recorded and finalized in the database.
+                </p>
+
+                <!-- Statistics Grid -->
+                <div class="row g-3 mb-4">
+                    <div class="col-6 col-sm-3">
+                        <div class="bg-light p-3 rounded-3 border">
+                            <span class="text-muted small d-block mb-1">Total Questions</span>
+                            <h4 class="fw-bold text-dark mb-0">{{ total_questions }}</h4>
+                        </div>
+                    </div>
+                    <div class="col-6 col-sm-3">
+                        <div class="bg-light p-3 rounded-3 border">
+                            <span class="text-muted small d-block mb-1">Answered</span>
+                            <h4 class="fw-bold text-success mb-0">{{ answered_count }}</h4>
+                        </div>
+                    </div>
+                    <div class="col-6 col-sm-3">
+                        <div class="bg-light p-3 rounded-3 border">
+                            <span class="text-muted small d-block mb-1">Unanswered</span>
+                            <h4 class="fw-bold text-danger mb-0">{{ unanswered_count }}</h4>
+                        </div>
+                    </div>
+                    <div class="col-6 col-sm-3">
+                        <div class="bg-light p-3 rounded-3 border">
+                            <span class="text-muted small d-block mb-1">Time Taken</span>
+                            <h4 class="fw-bold text-primary mb-0">{{ time_taken_minutes }}m</h4>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Provisional Result Section (if show_result_immediately is True) -->
+                {% if show_results %}
+                <div class="card bg-light border p-4 rounded-4 mb-4 text-start">
+                    <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
+                        <h5 class="fw-bold text-dark mb-0"><i class="bi bi-award-fill text-primary me-2"></i> Immediate Score Report</h5>
+                        {% if attempt.is_passed %}
+                            <span class="badge bg-success fs-6 px-3 py-1.5">PASSED</span>
+                        {% else %}
+                            <span class="badge bg-danger fs-6 px-3 py-1.5">NOT QUALIFIED</span>
+                        {% endif %}
+                    </div>
+
+                    <div class="row g-3">
+                        <div class="col-sm-4 text-center border-end">
+                            <span class="text-muted small d-block">Score Obtained</span>
+                            <h3 class="fw-bold text-dark mb-0">{{ attempt.score_obtained }} / {{ attempt.total_marks }}</h3>
+                        </div>
+                        <div class="col-sm-4 text-center border-end">
+                            <span class="text-muted small d-block">Percentage</span>
+                            <h3 class="fw-bold {% if attempt.is_passed %}text-success{% else %}text-danger{% endif %} mb-0">{{ attempt.percentage }}%</h3>
+                        </div>
+                        <div class="col-sm-4 text-center">
+                            <span class="text-muted small d-block">Passing Benchmark</span>
+                            <h3 class="fw-bold text-muted mb-0">{{ exam.passing_percentage }}%</h3>
+                        </div>
+                    <div class="d-flex flex-wrap justify-content-center gap-2 mt-3 pt-3 border-top">
+                        <a href="{% url 'exams:student_result_detail' attempt.attempt_uuid %}" class="btn btn-primary btn-sm fw-bold px-3">
+                            <i class="bi bi-graph-up-arrow me-1"></i> View Detailed Scorecard & Analytics
+                        </a>
+                        {% if exam.allow_review_answers %}
+                        <a href="{% url 'exams:student_result_review' attempt.attempt_uuid %}" class="btn btn-outline-primary btn-sm fw-bold px-3">
+                            <i class="bi bi-journal-text me-1"></i> Review Solutions
+                        </a>
+                        {% endif %}
+                        <a href="{% url 'exams:student_result_pdf' attempt.attempt_uuid %}" class="btn btn-outline-secondary btn-sm px-3">
+                            <i class="bi bi-file-earmark-pdf-fill me-1 text-danger"></i> PDF Scorecard
+                        </a>
+                    </div>
+                </div>
+                {% else %}
+                <div class="alert alert-info border-info text-start p-3 rounded-3 mb-4 d-flex align-items-center gap-3">
+                    <i class="bi bi-info-circle-fill fs-3 text-info"></i>
+                    <div>
+                        <h6 class="fw-bold mb-1">Evaluation & Scoring in Progress</h6>
+                        <p class="mb-0 small text-muted">
+                            As per the examination configuration, results and scorecards will be published by the institution once grading is finalized.
+                        </p>
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Actions -->
+                <div class="d-flex flex-column flex-sm-row justify-content-center gap-2">
+                    <a href="{% url 'core:dashboard_router' %}" class="btn btn-primary px-4 py-2 fw-bold">
+                        <i class="bi bi-speedometer2 me-1"></i> Return to Dashboard
+                    </a>
+                    <a href="{% url 'exams:exam_catalog' %}" class="btn btn-outline-secondary px-4 py-2">
+                        <i class="bi bi-search me-1"></i> Explore More Tests
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

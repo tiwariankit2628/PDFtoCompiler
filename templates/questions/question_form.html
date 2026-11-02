@@ -1,0 +1,228 @@
+{% extends 'dashboard_base.html' %}
+
+{% block title %}{% if form.instance.pk %}Edit Question #{{ form.instance.pk }}{% else %}Create New Question{% endif %} | {{ PLATFORM_NAME }}{% endblock %}
+
+{% block extra_head %}
+<!-- KaTeX for live mathematical preview -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3TX4437n" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZko/WgHgoVICvIK1Pe49yi36XXgn74CEvTxmKjH" crossorigin="anonymous" onload="renderMathInElement(document.body);"></script>
+{% endblock %}
+
+{% block dashboard_content %}
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom">
+    <div>
+        <div class="d-flex align-items-center gap-2 mb-1">
+            <h2 class="fw-bold mb-0">{% if form.instance.pk %}Edit Question #{{ form.instance.pk }}{% else %}Author New Question{% endif %}</h2>
+            <span class="badge bg-primary text-uppercase px-2 py-1">Question Bank</span>
+        </div>
+        <p class="text-muted mb-0">Compose MCQ questions with mathematical equations, Hindi/English text, diagram images, and structured options.</p>
+    </div>
+    <div class="mt-3 mt-md-0 d-flex gap-2">
+        <a href="{% url 'questions:question_bank' %}" class="btn btn-sm btn-cbt-outline">
+            <i class="bi bi-arrow-left me-1"></i> Back to Question Bank
+        </a>
+    </div>
+</div>
+
+<form method="post" enctype="multipart/form-data" novalidate>
+    {% csrf_token %}
+
+    {% if form.non_field_errors %}
+    <div class="alert alert-danger shadow-sm mb-4">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i>
+        {% for error in form.non_field_errors %}{{ error }}{% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="row g-4">
+        <!-- Left Column: Classification & Statement -->
+        <div class="col-lg-8">
+            <!-- Classification Card -->
+            <div class="card border shadow-sm mb-4">
+                <div class="card-header bg-white py-3">
+                    <h6 class="fw-bold mb-0"><i class="bi bi-tags-fill text-primary me-2"></i> Classification & Metadata</h6>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Examination Category <span class="text-danger">*</span></label>
+                            {{ form.category }}
+                            {% if form.category.errors %}<div class="text-danger small mt-1">{{ form.category.errors.0 }}</div>{% endif %}
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Subject / Domain <span class="text-danger">*</span></label>
+                            {{ form.subject }}
+                            {% if form.subject.errors %}<div class="text-danger small mt-1">{{ form.subject.errors.0 }}</div>{% endif %}
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Topic / Unit</label>
+                            {{ form.topic }}
+                            {% if form.topic.errors %}<div class="text-danger small mt-1">{{ form.topic.errors.0 }}</div>{% endif %}
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Chapter / Subtopic</label>
+                            {{ form.chapter }}
+                            {% if form.chapter.errors %}<div class="text-danger small mt-1">{{ form.chapter.errors.0 }}</div>{% endif %}
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small fw-bold">Difficulty Level</label>
+                            {{ form.difficulty }}
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small fw-bold">Language Medium</label>
+                            {{ form.language }}
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small fw-bold">Question Format</label>
+                            {{ form.question_type }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Question Statement & Diagram -->
+            <div class="card border shadow-sm mb-4">
+                <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                    <h6 class="fw-bold mb-0"><i class="bi bi-file-earmark-text-fill text-primary me-2"></i> Question Statement</h6>
+                    <span class="badge text-bg-light border text-muted">Supports LaTeX & Unicode</span>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        {{ form.question_text }}
+                        {% if form.question_text.errors %}<div class="text-danger small mt-1">{{ form.question_text.errors.0 }}</div>{% endif %}
+                        <div class="form-text small">Tip: Write mathematical formulas using standard LaTeX syntax, e.g. <code>$r = \frac{mv}{qB}$</code> or <code>$\int_0^\pi \sin(x)dx$</code>.</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">Diagram or Equation Image (Optional)</label>
+                        {{ form.image }}
+                        {% if form.image.errors %}<div class="text-danger small mt-1">{{ form.image.errors.0 }}</div>{% endif %}
+                        {% if form.instance.image %}
+                        <div class="mt-2">
+                            <span class="small text-muted d-block mb-1">Current Image:</span>
+                            <img src="{{ form.instance.image.url }}" alt="Diagram" class="img-thumbnail" style="max-height: 120px;">
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- MCQ Options Section -->
+            <div class="card border shadow-sm mb-4">
+                <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                    <h6 class="fw-bold mb-0"><i class="bi bi-ui-radios text-primary me-2"></i> Multiple Choice Options</h6>
+                    <span class="badge bg-light text-dark border">Minimum 2 Options Required</span>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <!-- Option A -->
+                        <div class="col-12">
+                            <label class="form-label small fw-bold text-dark">Option A <span class="text-danger">*</span></label>
+                            <div class="input-group">
+                                <span class="input-group-text bg-light fw-bold text-dark">A</span>
+                                {{ form.option_text_A }}
+                            </div>
+                            {% if form.option_text_A.errors %}<div class="text-danger small mt-1">{{ form.option_text_A.errors.0 }}</div>{% endif %}
+                        </div>
+
+                        <!-- Option B -->
+                        <div class="col-12">
+                            <label class="form-label small fw-bold text-dark">Option B <span class="text-danger">*</span></label>
+                            <div class="input-group">
+                                <span class="input-group-text bg-light fw-bold text-dark">B</span>
+                                {{ form.option_text_B }}
+                            </div>
+                            {% if form.option_text_B.errors %}<div class="text-danger small mt-1">{{ form.option_text_B.errors.0 }}</div>{% endif %}
+                        </div>
+
+                        <!-- Option C -->
+                        <div class="col-12">
+                            <label class="form-label small fw-bold text-dark">Option C (Optional)</label>
+                            <div class="input-group">
+                                <span class="input-group-text bg-light fw-bold text-dark">C</span>
+                                {{ form.option_text_C }}
+                            </div>
+                            {% if form.option_text_C.errors %}<div class="text-danger small mt-1">{{ form.option_text_C.errors.0 }}</div>{% endif %}
+                        </div>
+
+                        <!-- Option D -->
+                        <div class="col-12">
+                            <label class="form-label small fw-bold text-dark">Option D (Optional)</label>
+                            <div class="input-group">
+                                <span class="input-group-text bg-light fw-bold text-dark">D</span>
+                                {{ form.option_text_D }}
+                            </div>
+                            {% if form.option_text_D.errors %}<div class="text-danger small mt-1">{{ form.option_text_D.errors.0 }}</div>{% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Solution & Explanation -->
+            <div class="card border shadow-sm mb-4">
+                <div class="card-header bg-white py-3">
+                    <h6 class="fw-bold mb-0"><i class="bi bi-lightbulb-fill text-warning me-2"></i> Solution & Step-by-Step Explanation</h6>
+                </div>
+                <div class="card-body">
+                    {{ form.explanation }}
+                    {% if form.explanation.errors %}<div class="text-danger small mt-1">{{ form.explanation.errors.0 }}</div>{% endif %}
+                    <div class="form-text small">Visible to candidates during result review and solution analysis.</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column: Answer Key & Marking Settings -->
+        <div class="col-lg-4">
+            <!-- Answer Key Card -->
+            <div class="card border border-primary shadow-sm mb-4">
+                <div class="card-header bg-primary text-white py-3">
+                    <h6 class="fw-bold mb-0"><i class="bi bi-check2-circle me-2"></i> Answer Key</h6>
+                </div>
+                <div class="card-body">
+                    <label class="form-label small fw-bold">Select Correct Option <span class="text-danger">*</span></label>
+                    {{ form.correct_option }}
+                    {% if form.correct_option.errors %}<div class="text-danger small mt-1">{{ form.correct_option.errors.0 }}</div>{% endif %}
+                    <div class="form-text small mt-2">
+                        Candidates choosing this option will receive positive marks during automated evaluation.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Marking Scheme Card -->
+            <div class="card border shadow-sm mb-4">
+                <div class="card-header bg-white py-3">
+                    <h6 class="fw-bold mb-0"><i class="bi bi-calculator-fill text-primary me-2"></i> Marking Scheme</h6>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">Positive Marks (+)</label>
+                        {{ form.positive_marks }}
+                        {% if form.positive_marks.errors %}<div class="text-danger small mt-1">{{ form.positive_marks.errors.0 }}</div>{% endif %}
+                        <div class="form-text small">Awarded for the correct answer (e.g. 4.00).</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">Negative Penalty (-)</label>
+                        {{ form.negative_marks }}
+                        {% if form.negative_marks.errors %}<div class="text-danger small mt-1">{{ form.negative_marks.errors.0 }}</div>{% endif %}
+                        <div class="form-text small">Deducted for incorrect answers (e.g. 1.00).</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Action Controls -->
+            <div class="card border shadow-sm">
+                <div class="card-body">
+                    <button type="submit" class="btn btn-primary w-100 py-2 fw-semibold mb-2">
+                        <i class="bi bi-check-lg me-1"></i> {% if form.instance.pk %}Update Question{% else %}Save to Question Bank{% endif %}
+                    </button>
+                    <a href="{% url 'questions:question_bank' %}" class="btn btn-outline-secondary w-100">
+                        Cancel
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</form>
+{% endblock %}
+

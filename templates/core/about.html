@@ -1,0 +1,78 @@
+{% extends 'base.html' %}
+
+{% block title %}About {{ PLATFORM_NAME }} Architecture{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-lg-9">
+            <div class="mb-4 text-center">
+                <span class="badge text-bg-primary-subtle text-primary border border-primary-subtle mb-2 px-3 py-1">System Architecture</span>
+                <h1 class="fw-bold mb-2">Built for High-Stakes Assessments</h1>
+                <p class="text-muted">Explore the engineering decisions and security boundaries powering {{ PLATFORM_NAME }}.</p>
+            </div>
+
+            <div class="card p-4 shadow-sm border mb-4">
+                <h4 class="fw-bold mb-3"><i class="bi bi-shield-shaded text-primary me-2"></i> Core Design Principles</h4>
+                <div class="row g-4 mt-1">
+                    <div class="col-md-6">
+                        <h6 class="fw-bold"><i class="bi bi-lock-fill text-success me-1"></i> Strict Server-Side Evaluation</h6>
+                        <p class="text-muted small">
+                            Unlike basic quiz scripts, examination question payloads sent to the browser NEVER contain the correct answer option or solution matrices. Evaluation occurs strictly on the server upon authenticated submission.
+                        </p>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="fw-bold"><i class="bi bi-clock-fill text-warning me-1"></i> Continuous State Synchronization</h6>
+                        <p class="text-muted small">
+                            Candidate responses are continuously persisted. If the client experiences network packet loss, power failure, or machine reboot, resumption occurs without loss of work or timer discrepancies.
+                        </p>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="fw-bold"><i class="bi bi-file-earmark-diff-fill text-info me-1"></i> Intelligent PDF Compiler</h6>
+                        <p class="text-muted small">
+                            Combines PyMuPDF vectorized layout analysis with Tesseract OCR for scanned papers. Preserves mathematical equations and formulas, extracts diagrams, and provides an editable preview workspace.
+                        </p>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="fw-bold"><i class="bi bi-currency-rupee text-primary me-1"></i> Configurable Freemium Business Model</h6>
+                        <p class="text-muted small">
+                            Integrated Razorpay billing engine supporting initial free test evaluation, premium test access controls, recurring plans, coupons, and secure server-verified webhooks.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card p-4 shadow-sm border">
+                <h4 class="fw-bold mb-3"><i class="bi bi-layers-fill text-primary me-2"></i> Technology Stack Details</h4>
+                <ul class="list-group list-group-flush small">
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold">Backend Framework</span>
+                        <span class="badge text-bg-light border">Python 3.12 + Django 5.2 LTS</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold">Primary Database</span>
+                        <span class="badge text-bg-light border">PostgreSQL (psycopg v3) / SQLite dev fallback</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold">Frontend Presentation</span>
+                        <span class="badge text-bg-light border">HTML5, Bootstrap 5.3, JavaScript ES6+</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold">Document & OCR Engines</span>
+                        <span class="badge text-bg-light border">PyMuPDF (fitz) + Tesseract OCR</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold">Asynchronous Jobs & Queue</span>
+                        <span class="badge text-bg-light border">Celery + Redis Broker</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold">Commercial Payment Gateway</span>
+                        <span class="badge text-bg-light border">Razorpay (UPI, Netbanking, Cards)</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

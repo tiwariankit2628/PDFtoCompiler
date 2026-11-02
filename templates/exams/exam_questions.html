@@ -1,0 +1,266 @@
+{% extends 'dashboard_base.html' %}
+
+{% block title %}Question Builder: {{ exam.title }} | {{ PLATFORM_NAME }}{% endblock %}
+
+{% block extra_head %}
+<!-- KaTeX for live equation rendering -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3TX4437n" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZko/WgHgoVICvIK1Pe49yi36XXgn74CEvTxmKjH" crossorigin="anonymous" onload="renderMathInElement(document.body);"></script>
+{% endblock %}
+
+{% block dashboard_content %}
+<!-- Builder Header -->
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom">
+    <div>
+        <div class="d-flex align-items-center gap-2 mb-1">
+            <h2 class="fw-bold mb-0 text-truncate" style="max-width: 600px;">{{ exam.title }}</h2>
+            {% if exam.status == 'published' %}
+                <span class="badge bg-success">Published</span>
+            {% elif exam.status == 'scheduled' %}
+                <span class="badge bg-info text-dark">Scheduled</span>
+            {% else %}
+                <span class="badge bg-warning text-dark">Draft Mode</span>
+            {% endif %}
+            {% if exam.is_free %}
+                <span class="badge bg-success-subtle text-success border border-success-subtle">Free</span>
+            {% else %}
+                <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">Premium</span>
+            {% endif %}
+        </div>
+        <p class="text-muted mb-0">
+            Category: <strong class="text-dark">{{ exam.category.name }}</strong>
+            | Subject: <strong class="text-dark">{{ exam.subject|default:"General" }}</strong>
+            | Duration: <strong>{{ exam.duration_minutes }} min</strong>
+            | Creator: <strong>{{ exam.creator.username }}</strong>
+        </p>
+    </div>
+    <div class="mt-3 mt-md-0 d-flex gap-2">
+        <a href="{% url 'exams:exam_preview' exam.pk %}" class="btn btn-sm btn-cbt-outline">
+            <i class="bi bi-eye me-1"></i> Preview Exam
+        </a>
+        <form method="post" action="{% url 'exams:exam_toggle_publish' exam.pk %}" class="d-inline">
+            {% csrf_token %}
+            {% if exam.status == 'published' or exam.status == 'scheduled' %}
+                <button type="submit" class="btn btn-sm btn-outline-warning">
+                    <i class="bi bi-pause-circle me-1"></i> Unpublish to Draft
+                </button>
+            {% else %}
+                <button type="submit" class="btn btn-sm btn-success">
+                    <i class="bi bi-send-check-fill me-1"></i> Publish Examination
+                </button>
+            {% endif %}
+        </form>
+        <a href="{% url 'exams:exam_edit' exam.pk %}" class="btn btn-sm btn-cbt-outline">
+            <i class="bi bi-gear me-1"></i> Settings
+        </a>
+    </div>
+</div>
+
+<!-- Exam Summary Counters Bar -->
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card border shadow-sm p-3 bg-white">
+            <span class="text-muted small text-uppercase fw-bold">Questions In Exam</span>
+            <h3 class="fw-bold mb-0 text-primary mt-1">{{ exam.total_questions_count }}</h3>
+            <span class="small text-muted">Items currently compiled</span>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border shadow-sm p-3 bg-white">
+            <span class="text-muted small text-uppercase fw-bold">Calculated Max Marks</span>
+            <h3 class="fw-bold mb-0 text-success mt-1">{{ exam.calculated_total_marks }}</h3>
+            <span class="small text-muted">Sum of positive marks</span>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border shadow-sm p-3 bg-white">
+            <span class="text-muted small text-uppercase fw-bold">Passing Threshold</span>
+            <h3 class="fw-bold mb-0 text-dark mt-1">{{ exam.passing_percentage }}%</h3>
+            <span class="small text-muted">Minimum required to clear</span>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border shadow-sm p-3 bg-white">
+            <span class="text-muted small text-uppercase fw-bold">Candidate Attempts</span>
+            <h3 class="fw-bold mb-0 text-dark mt-1">{{ exam.attempts.count }}</h3>
+            <span class="small text-muted">{% if exam.has_attempts %}<span class="text-danger fw-semibold">Locked: Records Exist</span>{% else %}Unlocked for editing{% endif %}</span>
+        </div>
+    </div>
+</div>
+
+<!-- Main Builder Grid -->
+<div class="row g-4">
+    <!-- Left Column: Current Exam Questions List -->
+    <div class="col-lg-7">
+        <div class="card border shadow-sm mb-4">
+            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                <h6 class="fw-bold mb-0"><i class="bi bi-list-ol text-primary me-2"></i> Compiled Questions ({{ exam_questions|length }})</h6>
+                <span class="text-muted small">Sequential Candidate Flow</span>
+            </div>
+            <div class="card-body p-0">
+                {% if exam_questions %}
+                <div class="list-group list-group-flush">
+                    {% for eq in exam_questions %}
+                    <div class="list-group-item p-3">
+                        <div class="d-flex justify-content-between align-items-start mb-2">
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="badge bg-primary fs-6 px-2 py-1">Q.{{ eq.order }}</span>
+                                {% if eq.section %}<span class="badge bg-light text-dark border">{{ eq.section }}</span>{% endif %}
+                                <span class="badge text-bg-light border text-muted">{{ eq.question.subject }}</span>
+                                <span class="badge {% if eq.question.difficulty == 'easy' %}bg-success{% elif eq.question.difficulty == 'medium' %}bg-warning text-dark{% else %}bg-danger{% endif %}">{{ eq.question.get_difficulty_display }}</span>
+                            </div>
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="badge bg-success-subtle text-success border border-success-subtle">+{{ eq.positive_marks }} / -{{ eq.negative_marks }}</span>
+                                {% if not exam.has_attempts %}
+                                <form method="post" action="{% url 'exams:exam_remove_question' exam.pk eq.question.pk %}" class="d-inline" onsubmit="return confirm('Remove Question #{{ eq.order }} from this examination?');">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-outline-danger btn-sm py-0 px-2" title="Remove question from exam">
+                                        <i class="bi bi-x-lg"></i>
+                                    </button>
+                                </form>
+                                {% endif %}
+                            </div>
+                        </div>
+
+                        <!-- Statement -->
+                        <div class="fw-semibold text-dark mb-2" style="font-size: 0.95rem;">
+                            {{ eq.question.question_text|linebreaksbr }}
+                        </div>
+
+                        {% if eq.question.image %}
+                        <div class="mb-2">
+                            <img src="{{ eq.question.image.url }}" alt="Diagram" class="img-thumbnail" style="max-height: 100px;">
+                        </div>
+                        {% endif %}
+
+                        <!-- Options Preview (Compact) -->
+                        <div class="row g-1 small">
+                            {% for opt in eq.question.options.all %}
+                            <div class="col-6">
+                                <div class="p-1 px-2 border rounded text-truncate {% if opt.is_correct %}bg-success bg-opacity-10 text-success border-success fw-bold{% else %}bg-light text-muted{% endif %}">
+                                    {{ opt.option_key }}. {{ opt.option_text }}
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="p-5 text-center text-muted">
+                    <i class="bi bi-plus-circle fs-1 text-muted d-block mb-2"></i>
+                    <h5 class="fw-bold">No Questions in this Exam Yet</h5>
+                    <p class="small text-muted mb-3">Add questions using the Question Bank selector or Random Sampler on the right.</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Right Column: Add Questions from Bank & Random Sampler -->
+    <div class="col-lg-5">
+        <!-- Add from Question Bank Selector -->
+        <div class="card border shadow-sm mb-4">
+            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                <h6 class="fw-bold mb-0"><i class="bi bi-journal-plus text-primary me-2"></i> Add from Question Bank</h6>
+                <a href="{% url 'questions:question_create' %}" target="_blank" class="btn btn-sm btn-outline-primary py-0 px-2">
+                    <i class="bi bi-plus me-1"></i> New Item
+                </a>
+            </div>
+            <div class="card-body p-3">
+                <!-- Search Available Filter -->
+                <form method="get" class="row g-2 mb-3">
+                    <div class="col-7">
+                        <input type="text" name="q_search" value="{{ q_search }}" class="form-control form-control-sm" placeholder="Search unassigned questions...">
+                    </div>
+                    <div class="col-3">
+                        <select name="diff" class="form-select form-select-sm">
+                            <option value="">Diff.</option>
+                            <option value="easy" {% if diff_filter == 'easy' %}selected{% endif %}>Easy</option>
+                            <option value="medium" {% if diff_filter == 'medium' %}selected{% endif %}>Med</option>
+                            <option value="hard" {% if diff_filter == 'hard' %}selected{% endif %}>Hard</option>
+                        </select>
+                    </div>
+                    <div class="col-2">
+                        <button type="submit" class="btn btn-sm btn-primary w-100"><i class="bi bi-search"></i></button>
+                    </div>
+                </form>
+
+                {% if available_questions %}
+                <form method="post" action="{% url 'exams:exam_add_questions_bulk' exam.pk %}">
+                    {% csrf_token %}
+                    <div class="d-flex justify-content-between align-items-center mb-2 small text-muted">
+                        <span>{{ available_total_count }} questions available</span>
+                        <div>
+                            <input type="text" name="section" class="form-control form-control-sm d-inline-block" style="width: 120px;" placeholder="Section A" value="General">
+                        </div>
+                    </div>
+
+                    <div class="border rounded p-2 mb-3" style="max-height: 280px; overflow-y: auto;">
+                        {% for av_q in available_questions %}
+                        <div class="form-check p-2 border-bottom small">
+                            <input class="form-check-input" type="checkbox" name="selected_questions" value="{{ av_q.pk }}" id="check_q_{{ av_q.pk }}">
+                            <label class="form-check-label d-block text-dark" for="check_q_{{ av_q.pk }}">
+                                <span class="badge {% if av_q.difficulty == 'easy' %}bg-success{% elif av_q.difficulty == 'medium' %}bg-warning text-dark{% else %}bg-danger{% endif %} me-1" style="font-size: 0.65rem;">{{ av_q.get_difficulty_display }}</span>
+                                <span class="text-muted fw-bold">{{ av_q.subject }}:</span>
+                                {{ av_q.question_text|truncatechars:100 }}
+                            </label>
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <button type="submit" class="btn btn-primary btn-sm w-100 py-2 fw-semibold" {% if exam.has_attempts %}disabled{% endif %}>
+                        <i class="bi bi-plus-lg me-1"></i> Add Selected Questions to Exam
+                    </button>
+                </form>
+                {% else %}
+                <div class="p-4 text-center text-muted small">
+                    <p class="mb-2">No unassigned questions found in <strong>{{ exam.category.name }}</strong>.</p>
+                    <a href="{% url 'questions:question_create' %}" class="btn btn-sm btn-outline-primary">Create New Question</a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Add Random Questions Sampler Card -->
+        <div class="card border shadow-sm">
+            <div class="card-header bg-white py-3">
+                <h6 class="fw-bold mb-0"><i class="bi bi-shuffle text-warning me-2"></i> Random Question Generator</h6>
+            </div>
+            <div class="card-body p-3">
+                <p class="small text-muted mb-3">Quickly sample and compile $N$ random questions from the Question Bank into this test.</p>
+                <form method="post" action="{% url 'exams:exam_add_random_questions' exam.pk %}">
+                    {% csrf_token %}
+                    <div class="row g-2 mb-3">
+                        <div class="col-6">
+                            <label class="form-label small fw-bold">Questions Count</label>
+                            {{ random_form.count }}
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small fw-bold">Difficulty</label>
+                            {{ random_form.difficulty }}
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label small fw-bold">Subject Filter</label>
+                            {{ random_form.subject }}
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small fw-bold">Positive (+)</label>
+                            {{ random_form.positive_marks }}
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small fw-bold">Negative (-)</label>
+                            {{ random_form.negative_marks }}
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-warning btn-sm w-100 py-2 fw-semibold" {% if exam.has_attempts %}disabled{% endif %}>
+                        <i class="bi bi-shuffle me-1"></i> Sample & Add Questions Randomly
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

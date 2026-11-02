@@ -1,0 +1,131 @@
+{% extends 'base.html' %}
+
+{% block title %}Examinations Catalog | {{ PLATFORM_NAME }}{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <!-- Breadcrumb & Header -->
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4 gap-3">
+        <div>
+            <h2 class="fw-bold text-dark mb-1">
+                <i class="bi bi-collection-play text-primary me-2"></i> Online Examinations Catalog
+            </h2>
+            <p class="text-muted mb-0">Browse and participate in CBT practice tests and assessments.</p>
+        </div>
+        <div>
+            <a href="{% url 'core:dashboard_router' %}" class="btn btn-outline-secondary btn-sm">
+                <i class="bi bi-arrow-left me-1"></i> Back to Dashboard
+            </a>
+        </div>
+    </div>
+
+    <!-- Filter & Search Toolbar -->
+    <div class="card border-0 shadow-sm rounded-4 p-3 mb-4">
+        <form method="get" class="row g-2 align-items-center">
+            <div class="col-md-5">
+                <div class="input-group">
+                    <span class="input-group-text bg-light border-end-0"><i class="bi bi-search text-muted"></i></span>
+                    <input type="text" name="q" class="form-control border-start-0" placeholder="Search by title, subject, target exam..." value="{{ search_query }}">
+                </div>
+            </div>
+            <div class="col-md-3">
+                <select name="category" class="form-select">
+                    <option value="">All Categories</option>
+                    {% for cat in categories %}
+                    <option value="{{ cat.slug }}" {% if selected_category == cat.slug %}selected{% endif %}>
+                        {{ cat.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <select name="type" class="form-select">
+                    <option value="">All Access</option>
+                    <option value="free" {% if selected_type == 'free' %}selected{% endif %}>Free Tests</option>
+                    <option value="premium" {% if selected_type == 'premium' %}selected{% endif %}>Premium</option>
+                </select>
+            </div>
+            <div class="col-md-2 d-flex gap-2">
+                <button type="submit" class="btn btn-primary w-100 fw-bold">Filter</button>
+                {% if search_query or selected_category or selected_type %}
+                <a href="{% url 'exams:exam_catalog' %}" class="btn btn-outline-secondary" title="Reset Filters">
+                    <i class="bi bi-x-lg"></i>
+                </a>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+
+    <!-- Exam Cards Grid -->
+    {% if exams %}
+    <div class="row g-4">
+        {% for exam in exams %}
+        <div class="col-md-6 col-lg-4">
+            <div class="card h-100 border-0 shadow-sm rounded-4 p-4 d-flex flex-column card-hover-effect">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <span class="badge bg-light text-dark border px-2 py-1">
+                        <i class="bi bi-tag me-1"></i> {{ exam.category.name }}
+                    </span>
+                    {% if exam.is_free %}
+                        <span class="badge bg-success px-2 py-1">Free Test</span>
+                    {% else %}
+                        <span class="badge bg-primary px-2 py-1">Premium Mock</span>
+                    {% endif %}
+                </div>
+
+                <h5 class="fw-bold text-dark mb-2">{{ exam.title }}</h5>
+                <p class="text-secondary small mb-3 flex-grow-1">
+                    {{ exam.description|default:"Comprehensive Computer-Based Examination simulation."|truncatechars:110 }}
+                </p>
+
+                <!-- Exam Metrics -->
+                <div class="bg-light p-2.5 rounded-3 mb-3 d-flex justify-content-between small text-muted border">
+                    <span><i class="bi bi-clock me-1 text-primary"></i> {{ exam.duration_minutes }} Mins</span>
+                    <span><i class="bi bi-question-circle me-1 text-primary"></i> {{ exam.total_questions_count }} Qs</span>
+                    <span><i class="bi bi-award me-1 text-primary"></i> {{ exam.total_marks }} Marks</span>
+                </div>
+
+                <a href="{% url 'exams:exam_instructions' exam.slug %}" class="btn btn-primary w-100 fw-bold py-2 rounded-3">
+                    <i class="bi bi-play-circle me-1"></i> View Instructions & Start
+                </a>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Pagination -->
+    {% if is_paginated %}
+    <div class="d-flex justify-content-center mt-5">
+        <nav aria-label="Page navigation">
+            <ul class="pagination">
+                {% if page_obj.has_previous %}
+                <li class="page-item">
+                    <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if search_query %}&q={{ search_query }}{% endif %}{% if selected_category %}&category={{ selected_category }}{% endif %}">Previous</a>
+                </li>
+                {% endif %}
+                <li class="page-item active">
+                    <span class="page-link">{{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+                </li>
+                {% if page_obj.has_next %}
+                <li class="page-item">
+                    <a class="page-link" href="?page={{ page_obj.next_page_number }}{% if search_query %}&q={{ search_query }}{% endif %}{% if selected_category %}&category={{ selected_category }}{% endif %}">Next</a>
+                </li>
+                {% endif %}
+            </ul>
+        </nav>
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="card border-0 shadow-sm rounded-4 p-5 text-center text-muted">
+        <i class="bi bi-journal-x fs-1 text-muted d-block mb-3"></i>
+        <h5 class="fw-bold text-dark">No Examinations Found</h5>
+        <p class="small mb-3">No examinations matched your filter criteria or there are no published exams currently available.</p>
+        <div>
+            <a href="{% url 'exams:exam_catalog' %}" class="btn btn-outline-primary btn-sm">Clear Filters</a>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+

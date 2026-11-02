@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <title>Exam: {{ exam.title }} | {{ PLATFORM_NAME }}</title>
+
+    <!-- Bootstrap 5.3 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+
+    <!-- KaTeX CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+
+    <style>
+        :root {
+            --cbt-primary: #0d6efd;
+            --cbt-answered: #198754;
+            --cbt-unanswered: #dc3545;
+            --cbt-review: #6f42c1;
+            --cbt-notvisited: #6c757d;
+        }
+        body {
+            background-color: #f4f6f9;
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            overflow-x: hidden;
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+        /* Top Examination Bar */
+        .cbt-topbar {
+            height: 60px;
+            background-color: #ffffff;
+            border-bottom: 2px solid #e2e8f0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 1.25rem;
+            position: sticky;
+            top: 0;
+            z-index: 1030;
+        }
+        /* Palette Status Badges */
+        .palette-btn {
+            width: 40px;
+            height: 40px;
+            font-weight: 700;
+            font-size: 0.85rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: transform 0.1s, box-shadow 0.1s;
+            position: relative;
+            border: 1px solid transparent;
+        }
+        .palette-btn:hover {
+            transform: scale(1.06);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+        }
+        .palette-btn.active-q {
+            border: 2px solid #000000 !important;
+            box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.4) !important;
+        }
+        .palette-not_visited {
+            background-color: #e9ecef;
+            color: #495057;
+            border-color: #ced4da;
+        }
+        .palette-not_answered {
+            background-color: #dc3545;
+            color: #ffffff;
+        }
+        .palette-answered {
+            background-color: #198754;
+            color: #ffffff;
+        }
+        .palette-marked_for_review {
+            background-color: #6f42c1;
+            color: #ffffff;
+        }
+        .palette-answered_and_marked {
+            background-color: #6f42c1;
+            color: #ffffff;
+        }
+        .palette-answered_and_marked::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            width: 9px;
+            height: 9px;
+            background-color: #00ff66;
+            border-radius: 50%;
+            border: 1px solid #ffffff;
+        }
+        /* Option Cards */
+        .option-card {
+            border: 1.5px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 0.85rem 1.15rem;
+            cursor: pointer;
+            transition: all 0.15s ease-in-out;
+            background-color: #ffffff;
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: flex-start;
+            gap: 0.75rem;
+        }
+        .option-card:hover {
+            border-color: #0d6efd;
+            background-color: #f8faff;
+        }
+        .option-card.selected {
+            border-color: #0d6efd;
+            background-color: #eef4ff;
+            box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.25);
+        }
+        .option-badge {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 0.85rem;
+            background-color: #f1f5f9;
+            color: #334155;
+            flex-shrink: 0;
+            margin-top: 1px;
+        }
+        .option-card.selected .option-badge {
+            background-color: #0d6efd;
+            color: #ffffff;
+        }
+        /* Timer Pill */
+        .timer-box {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 1.25rem;
+            font-weight: 800;
+            letter-spacing: 1px;
+            padding: 0.35rem 0.85rem;
+            border-radius: 8px;
+            background-color: #f8fafc;
+            border: 1.5px solid #cbd5e1;
+            color: #0f172a;
+        }
+        .timer-warning {
+            color: #dc3545 !important;
+            border-color: #dc3545 !important;
+            background-color: #fff5f5 !important;
+            animation: pulse-danger 1s infinite;
+        }
+        @keyframes pulse-danger {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.03); }
+            100% { transform: scale(1); }
+        }
+        /* Question Area */
+        .question-pane {
+            height: calc(100vh - 125px);
+            overflow-y: auto;
+            padding: 1.5rem;
+        }
+        .palette-pane {
+            height: calc(100vh - 125px);
+            overflow-y: auto;
+            border-left: 2px solid #e2e8f0;
+            background-color: #ffffff;
+            padding: 1rem;
+        }
+        /* Bottom Action Bar */
+        .cbt-footer {
+            height: 65px;
+            background-color: #ffffff;
+            border-top: 2px solid #e2e8f0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 1.5rem;
+            position: sticky;
+            bottom: 0;
+            z-index: 1020;
+        }
+    </style>
+</head>
+<body oncontextmenu="return false;">
+
+    <!-- 1. TOP EXAMINATION BAR -->
+    <header class="cbt-topbar">
+        <div class="d-flex align-items-center gap-2">
+            <span class="fw-bold text-dark fs-6 d-none d-md-inline">{{ exam.title|truncatechars:45 }}</span>
+            <span class="badge bg-primary text-uppercase px-2 py-1" id="active-section-badge">Section: General</span>
+            <span class="badge bg-light text-muted border d-none d-sm-inline" id="sync-indicator">
+                <i class="bi bi-circle-fill text-success me-1" style="font-size: 8px;"></i> Connected
+            </span>
+        </div>
+
+        <div class="d-flex align-items-center gap-3">
+            <!-- Server-Synchronized Timer -->
+            <div class="d-flex align-items-center gap-2">
+                <i class="bi bi-clock-history fs-5 text-secondary"></i>
+                <div class="timer-box" id="exam-timer" title="Time Remaining">--:--:--</div>
+            </div>
+
+            <!-- Candidate Profile Pill -->
+            <div class="d-none d-lg-flex align-items-center gap-2 ps-2 border-start">
+                <div class="rounded-circle bg-secondary text-white d-flex align-items-center justify-content-center" style="width: 32px; height: 32px; font-weight: bold;">
+                    {{ request.user.first_name|default:request.user.username|slice:":1"|upper }}
+                </div>
+                <div class="lh-1 text-start">
+                    <small class="fw-bold d-block text-dark">{{ request.user.get_full_name|default:request.user.username }}</small>
+                    <span class="text-muted" style="font-size: 11px;">Candidate</span>
+                </div>
+            </div>
+
+            <!-- Submit CTA -->
+            <button type="button" class="btn btn-sm btn-danger fw-bold px-3 py-1.5" id="btn-open-submit-modal">
+                <i class="bi bi-check2-circle me-1"></i> Submit
+            </button>
+        </div>
+    </header>
+
+    <!-- 2. MAIN TEST WORKSPACE -->
+    <main class="container-fluid p-0">
+        <div class="row g-0">
+            <!-- Question Content Area (Left 75%) -->
+            <div class="col-lg-9 col-md-8 question-pane bg-white" id="question-container">
+                <div class="d-flex justify-content-between align-items-center border-bottom pb-2 mb-3">
+                    <h5 class="fw-bold text-dark mb-0" id="question-heading">
+                        Question No. <span id="current-q-num">1</span>
+                    </h5>
+                    <div class="d-flex align-items-center gap-2 small">
+                        <span class="badge bg-success bg-opacity-10 text-success border border-success border-opacity-25 px-2 py-1" id="q-positive-marks">
+                            +4.00 Marks
+                        </span>
+                        <span class="badge bg-danger bg-opacity-10 text-danger border border-danger border-opacity-25 px-2 py-1" id="q-negative-marks">
+                            -1.00 Mark
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Section Selector Tabs (if multiple sections exist) -->
+                {% if sections|length > 1 %}
+                <div class="mb-3 d-flex gap-2 flex-wrap" id="section-pills">
+                    {% for sec in sections %}
+                    <button type="button" class="btn btn-sm btn-outline-secondary section-filter-btn" data-section="{{ sec }}">
+                        {{ sec }}
+                    </button>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                <!-- Question Statement Container -->
+                <div class="fs-6 text-dark mb-4 lh-base" id="question-statement-box" style="min-height: 80px;">
+                    <!-- Question text rendered with KaTeX -->
+                </div>
+
+                <!-- Diagram Image Container (Hidden if no diagram) -->
+                <div class="mb-4 text-center d-none" id="question-diagram-box">
+                    <img src="" alt="Question Diagram" class="img-fluid rounded border shadow-sm" style="max-height: 320px;" id="question-diagram-img">
+                </div>
+
+                <!-- MCQ Options List -->
+                <div class="mb-4" id="options-container">
+                    <!-- Dynamic Option Cards generated by JS -->
+                </div>
+            </div>
+
+            <!-- Right Question Palette Pane (25%) -->
+            <div class="col-lg-3 col-md-4 palette-pane">
+                <h6 class="fw-bold text-dark border-bottom pb-2 mb-3">
+                    <i class="bi bi-grid-3x3-gap-fill text-primary me-1"></i> Question Palette
+                </h6>
+
+                <!-- Status Legend Grid -->
+                <div class="row g-2 mb-3 small" style="font-size: 11px;">
+                    <div class="col-6">
+                        <div class="d-flex align-items-center gap-1.5">
+                            <span class="palette-btn palette-answered" style="width: 22px; height: 22px; font-size: 10px;" id="count-answered">0</span>
+                            <span class="text-muted">Answered</span>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="d-flex align-items-center gap-1.5">
+                            <span class="palette-btn palette-not_answered" style="width: 22px; height: 22px; font-size: 10px;" id="count-not-answered">0</span>
+                            <span class="text-muted">Not Answered</span>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="d-flex align-items-center gap-1.5">
+                            <span class="palette-btn palette-not_visited" style="width: 22px; height: 22px; font-size: 10px;" id="count-not-visited">0</span>
+                            <span class="text-muted">Not Visited</span>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="d-flex align-items-center gap-1.5">
+                            <span class="palette-btn palette-marked_for_review" style="width: 22px; height: 22px; font-size: 10px;" id="count-marked-review">0</span>
+                            <span class="text-muted">Marked Review</span>
+                        </div>
+                    </div>
+                </div>
+
+                <hr class="my-2 text-muted">
+
+                <!-- Interactive Question Buttons Grid -->
+                <div class="d-flex flex-wrap gap-2 py-2" id="palette-grid">
+                    <!-- Dynamic Palette Buttons generated by JS -->
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 3. BOTTOM ACTION BAR -->
+    <footer class="cbt-footer">
+        <div class="d-flex align-items-center gap-2">
+            <button type="button" class="btn btn-outline-purple fw-bold btn-sm px-3" style="color: #6f42c1; border-color: #6f42c1;" id="btn-mark-review">
+                <i class="bi bi-bookmark-check me-1"></i> Mark for Review & Next
+            </button>
+            <button type="button" class="btn btn-outline-danger fw-bold btn-sm px-3" id="btn-clear-response">
+                <i class="bi bi-eraser me-1"></i> Clear Response
+            </button>
+        </div>
+
+        <div class="d-flex align-items-center gap-2">
+            <button type="button" class="btn btn-secondary fw-bold btn-sm px-3" id="btn-prev-question">
+                <i class="bi bi-chevron-left me-1"></i> Previous
+            </button>
+            <button type="button" class="btn btn-primary fw-bold btn-sm px-4" id="btn-save-next">
+                Save & Next <i class="bi bi-chevron-right ms-1"></i>
+            </button>
+        </div>
+    </footer>
+
+    <!-- 4. SUBMISSION CONFIRMATION MODAL -->
+    <div class="modal fade" id="submitModal" tabindex="-1" aria-labelledby="submitModalLabel" aria-hidden="true" data-bs-backdrop="static">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 shadow rounded-4">
+                <div class="modal-header bg-primary text-white border-0">
+                    <h5 class="modal-title fw-bold" id="submitModalLabel">
+                        <i class="bi bi-shield-check me-2"></i> Submit Examination
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <p class="text-muted small mb-3">
+                        Are you sure you want to finalize and submit your examination? Once submitted, you cannot resume or modify any responses.
+                    </p>
+
+                    <div class="card bg-light border p-3 rounded-3 mb-3">
+                        <h6 class="fw-bold text-dark mb-2">Examination Summary:</h6>
+                        <div class="row g-2 text-center small">
+                            <div class="col-4">
+                                <span class="d-block text-muted">Total</span>
+                                <strong class="fs-5 text-dark" id="modal-total-count">{{ total_questions }}</strong>
+                            </div>
+                            <div class="col-4">
+                                <span class="d-block text-muted">Answered</span>
+                                <strong class="fs-5 text-success" id="modal-answered-count">0</strong>
+                            </div>
+                            <div class="col-4">
+                                <span class="d-block text-muted">Unanswered</span>
+                                <strong class="fs-5 text-danger" id="modal-unanswered-count">0</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="alert alert-warning small mb-0">
+                        <i class="bi bi-exclamation-triangle-fill text-warning me-1"></i>
+                        Responses marked for review will be evaluated if an option is selected.
+                    </div>
+                </div>
+                <div class="modal-footer border-0 p-3 pt-0">
+                    <button type="button" class="btn btn-secondary px-3" data-bs-dismiss="modal">Return to Exam</button>
+                    <button type="button" class="btn btn-danger fw-bold px-4" id="btn-confirm-submit">
+                        <i class="bi bi-check-all me-1"></i> Yes, Submit Exam
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 5. ANTI-CHEAT WARNING TOAST / MODAL -->
+    <div class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index: 1090;">
+        <div id="securityToast" class="toast align-items-center text-bg-warning border-0 shadow" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="d-flex">
+                <div class="toast-body fw-bold">
+                    <i class="bi bi-shield-exclamation fs-5 me-2"></i>
+                    <span id="security-toast-message">Warning: Window switch detected! All actions are logged.</span>
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SCRIPTS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+
+    <!-- CBT Examination Engine JavaScript -->
+    <script>
+        (function() {
+            // Configuration & Server State
+            const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+            const ATTEMPT_UUID = "{{ attempt.attempt_uuid }}";
+            const SAVE_URL = "{% url 'exams:exam_save_answer' attempt.attempt_uuid %}";
+            const SYNC_URL = "{% url 'exams:exam_sync_status' attempt.attempt_uuid %}";
+            const LOG_EVENT_URL = "{% url 'exams:exam_log_event' attempt.attempt_uuid %}";
+            const SUBMIT_URL = "{% url 'exams:exam_submit' attempt.attempt_uuid %}";
+            const COMPLETED_URL = "{% url 'exams:exam_completed' attempt.attempt_uuid %}";
+
+            // Questions Payload from Server (SECURITY: Answer keys are not present in this dataset)
+            const questions = {{ questions_json|safe }};
+            let currentIndex = {{ initial_index }};
+            let remainingSeconds = {{ remaining_seconds }};
+            let activeTimer = null;
+            let questionStartTime = Date.now();
+            let isSubmitting = false;
+
+            // DOM Elements
+            const timerEl = document.getElementById('exam-timer');
+            const currentQNumEl = document.getElementById('current-q-num');
+            const posMarksEl = document.getElementById('q-positive-marks');
+            const negMarksEl = document.getElementById('q-negative-marks');
+            const statementBox = document.getElementById('question-statement-box');
+            const diagramBox = document.getElementById('question-diagram-box');
+            const diagramImg = document.getElementById('question-diagram-img');
+            const optionsContainer = document.getElementById('options-container');
+            const paletteGrid = document.getElementById('palette-grid');
+            const activeSectionBadge = document.getElementById('active-section-badge');
+            const syncIndicator = document.getElementById('sync-indicator');
+
+            // Counter Elements
+            const countAnsweredEl = document.getElementById('count-answered');
+            const countNotAnsweredEl = document.getElementById('count-not-answered');
+            const countNotVisitedEl = document.getElementById('count-not-visited');
+            const countMarkedReviewEl = document.getElementById('count-marked-review');
+
+            // Initialize CBT Engine
+            function initEngine() {
+                buildPaletteGrid();
+                renderQuestion(currentIndex);
+                startCountdown();
+                initAntiCheat();
+                initHeartbeat();
+                updateCounters();
+            }
+
+            // 1. Build Navigation Palette Buttons
+            function buildPaletteGrid() {
+                paletteGrid.innerHTML = '';
+                questions.forEach((q, idx) => {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = `palette-btn palette-${q.palette_status}`;
+                    btn.id = `palette-btn-${idx}`;
+                    btn.textContent = q.order;
+                    btn.title = `Question ${q.order} (${q.palette_status.replace('_', ' ')})`;
+
+                    btn.addEventListener('click', () => {
+                        saveAndNavigate(idx);
+                    });
+                    paletteGrid.appendChild(btn);
+                });
+            }
+
+            // 2. Render Target Question
+            function renderQuestion(index) {
+                if (index < 0 || index >= questions.length) return;
+                currentIndex = index;
+                const q = questions[currentIndex];
+                questionStartTime = Date.now();
+
+                // Mark current question as visited
+                q.is_visited = true;
+                if (q.palette_status === 'not_visited') {
+                    q.palette_status = 'not_answered';
+                }
+
+                // Update Header Badges
+                currentQNumEl.textContent = q.order;
+                posMarksEl.textContent = `+${q.positive_marks.toFixed(2)} Marks`;
+                negMarksEl.textContent = `-${q.negative_marks.toFixed(2)} Mark`;
+                activeSectionBadge.textContent = `Section: ${q.section}`;
+
+                // Statement with LaTeX rendering
+                statementBox.innerHTML = q.question_text.replace(/\n/g, '<br>');
+                renderKaTeX(statementBox);
+
+                // Diagram image
+                if (q.image_url) {
+                    diagramImg.src = q.image_url;
+                    diagramBox.classList.remove('d-none');
+                } else {
+                    diagramBox.classList.add('d-none');
+                    diagramImg.src = '';
+                }
+
+                // Render MCQ Options
+                optionsContainer.innerHTML = '';
+                q.options.forEach(opt => {
+                    const card = document.createElement('div');
+                    const isSelected = (q.selected_option_id === opt.id);
+                    card.className = `option-card ${isSelected ? 'selected' : ''}`;
+                    card.setAttribute('data-option-id', opt.id);
+
+                    card.innerHTML = `
+                        <span class="option-badge">${opt.key}</span>
+                        <div class="option-text flex-grow-1">${opt.text ? opt.text.replace(/\n/g, '<br>') : ''}</div>
+                    `;
+
+                    if (opt.image_url) {
+                        const optImg = document.createElement('img');
+                        optImg.src = opt.image_url;
+                        optImg.className = 'img-fluid d-block mt-2 rounded border';
+                        optImg.style.maxHeight = '140px';
+                        card.appendChild(optImg);
+                    }
+
+                    // Card click handler
+                    card.addEventListener('click', () => {
+                        selectOption(opt.id);
+                    });
+
+                    optionsContainer.appendChild(card);
+                    renderKaTeX(card);
+                });
+
+                // Update Palette Highlights
+                document.querySelectorAll('.palette-btn').forEach(btn => btn.classList.remove('active-q'));
+                const currentPaletteBtn = document.getElementById(`palette-btn-${currentIndex}`);
+                if (currentPaletteBtn) {
+                    currentPaletteBtn.classList.add('active-q');
+                    currentPaletteBtn.className = `palette-btn palette-${q.palette_status} active-q`;
+                }
+
+                // Disable/Enable Nav Buttons
+                document.getElementById('btn-prev-question').disabled = (currentIndex === 0);
+                document.getElementById('btn-save-next').textContent = (currentIndex === questions.length - 1) ? 'Save Response' : 'Save & Next';
+                updateCounters();
+            }
+
+            // Render KaTeX Helper
+            function renderKaTeX(elem) {
+                if (window.renderMathInElement) {
+                    window.renderMathInElement(elem, {
+                        delimiters: [
+                            {left: "$$", right: "$$", display: true},
+                            {left: "$", right: "$", display: false},
+                            {left: "\\(", right: "\\)", display: false},
+                            {left: "\\[", right: "\\]", display: true}
+                        ],
+                        throwOnError: false
+                    });
+                }
+            }
+
+            // 3. Option Selection
+            function selectOption(optionId) {
+                const q = questions[currentIndex];
+                q.selected_option_id = optionId;
+
+                // Update UI selection
+                document.querySelectorAll('.option-card').forEach(card => {
+                    const cardOptId = parseInt(card.getAttribute('data-option-id'), 10);
+                    if (cardOptId === optionId) {
+                        card.classList.add('selected');
+                    } else {
+                        card.classList.remove('selected');
+                    }
+                });
+            }
+
+            // 4. Save and Navigate
+            function saveAndNavigate(targetIndex, action = 'navigate') {
+                const q = questions[currentIndex];
+                const timeSpentDelta = Math.round((Date.now() - questionStartTime) / 1000);
+
+                // Compute updated palette status locally for snappy response
+                if (action === 'clear') {
+                    q.selected_option_id = null;
+                    q.is_marked_for_review = false;
+                    q.palette_status = 'not_answered';
+                } else if (action === 'mark_review') {
+                    q.is_marked_for_review = true;
+                    q.palette_status = q.selected_option_id ? 'answered_and_marked' : 'marked_for_review';
+                } else {
+                    if (q.selected_option_id) {
+                        q.palette_status = q.is_marked_for_review ? 'answered_and_marked' : 'answered';
+                    } else {
+                        q.palette_status = 'not_answered';
+                    }
+                }
+
+                // Update palette button style immediately
+                const paletteBtn = document.getElementById(`palette-btn-${currentIndex}`);
+                if (paletteBtn) {
+                    paletteBtn.className = `palette-btn palette-${q.palette_status}`;
+                }
+
+                // Send AJAX save payload to server
+                showSyncStatus('Saving...', 'text-warning');
+                fetch(SAVE_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': CSRF_TOKEN,
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: JSON.stringify({
+                        response_id: q.response_id,
+                        action: action,
+                        selected_option_id: q.selected_option_id,
+                        is_marked_for_review: q.is_marked_for_review,
+                        time_spent_delta: timeSpentDelta
+                    })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'expired') {
+                        window.location.href = data.redirect_url || COMPLETED_URL;
+                        return;
+                    }
+                    if (data.status === 'success') {
+                        showSyncStatus('Connected', 'text-success');
+                        if (typeof data.remaining_seconds === 'number') {
+                            remainingSeconds = data.remaining_seconds;
+                        }
+                    }
+                })
+                .catch(err => {
+                    console.error('Save failed:', err);
+                    showSyncStatus('Reconnecting...', 'text-danger');
+                });
+
+                // Advance to target question
+                if (targetIndex !== null && targetIndex >= 0 && targetIndex < questions.length) {
+                    renderQuestion(targetIndex);
+                }
+            }
+
+            // Sync Status Indicator Helper
+            function showSyncStatus(text, colorClass) {
+                syncIndicator.innerHTML = `<i class="bi bi-circle-fill ${colorClass} me-1" style="font-size: 8px;"></i> ${text}`;
+            }
+
+            // 5. Update Palette Counters
+            function updateCounters() {
+                let answered = 0;
+                let notAnswered = 0;
+                let notVisited = 0;
+                let markedReview = 0;
+
+                questions.forEach(q => {
+                    if (q.palette_status === 'answered' || q.palette_status === 'answered_and_marked') {
+                        answered++;
+                    }
+                    if (q.palette_status === 'not_answered') {
+                        notAnswered++;
+                    }
+                    if (q.palette_status === 'not_visited') {
+                        notVisited++;
+                    }
+                    if (q.palette_status === 'marked_for_review' || q.palette_status === 'answered_and_marked') {
+                        markedReview++;
+                    }
+                });
+
+                countAnsweredEl.textContent = answered;
+                countNotAnsweredEl.textContent = notAnswered;
+                countNotVisitedEl.textContent = notVisited;
+                countMarkedReviewEl.textContent = markedReview;
+
+                // Also update modal stats
+                document.getElementById('modal-answered-count').textContent = answered;
+                document.getElementById('modal-unanswered-count').textContent = (questions.length - answered);
+            }
+
+            // 6. Action Button Event Listeners
+            document.getElementById('btn-save-next').addEventListener('click', () => {
+                const nextIdx = (currentIndex + 1 < questions.length) ? currentIndex + 1 : currentIndex;
+                saveAndNavigate(nextIdx, 'save_next');
+            });
+
+            document.getElementById('btn-prev-question').addEventListener('click', () => {
+                if (currentIndex > 0) {
+                    saveAndNavigate(currentIndex - 1, 'navigate');
+                }
+            });
+
+            document.getElementById('btn-clear-response').addEventListener('click', () => {
+                const q = questions[currentIndex];
+                q.selected_option_id = null;
+                document.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected'));
+                saveAndNavigate(null, 'clear');
+            });
+
+            document.getElementById('btn-mark-review').addEventListener('click', () => {
+                const nextIdx = (currentIndex + 1 < questions.length) ? currentIndex + 1 : currentIndex;
+                saveAndNavigate(nextIdx, 'mark_review');
+            });
+
+            // 7. Server Countdown Timer & Auto-Submit
+            function startCountdown() {
+                function updateTimerDisplay() {
+                    if (remainingSeconds <= 0) {
+                        clearInterval(activeTimer);
+                        timerEl.textContent = "00:00:00";
+                        autoSubmitExam(true);
+                        return;
+                    }
+
+                    const hrs = Math.floor(remainingSeconds / 3600);
+                    const mins = Math.floor((remainingSeconds % 3600) / 60);
+                    const secs = remainingSeconds % 60;
+
+                    const formatted = `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+                    timerEl.textContent = formatted;
+
+                    // Warning animation when less than 5 minutes remain
+                    if (remainingSeconds < 300) {
+                        timerEl.classList.add('timer-warning');
+                    } else {
+                        timerEl.classList.remove('timer-warning');
+                    }
+
+                    remainingSeconds--;
+                }
+
+                updateTimerDisplay();
+                activeTimer = setInterval(updateTimerDisplay, 1000);
+            }
+
+            // 8. Server Timer Heartbeat (Every 30 seconds)
+            function initHeartbeat() {
+                setInterval(() => {
+                    fetch(SYNC_URL, {
+                        headers: {
+                            'X-Requested-With': 'XMLHttpRequest'
+                        }
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'expired') {
+                            window.location.href = data.redirect_url || COMPLETED_URL;
+                            return;
+                        }
+                        if (typeof data.remaining_seconds === 'number') {
+                            // Sync client timer with authoritative server time
+                            remainingSeconds = data.remaining_seconds;
+                        }
+                    })
+                    .catch(() => {});
+                }, 30000);
+            }
+
+            // 9. Anti-Cheat Monitoring & Signals
+            function initAntiCheat() {
+                // Request fullscreen on page load / first click
+                document.addEventListener('click', () => {
+                    if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+                        document.documentElement.requestFullscreen().catch(() => {});
+                    }
+                }, { once: true });
+
+                // Visibility Change (Tab switch)
+                document.addEventListener('visibilitychange', () => {
+                    if (document.hidden) {
+                        logSecurityEvent('TAB_SWITCH', 'Candidate switched tabs or minimized window.');
+                        showSecurityWarning('Warning: Tab switch detected. This event has been recorded.');
+                    }
+                });
+
+                // Window Blur (Focus loss)
+                window.addEventListener('blur', () => {
+                    logSecurityEvent('WINDOW_BLUR', 'Examination window focus lost.');
+                });
+
+                // Fullscreen Exit Detection
+                document.addEventListener('fullscreenchange', () => {
+                    if (!document.fullscreenElement) {
+                        logSecurityEvent('FULLSCREEN_EXIT', 'Candidate exited full-screen mode.');
+                        showSecurityWarning('Warning: Exiting full screen is monitored.');
+                    }
+                });
+
+                // Copy-Paste Restrictions
+                ['copy', 'cut', 'paste'].forEach(evt => {
+                    document.addEventListener(evt, (e) => {
+                        e.preventDefault();
+                        logSecurityEvent('COPY_ATTEMPT', `Attempted ${evt} operation.`);
+                        showSecurityWarning(`Notice: ${evt.toUpperCase()} operation is disabled during examination.`);
+                    });
+                });
+            }
+
+            function logSecurityEvent(eventType, details) {
+                fetch(LOG_EVENT_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': CSRF_TOKEN,
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: JSON.stringify({
+                        event_type: eventType,
+                        details: details
+                    })
+                }).catch(() => {});
+            }
+
+            function showSecurityWarning(msg) {
+                const toastEl = document.getElementById('securityToast');
+                document.getElementById('security-toast-message').textContent = msg;
+                const toast = new bootstrap.Toast(toastEl, { delay: 4000 });
+                toast.show();
+            }
+
+            // 10. Submission Flow (Manual & Timeout)
+            const submitModal = new bootstrap.Modal(document.getElementById('submitModal'));
+            document.getElementById('btn-open-submit-modal').addEventListener('click', () => {
+                updateCounters();
+                submitModal.show();
+            });
+
+            document.getElementById('btn-confirm-submit').addEventListener('click', () => {
+                submitModal.hide();
+                autoSubmitExam(false);
+            });
+
+            function autoSubmitExam(isTimeout = false) {
+                if (isSubmitting) return;
+                isSubmitting = true;
+                clearInterval(activeTimer);
+
+                // Show submitting overlay
+                const submitBtn = document.getElementById('btn-confirm-submit');
+                if (submitBtn) submitBtn.disabled = true;
+
+                fetch(SUBMIT_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': CSRF_TOKEN,
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: JSON.stringify({ is_timeout: isTimeout })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    window.location.href = data.redirect_url || COMPLETED_URL;
+                })
+                .catch(() => {
+                    // Fallback to direct navigation
+                    window.location.href = COMPLETED_URL;
+                });
+            }
+
+            // Launch Engine on DOM Load
+            document.addEventListener('DOMContentLoaded', initEngine);
+        })();
+    </script>
+</body>
+</html>
+

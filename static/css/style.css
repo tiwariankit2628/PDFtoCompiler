@@ -1,0 +1,173 @@
+/* -------------------------------------------------------------------------
+   Commercial CBT Examination Platform - Custom Stylesheet
+   Designed for high-performance, modern educational SaaS aesthetics
+   ------------------------------------------------------------------------- */
+
+:root {
+  --cbt-primary: #1e3a8a;
+  --cbt-primary-dark: #0f172a;
+  --cbt-accent: #2563eb;
+  --cbt-accent-hover: #1d4ed8;
+  --cbt-success: #059669;
+  --cbt-warning: #d97706;
+  --cbt-danger: #dc2626;
+  --cbt-bg-light: #f8fafc;
+  --cbt-card-border: #e2e8f0;
+  --cbt-text-dark: #1e293b;
+  --cbt-text-muted: #64748b;
+  --cbt-shadow-sm: 0 1px 3px rgba(0,0,0,0.05);
+  --cbt-shadow-md: 0 4px 6px -1px rgba(0,0,0,0.08), 0 2px 4px -2px rgba(0,0,0,0.04);
+  --cbt-shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.08), 0 4px 6px -4px rgba(0,0,0,0.03);
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: var(--cbt-text-dark);
+  background-color: var(--cbt-bg-light);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Navbar */
+.navbar-cbt {
+  background-color: #ffffff;
+  border-bottom: 1px solid var(--cbt-card-border);
+  padding: 0.85rem 1rem;
+}
+
+.navbar-brand-badge {
+  font-size: 0.72rem;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  background-color: #eff6ff;
+  color: var(--cbt-accent);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+/* Hero Section */
+.hero-gradient {
+  background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 55%, #1d4ed8 100%);
+  color: #ffffff;
+  padding: 5.5rem 0 4.5rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.hero-gradient::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: radial-gradient(circle at 80% 20%, rgba(255,255,255,0.08) 0%, transparent 60%);
+  pointer-events: none;
+}
+
+/* Feature & Category Cards */
+.card-hover-effect {
+  border: 1px solid var(--cbt-card-border);
+  border-radius: 12px;
+  transition: transform 0.22s ease, box-shadow 0.22s ease;
+  background-color: #ffffff;
+}
+
+.card-hover-effect:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--cbt-shadow-lg);
+  border-color: #cbd5e1;
+}
+
+.icon-box-primary {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  background-color: #eff6ff;
+  color: var(--cbt-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  margin-bottom: 1rem;
+}
+
+/* Buttons */
+.btn-cbt-primary {
+  background-color: var(--cbt-accent);
+  border-color: var(--cbt-accent);
+  color: #ffffff;
+  font-weight: 500;
+  padding: 0.55rem 1.35rem;
+  border-radius: 8px;
+  transition: all 0.18s ease-in-out;
+}
+
+.btn-cbt-primary:hover {
+  background-color: var(--cbt-accent-hover);
+  border-color: var(--cbt-accent-hover);
+  color: #ffffff;
+}
+
+.btn-cbt-outline {
+  border: 1px solid var(--cbt-card-border);
+  background-color: #ffffff;
+  color: var(--cbt-text-dark);
+  font-weight: 500;
+  padding: 0.55rem 1.35rem;
+  border-radius: 8px;
+  transition: all 0.18s ease-in-out;
+}
+
+.btn-cbt-outline:hover {
+  background-color: #f1f5f9;
+  border-color: #cbd5e1;
+  color: var(--cbt-accent);
+}
+
+/* Auth Cards */
+.auth-wrapper {
+  min-height: calc(100vh - 160px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2.5rem 1rem;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 480px;
+  background: #ffffff;
+  border: 1px solid var(--cbt-card-border);
+  border-radius: 14px;
+  box-shadow: var(--cbt-shadow-md);
+  padding: 2rem;
+}
+
+/* Dashboard Badges & Indicators */
+.role-badge-super { background-color: #fef2f2; color: #b91c1c; }
+.role-badge-admin { background-color: #eff6ff; color: #1d4ed8; }
+.role-badge-teacher { background-color: #f0fdf4; color: #15803d; }
+.role-badge-student { background-color: #fdf4ff; color: #86198f; }
+
+/* Footer */
+.footer-cbt {
+  margin-top: auto;
+  background-color: #0f172a;
+  color: #94a3b8;
+  padding: 3rem 0 2rem;
+  border-top: 1px solid #1e293b;
+}
+
+.footer-cbt a {
+  color: #cbd5e1;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.footer-cbt a:hover {
+  color: #ffffff;
+}
+
