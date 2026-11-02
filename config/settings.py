@@ -57,7 +57,6 @@ DJANGO_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
-    "whitenoise.runserver_nostatic",
     "django.contrib.staticfiles",
     "django.contrib.humanize",
 ]
@@ -174,6 +173,8 @@ USE_TZ = True
 # STATIC & MEDIA FILES
 # ------------------------------------------------------------------------------
 STATIC_URL = "/static/"
+# Django's development staticfiles handler uses these finders; WhiteNoise serves
+# the collected manifest from STATIC_ROOT in production.
 STATICFILES_DIRS = [BASE_DIR / "static"]
 STATIC_ROOT = BASE_DIR / "staticfiles"
 

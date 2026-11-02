@@ -23,30 +23,19 @@ class BrowserPracticeSmokeTests(StaticLiveServerTestCase):
     @classmethod
     def setUpClass(cls):
         cls.workspace = tempfile.TemporaryDirectory(prefix="practice-browser-test-")
+        cls.addClassCleanup(cls.workspace.cleanup)
         root = Path(cls.workspace.name)
-        cls.test_settings = override_settings(
+        # LiveServerTestCase also overrides settings; let class cleanups unwind
+        # those contexts in reverse order instead of leaking the test settings.
+        cls.enterClassContext(override_settings(
             PRIVATE_PRACTICE_ROOT=str(root / "private"),
             MEDIA_ROOT=str(root / "media"),
             CELERY_TASK_ALWAYS_EAGER=True,
             PDF_CLOUD_ENABLED=False,
             RAZORPAY_KEY_ID="", RAZORPAY_KEY_SECRET="", RAZORPAY_WEBHOOK_SECRET="",
             PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"],
-        )
-        cls.test_settings.enable()
-        try:
-            super().setUpClass()
-        except Exception:
-            cls.test_settings.disable()
-            cls.workspace.cleanup()
-            raise
-
-    @classmethod
-    def tearDownClass(cls):
-        try:
-            super().tearDownClass()
-        finally:
-            cls.test_settings.disable()
-            cls.workspace.cleanup()
+        ))
+        super().setUpClass()
 
     def test_pdf_to_result_reattempt_report_and_bank_in_chromium(self):
         if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):

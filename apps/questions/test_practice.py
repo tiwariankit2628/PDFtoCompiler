@@ -765,13 +765,14 @@ class StudentPracticeTests(TestCase):
 
 @override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"])
 class PrivateAttemptConcurrencyTests(TransactionTestCase):
-    """Two real DB connections racing to start cannot create two active timers."""
+    """Racing starts share one timer; SQLite may safely ask one client to retry."""
     def test_simultaneous_start_requests_share_one_attempt(self):
         from concurrent.futures import ThreadPoolExecutor
         from threading import Barrier
         from django.db import close_old_connections
         from django.test import Client
         from apps.exams.models import Category
+        from apps.payments.models import PracticeUsage
         from .models import QuestionOption
 
         student = User.objects.create_user(username="race", email="race@example.test", password="x", role=User.Roles.STUDENT)
@@ -794,12 +795,25 @@ class PrivateAttemptConcurrencyTests(TransactionTestCase):
             barrier.wait(timeout=10)
             response = client.post(reverse("exams:exam_start", args=[exam.slug]))
             close_old_connections()
-            return response.status_code, response.url
+            return response.status_code, response.get("Location"), response.get("Retry-After")
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(post, clients))
-        self.assertEqual([status for status, _ in results], [302, 302])
-        self.assertEqual(results[0][1], results[1][1])
+        self.assertTrue(all(status in (302, 503) for status, _, _ in results), results)
+        self.assertIn(302, [status for status, _, _ in results])
         self.assertEqual(ExamAttempt.objects.filter(exam=exam, status="in_progress").count(), 1)
         attempt = ExamAttempt.objects.get(exam=exam)
+        session_url = reverse("exams:exam_session", args=[attempt.attempt_uuid])
+        for index, (status, location, retry_after) in enumerate(results):
+            if status == 503:
+                self.assertEqual(retry_after, "1")
+                # Once contention has cleared, the same client resumes the
+                # original attempt rather than creating a new timer or quota use.
+                response = clients[index].post(reverse("exams:exam_start", args=[exam.slug]))
+                self.assertEqual(response.status_code, 302)
+                location = response.url
+            self.assertEqual(location, session_url)
+        attempt.refresh_from_db()
         self.assertEqual(attempt.expires_at - attempt.started_at, timedelta(minutes=45))
+        self.assertEqual(ExamAttempt.objects.filter(exam=exam).count(), 1)
+        self.assertEqual(PracticeUsage.objects.get(user=student).attempts, 1)

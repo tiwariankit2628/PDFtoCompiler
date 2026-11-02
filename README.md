@@ -1,7 +1,7 @@
 # TestForge CBT — Commercial-Grade Online Examination Platform
 
 [![Django](https://img.shields.io/badge/Django-5.2%20LTS-092E20?logo=django)](https://www.djangoproject.com/)
-[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.10%E2%80%933.14-3776AB?logo=python)](https://www.python.org/)
 [![Bootstrap](https://img.shields.io/badge/Bootstrap-5.3-7952B3?logo=bootstrap)](https://getbootstrap.com/)
 [![License](https://img.shields.io/badge/License-Proprietary-blue.svg)]()
 
@@ -76,10 +76,12 @@ Run the suite with `python manage.py test`; no real payment or OCR-provider call
 
 ```sh
 (cd tests/browser && npm ci)
-RUN_BROWSER_E2E=1 CHROMIUM_PATH=/path/to/chromium python manage.py test apps.questions.test_browser_practice
+RUN_BROWSER_E2E=1 CHROMIUM_PATH=/path/to/chromium python manage.py test apps.questions.test_browser_practice apps.core.test_static_browser
 ```
 
-The browser test starts Django's isolated test server/database, generates a synthetic PDF with images, and uses temporary private storage. It checks registration, upload/review, autosave/refresh, CBT, results, report, reattempt/privacy, history, bank, quotas UI and the unconfigured payment state without contacting providers. It deletes its temporary test data afterward. Some container-only Chromium distributions also require system libraries, `LD_LIBRARY_PATH`, and `CHROMIUM_SINGLE_PROCESS=1`.
+The practice browser test starts an isolated test server/database, generates a synthetic PDF with images, and uses temporary private storage. It checks registration, upload/review, autosave/refresh, CBT, results, report, reattempt/privacy, history, bank, quotas UI and the unconfigured payment state without contacting providers. The static/UI browser test collects production assets into a temporary directory and uses WhiteNoise (not Django's development static handler) to check public pages, all four role dashboards, mobile menus, exam actions, KaTeX, Chart.js and the browser console at desktop and mobile widths. Both delete temporary test data afterward. Some container-only Chromium distributions also require system libraries, `LD_LIBRARY_PATH`, and `CHROMIUM_SINGLE_PROCESS=1`.
+
+On PowerShell, set the environment variables before the same `python manage.py test ...` command: `$env:RUN_BROWSER_E2E="1"` and `$env:CHROMIUM_PATH="C:\path\to\chrome.exe"`.
 
 ---
 
@@ -136,16 +138,18 @@ TESTgen/
 
 ---
 
-## 2. Environment Diagnostics & Service Status
+## 2. Environment Requirements & Checks
 
-| Service / Dependency | Required For | System Detection Status | Configuration Strategy |
-| :--- | :--- | :--- | :--- |
-| **Python** | Runtime | **Installed: Python 3.12.10** | Active in `venv` |
-| **Django** | Web Framework | **Installed: Django 5.2.18 LTS** | Pinned in `requirements.txt` |
-| **PostgreSQL** | Primary Database | **Not Running on 5432** | Dual-mode: SQLite fallback for local dev; switches to PostgreSQL when `DB_ENGINE=postgres` is set. |
-| **Tesseract OCR** | Scanned PDF Extraction | **Not Detected in PATH** | PyTesseract wrapper installed. Path configurable via `TESSERACT_CMD` in `.env`. |
-| **Redis** | Celery Message Broker | **Not Running on 6379** | `CELERY_ALWAYS_EAGER=True` for synchronous background task execution during dev and testing. |
-| **Razorpay** | Test-mode practice billing | **SDK installed; real transaction not verified** | Supply test credentials and webhook secret in server environment; unconfigured or live keys are rejected. |
+| Service / Dependency | Use | Configuration |
+| :--- | :--- | :--- |
+| **Python** | Runtime | Django 5.2 supports Python 3.10–3.14; Python 3.14 is recommended for a new installation. Check `python --version` locally. |
+| **Django** | Web framework | Pinned in `requirements.txt`. |
+| **PostgreSQL** | Production database | SQLite is the development default; set `DB_ENGINE=postgres` and the database settings for PostgreSQL. |
+| **Tesseract OCR** | Scanned PDFs | Install the executable and required language packs separately; configure `TESSERACT_CMD` if needed. |
+| **Redis / Celery** | Background work | A shared broker and worker/beat are needed for background tasks; development defaults to eager execution. |
+| **Razorpay** | Test-mode practice billing | Configure test credentials server-side. Automated tests mock provider APIs; a real test-mode transaction has not been verified. |
+
+These are requirements, not a live detection report for your computer.
 
 ---
 
@@ -158,9 +162,9 @@ The platform enforces strict role-based access control with four distinct roles:
 3. **Teacher / Content Manager**: Scoped strictly to permitted categories and self-authored tests.
 4. **Student**: Candidate practice portal, performance summary, attempt history, free trial tracking.
 
-### Pre-Seeded Local Accounts
+### Optional Local Demo Accounts
 
-Provisioned via `python manage.py seed_admin`:
+`python manage.py seed_admin` creates these accounts if they do not exist. The passwords are public and predictable: **use them only in an isolated local development database, never in production**:
 
 | Role | Username | Password | Email |
 | :--- | :--- | :--- | :--- |
@@ -172,25 +176,42 @@ Provisioned via `python manage.py seed_admin`:
 
 ## 4. Setup & Execution Instructions
 
+For a new Windows installation (PowerShell), from the project folder:
+
 ```powershell
-# 1. Activate Virtual Environment
-.\venv\Scripts\Activate.ps1
-
-# 2. Run Database Migrations
+py -3.14 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 python manage.py migrate
-
-# 3. Seed Default Categories & Accounts
-python manage.py seed_categories
-python manage.py seed_admin
-
-# 4. Run Automated Tests
-python manage.py test
-
-# 5. Start Development Server
 python manage.py runserver 127.0.0.1:8000
 ```
-Visit `http://127.0.0.1:8000/` in your browser.
 
+On macOS/Linux, create the environment with `python3.14 -m venv .venv`, activate it with `source .venv/bin/activate`, and run the same `pip`, `migrate` and `runserver` commands. If needed, copy `.env.example` to `.env` **only when `.env` does not already exist**. Use `DEBUG=True` for local development; do not use development secrets or debug mode in production. Visit `http://127.0.0.1:8000/`. Install a supported Python version and the project requirements first; Python 3.14 itself has not been exercised by the current automated test environment.
+
+To update an existing checkout, back up any local work and data, check `git status`, then fetch and fast-forward the intended branch. Do not overwrite an existing `.env`, database, media, or private files:
+
+```sh
+git fetch origin
+git switch <your-branch>
+git pull --ff-only origin <your-branch>
+python -m pip install -r requirements.txt
+python manage.py migrate
+```
+
+`python manage.py seed_categories` and `python manage.py seed_admin` are optional demo-data commands, not required for styling or migration; avoid demo credentials outside an isolated local database. Run `python manage.py test` for the automated suite.
+
+### Static files and troubleshooting
+
+Bootstrap, Bootstrap Icons, KaTeX and Chart.js are bundled under `static/vendor/` along with their referenced fonts and source maps. Development uses Django's `staticfiles` finders; it does not need a CDN or `collectstatic`. `STATIC_URL` is `/static/`, and `STATICFILES_DIRS` includes the project `static/` directory. Check, for example:
+
+```sh
+python manage.py findstatic vendor/bootstrap/bootstrap.min.css --verbosity 2
+```
+
+In a production environment configured with `DEBUG=False`, run **`python manage.py collectstatic --noinput` after every asset update**, then deploy/restart the application with the resulting `STATIC_ROOT` available to WhiteNoise. Production uses compressed manifest storage, which fingerprints filenames and rewrites references to fonts and source maps. Do not add an upstream pre-collection `integrity` hash to these same-origin bundled files: it does not match the rewritten bytes and the browser will block the asset. If assets are served by a separate CDN or proxy, configure it to serve the collected manifest and files consistently. Production HTTPS, secrets, storage and proxy settings still require proper deployment configuration; `runserver --insecure` is not a production static server.
+
+If a local page still looks unstyled, confirm the checkout/branch and `DEBUG` value, restart `runserver`, and hard-refresh the browser. In the browser's Network and Console tabs, check that `/static/vendor/bootstrap/bootstrap.min.css`, the Bootstrap JS bundle, icon font and `css/style.css` load successfully; with `DEBUG=False` their URLs contain fingerprinted names. A 404 usually means the files or collected output are missing or the server is serving the wrong directory. A browser integrity error indicates stale/mismatched markup or cached assets; redeploy the matching templates and collected assets, restart the server, and clear relevant browser/proxy caches. Do not delete user databases, uploads or private files as a troubleshooting step.
 ---
 
 ## PDF extraction: setup, privacy and review

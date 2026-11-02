@@ -28,7 +28,6 @@
             user-select: none;
             -webkit-user-select: none;
             -moz-user-select: none;
-            overflow-x: hidden;
             font-family: system-ui, -apple-system, "Segoe UI", Roboto, "CBT Devanagari", sans-serif;
         }
         /* Top Examination Bar */
@@ -188,6 +187,32 @@
             bottom: 0;
             z-index: 1020;
         }
+        .cbt-topbar > div:first-child { min-width: 0; }
+        .exam-title, .candidate-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .exam-title { max-width: 30vw; }
+        .candidate-name { max-width: 180px; }
+        #question-statement-box, #options-container { overflow-wrap: anywhere; }
+        .option-text { min-width: 0; }
+        /* Allow long inline equations to wrap without overlapping tall fractions. */
+        #question-statement-box.has-math, .option-card.has-math .option-text { line-height: 2.2 !important; }
+        .katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+
+        /* At phone widths the full palette follows the question, and every
+           action remains visible rather than being clipped off-screen. */
+        @media (max-width: 767.98px) {
+            .cbt-topbar { height: auto; min-height: 60px; padding: .5rem .75rem; gap: .5rem; }
+            .cbt-topbar > div:first-child { flex: 1 1 auto; }
+            .cbt-topbar > div:last-child { flex-shrink: 0; gap: .5rem !important; }
+            #active-section-badge { white-space: normal; overflow-wrap: anywhere; text-align: left; }
+            .timer-box { font-size: 1rem; letter-spacing: 0; padding: .3rem .45rem; }
+            .cbt-topbar .bi-clock-history { display: none; }
+            #btn-open-submit-modal { padding: .35rem .6rem !important; }
+            .question-pane, .palette-pane { height: auto; overflow: visible; padding: 1rem; }
+            .palette-pane { border-left: 0; border-top: 2px solid #e2e8f0; }
+            .cbt-footer { height: auto; flex-direction: column; gap: .5rem; padding: .65rem .75rem; }
+            .cbt-footer > div { width: 100%; }
+            .cbt-footer button { flex: 1 1 0; min-width: 0; padding-inline: .5rem !important; }
+        }
     </style>
 </head>
 <body oncontextmenu="return false;">
@@ -195,7 +220,7 @@
     <!-- 1. TOP EXAMINATION BAR -->
     <header class="cbt-topbar">
         <div class="d-flex align-items-center gap-2">
-            <span class="fw-bold text-dark fs-6 d-none d-md-inline">{{ exam.title|truncatechars:45 }}</span>
+            <span class="fw-bold text-dark fs-6 d-none d-md-inline exam-title">{{ exam.title|truncatechars:45 }}</span>
             <span class="badge bg-primary text-uppercase px-2 py-1" id="active-section-badge">Section: General</span>
             <span class="badge bg-light text-muted border d-none d-sm-inline" id="sync-indicator">
                 <i class="bi bi-circle-fill text-success me-1" style="font-size: 8px;"></i> Connected
@@ -215,7 +240,7 @@
                     {{ request.user.first_name|default:request.user.username|slice:":1"|upper }}
                 </div>
                 <div class="lh-1 text-start">
-                    <small class="fw-bold d-block text-dark">{{ request.user.get_full_name|default:request.user.username }}</small>
+                    <small class="fw-bold d-block text-dark candidate-name">{{ request.user.get_full_name|default:request.user.username }}</small>
                     <span class="text-muted" style="font-size: 11px;">Candidate</span>
                 </div>
             </div>
@@ -232,7 +257,7 @@
         <div class="row g-0">
             <!-- Question Content Area (Left 75%) -->
             <div class="col-lg-9 col-md-8 question-pane bg-white" id="question-container">
-                <div class="d-flex justify-content-between align-items-center border-bottom pb-2 mb-3">
+                <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center border-bottom pb-2 mb-3">
                     <h5 class="fw-bold text-dark mb-0" id="question-heading">
                         Question No. <span id="current-q-num">1</span>
                     </h5>
@@ -571,6 +596,7 @@
                         ],
                         throwOnError: false
                     });
+                    elem.classList.toggle('has-math', !!elem.querySelector('.katex'));
                 }
             }
 
