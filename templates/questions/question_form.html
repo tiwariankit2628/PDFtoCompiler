@@ -1,15 +1,18 @@
 {% extends 'dashboard_base.html' %}
+{% load static %}
 
 {% block title %}{% if form.instance.pk %}Edit Question #{{ form.instance.pk }}{% else %}Create New Question{% endif %} | {{ PLATFORM_NAME }}{% endblock %}
 
 {% block extra_head %}
 <!-- KaTeX for live mathematical preview -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous">
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3TX4437n" crossorigin="anonymous"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZko/WgHgoVICvIK1Pe49yi36XXgn74CEvTxmKjH" crossorigin="anonymous" onload="renderMathInElement(document.body);"></script>
+<link rel="stylesheet" href="{% static 'vendor/katex/katex.min.css' %}">
+<script defer src="{% static 'vendor/katex/katex.min.js' %}"></script>
+<script defer src="{% static 'vendor/katex/contrib/auto-render.min.js' %}" onload="renderMathInElement(document.body, {delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false},{left:'\\[',right:'\\]',display:true}],throwOnError:false});"></script>
 {% endblock %}
 
 {% block dashboard_content %}
+{% if question %}<div class="alert alert-info small">Additional question and option images are preserved when editing text. <a href="{% url 'questions:bank_figure_manage' question.pk %}">Manage images or crop from source</a>.</div>{% endif %}
+
 <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom">
     <div>
         <div class="d-flex align-items-center gap-2 mb-1">
@@ -90,6 +93,7 @@
                 <div class="card-body">
                     <div class="mb-3">
                         {{ form.question_text }}
+                        <div class="mt-3"><label class="form-label fw-semibold" for="{{ form.tables_json.id_for_label }}">{{ form.tables_json.label }}</label>{{ form.tables_json }}<div class="form-text">{{ form.tables_json.help_text }}</div>{% if form.tables_json.errors %}<div class="text-danger small">{{ form.tables_json.errors|striptags }}</div>{% endif %}</div>
                         {% if form.question_text.errors %}<div class="text-danger small mt-1">{{ form.question_text.errors.0 }}</div>{% endif %}
                         <div class="form-text small">Tip: Write mathematical formulas using standard LaTeX syntax, e.g. <code>$r = \frac{mv}{qB}$</code> or <code>$\int_0^\pi \sin(x)dx$</code>.</div>
                     </div>
@@ -118,7 +122,7 @@
                     <div class="row g-3">
                         <!-- Option A -->
                         <div class="col-12">
-                            <label class="form-label small fw-bold text-dark">Option A <span class="text-danger">*</span></label>
+                            <label class="form-label small fw-bold text-dark">Option A</label>
                             <div class="input-group">
                                 <span class="input-group-text bg-light fw-bold text-dark">A</span>
                                 {{ form.option_text_A }}
@@ -128,7 +132,7 @@
 
                         <!-- Option B -->
                         <div class="col-12">
-                            <label class="form-label small fw-bold text-dark">Option B <span class="text-danger">*</span></label>
+                            <label class="form-label small fw-bold text-dark">Option B</label>
                             <div class="input-group">
                                 <span class="input-group-text bg-light fw-bold text-dark">B</span>
                                 {{ form.option_text_B }}
@@ -155,6 +159,11 @@
                             </div>
                             {% if form.option_text_D.errors %}<div class="text-danger small mt-1">{{ form.option_text_D.errors.0 }}</div>{% endif %}
                         </div>
+                        <div class="col-12">
+                            <label class="form-label small fw-bold text-dark">Option E (Optional)</label>
+                            <div class="input-group"><span class="input-group-text bg-light fw-bold text-dark">E</span>{{ form.option_text_E }}</div>
+                            {% if form.option_text_E.errors %}<div class="text-danger small mt-1">{{ form.option_text_E.errors.0 }}</div>{% endif %}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -180,7 +189,7 @@
                     <h6 class="fw-bold mb-0"><i class="bi bi-check2-circle me-2"></i> Answer Key</h6>
                 </div>
                 <div class="card-body">
-                    <label class="form-label small fw-bold">Select Correct Option <span class="text-danger">*</span></label>
+                    <label class="form-label small fw-bold">Select Correct Option (optional)</label>
                     {{ form.correct_option }}
                     {% if form.correct_option.errors %}<div class="text-danger small mt-1">{{ form.correct_option.errors.0 }}</div>{% endif %}
                     <div class="form-text small mt-2">

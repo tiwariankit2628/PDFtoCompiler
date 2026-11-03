@@ -5,6 +5,21 @@ from .models import User
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
+    def has_delete_permission(self, request, obj=None):
+        if obj and (obj.uploaded_papers.filter(is_student_private=True).exists()
+                    or obj.created_exams.filter(is_private_practice=True).exists()
+                    or obj.exam_attempts.filter(exam__is_private_practice=True).exists()
+                    or obj.practice_checkouts.exists()):
+            return False
+        return super().has_delete_permission(request, obj)
+
+    def get_actions(self, request):
+        # A bulk-delete confirmation would otherwise reveal private related
+        # objects and bypass per-user deletion protection.
+        actions = super().get_actions(request)
+        actions.pop("delete_selected", None)
+        return actions
+
     list_display = (
         "username",
         "email",

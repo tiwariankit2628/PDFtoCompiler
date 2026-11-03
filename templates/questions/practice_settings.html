@@ -1,0 +1,86 @@
+{% extends 'dashboard_base.html' %}
+{% load question_content static %}
+{% block title %}Review & create practice | {{ PLATFORM_NAME }}{% endblock %}
+{% block extra_head %}{% include 'questions/_practice_math.html' %}{% endblock %}
+{% block dashboard_content %}
+<div class="review-hero d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+  <div><a href="{% url 'questions:practice_list' %}" class="small review-hero-link">← My PDF practice</a><h2 class="fw-bold mt-2 mb-1">Review & test settings</h2><p class="review-hero-subtitle mb-0">{{ paper.title }} · {{ paper.get_status_display }}</p></div>
+  <a class="btn btn-light" href="{% url 'questions:practice_pdf' paper.pk %}" target="_blank" rel="noopener">Open source PDF</a>
+</div>
+{% if paper.status == 'pending' or paper.status == 'processing' %}
+<div class="alert alert-info">Extraction is in progress. <a href="">Refresh this page</a> to check again. Do not close or re-upload the paper.</div>
+{% else %}
+{% if paper.status == 'failed' %}<div class="alert alert-warning"><strong>Automatic extraction could not identify questions.</strong> You can add them manually or upload a different PDF. {{ paper.extraction_log|linebreaksbr }}</div>{% endif %}
+{% if extraction_warnings %}<div class="alert alert-warning small"><strong>Extraction warnings:</strong><ul class="mb-0">{% for warning in extraction_warnings %}<li>{{ warning }}</li>{% endfor %}</ul></div>{% endif %}
+{% if unassigned_figure_count %}<div class="alert alert-info small">{{ unassigned_figure_count }} image candidate{{ unassigned_figure_count|pluralize }} could not be assigned automatically. <a href="{% url 'questions:practice_figure_pool' paper.pk %}">Review the image pool</a> before creating your test.</div>{% endif %}
+<div class="alert alert-warning small">Check every question, formula, option and image against the original. Local extraction is not guaranteed accurate. Only single-answer multiple-choice questions are supported. AI suggestions are optional and are never treated as confirmed keys automatically.</div>
+<div class="row g-4 mb-4">
+  <div class="col-xl-7"><div class="card border shadow-sm p-4 h-100">
+    <h4 class="fw-bold">Set your duration</h4>
+    <form method="post" id="create-practice-form" novalidate>{% csrf_token %}
+      {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors|striptags }}</div>{% endif %}
+      <label class="form-label fw-semibold" for="{{ form.duration_minutes.id_for_label }}">Test duration (minutes) *</label>
+      <div class="d-flex flex-wrap gap-2 mb-2">{% for minutes in presets %}<button type="button" class="btn btn-outline-primary btn-sm duration-preset" data-minutes="{{ minutes }}" aria-pressed="false">{{ minutes }} min</button>{% endfor %}</div>
+      {{ form.duration_minutes }}<div class="form-text">{{ form.duration_minutes.help_text }} Choose a preset or enter your own whole minutes.</div>
+      {% if form.duration_minutes.errors %}<div class="text-danger small mt-1">{{ form.duration_minutes.errors|striptags }}</div>{% endif %}
+      <div class="mt-3"><label class="form-label fw-semibold" for="{{ form.passing_percentage.id_for_label }}">{{ form.passing_percentage.label }}</label>{{ form.passing_percentage }}<div class="form-text">{{ form.passing_percentage.help_text }}</div>{% if form.passing_percentage.errors %}<div class="text-danger small">{{ form.passing_percentage.errors|striptags }}</div>{% endif %}</div>
+      <div class="mt-4"><label class="form-label fw-semibold" for="{{ form.answer_key_text.id_for_label }}">{{ form.answer_key_text.label }}</label>{{ form.answer_key_text }}<div class="form-text">{{ form.answer_key_text.help_text }}</div>
+        {% if form.answer_key_text.errors %}<div class="text-danger small mt-1">{{ form.answer_key_text.errors|striptags }}</div>{% endif %}</div>
+      {% if flagged_count %}<div class="form-check mt-4">{{ form.acknowledge_review }}<label class="form-check-label" for="{{ form.acknowledge_review.id_for_label }}">{{ form.acknowledge_review.label }}</label>
+        {% if form.acknowledge_review.errors %}<div class="text-danger small">{{ form.acknowledge_review.errors|striptags }}</div>{% endif %}</div>{% endif %}
+      {% if unassigned_figure_count %}<div class="form-check mt-3">{{ form.acknowledge_unassigned }}<label class="form-check-label" for="{{ form.acknowledge_unassigned.id_for_label }}">{{ form.acknowledge_unassigned.label }}</label>
+        {% if form.acknowledge_unassigned.errors %}<div class="text-danger small">{{ form.acknowledge_unassigned.errors|striptags }}</div>{% endif %}</div>{% endif %}
+      <button class="btn btn-primary fw-semibold mt-4" {% if not total_questions %}disabled{% endif %}>Create private test</button>
+      <p class="small text-muted mt-2 mb-0">Duration and questions are fixed when created. You can take a new attempt later; resuming never resets an active timer.</p>
+    </form>
+  </div></div>
+  <div class="col-xl-5"><div class="card border shadow-sm p-4 h-100" aria-live="polite">
+    <h4 class="fw-bold">Test preview</h4>
+    <div class="d-flex justify-content-between border-bottom py-3"><span>Included questions</span><strong id="preview-questions">{{ total_questions }}</strong></div>
+    <div class="d-flex justify-content-between border-bottom py-3"><span>Total possible marks</span><strong id="preview-marks">{{ total_marks }}</strong></div>
+    <div class="d-flex justify-content-between border-bottom py-3"><span>Selected duration</span><strong id="preview-duration">{% if form.duration_minutes.value %}{{ form.duration_minutes.value }} minutes{% else %}Not selected{% endif %}</strong></div>
+    <div class="d-flex justify-content-between py-3"><span>Saved answer keys</span><strong>{{ keyed_count }} / {{ total_questions }}</strong></div>
+    <p class="small text-muted mb-1">The pasted key is applied on creation. Questions with no key will be shown as ungraded; the score will cover keyed questions only.</p>
+    {% if flagged_count %}<p class="small text-danger mb-0">{{ flagged_count }} included question{{ flagged_count|pluralize }} flagged for review.</p>{% endif %}
+  </div></div>
+</div>
+{% include 'questions/_ai_batch.html' %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"><div><h4 class="fw-bold mb-0">Extracted questions</h4><span class="small text-muted">Edit or exclude incomplete questions before creating the test.</span></div>
+  <form method="post" action="{% url 'questions:practice_question_add' paper.pk %}">{% csrf_token %}<button class="btn btn-outline-primary btn-sm">+ Add question manually</button></form>
+</div>
+{% for question in questions %}
+<div class="card border shadow-sm mb-3 {% if not question.include_in_practice %}opacity-75{% endif %}"><div class="card-body">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2"><div><strong>Question {{ question.question_number }}</strong> <span class="small text-muted">· page {{ question.page_number }}</span>
+    {% if not question.include_in_practice %}<span class="badge bg-secondary">Excluded</span>{% elif question.practice_error %}<span class="badge bg-danger">Needs editing</span>{% elif question.is_flagged %}<span class="badge bg-warning text-dark">Review</span>{% else %}<span class="badge bg-success">Ready</span>{% endif %}
+    {% if question.correct_option %}<span class="badge bg-light text-dark border">{{ question.get_answer_status_display }} · {{ question.correct_option }}</span>{% else %}<span class="badge bg-light text-dark border">Needs review · no key</span>{% endif %}{% if question.latest_ai.status == 'suggested' %} <span class="badge text-bg-info">AI suggested · unverified</span>{% endif %}</div>
+    <div class="d-flex flex-wrap gap-2"><a class="btn btn-sm btn-outline-primary" href="{% url 'questions:practice_answer_suggestion' question.pk %}">AI answer review</a><a class="btn btn-sm btn-outline-primary" href="{% url 'questions:practice_question_edit' question.pk %}">Edit</a><a class="btn btn-sm btn-outline-secondary" href="{% url 'questions:practice_figures' question.pk %}">Images</a>
+      <form method="post" action="{% url 'questions:practice_question_include' question.pk %}">{% csrf_token %}<button class="btn btn-sm btn-outline-secondary">{% if question.include_in_practice %}Exclude{% else %}Include{% endif %}</button></form></div></div>
+  <div class="ai-batch-select form-check small mb-2" hidden><input class="form-check-input" type="checkbox" id="batch-q-{{ question.pk }}" data-request-url="{% url 'questions:practice_answer_request' question.pk %}"><label class="form-check-label" for="batch-q-{{ question.pk }}">Select for AI batch<span class="ai-batch-outcome text-muted"></span></label></div>
+  <div>{{ question|render_question }}</div>
+  {% if question.private_image %}<img class="img-fluid border rounded my-2" style="max-height:220px" src="{% url 'questions:practice_extracted_image' question.pk %}" alt="Extracted question image">{% endif %}
+  {% for figure in question.figures.all %}{% if not figure.option_key and figure.private_image %}<img class="img-fluid border rounded my-2" style="max-height:220px" src="{% url 'questions:practice_figure_file' figure.pk %}" alt="Question image">{% endif %}{% endfor %}
+  <ul class="mt-2 mb-1 small">{% for option in question.options %}<li><strong>{{ option.key }}.</strong> {{ option.text }}{% for figure in question.figures.all %}{% if figure.option_key == option.key and figure.private_image %}<br><img class="img-fluid border my-1" style="max-height:140px" src="{% url 'questions:practice_figure_file' figure.pk %}" alt="Option {{ option.key }} image">{% endif %}{% endfor %}</li>{% endfor %}</ul>
+  <div class="small text-muted">+{{ question.positive_marks }} / −{{ question.negative_marks }} marks{% if question.is_flagged and question.flag_reason %} · {{ question.flag_reason }}{% endif %}</div>
+  {% if question.practice_error %}<div class="small text-danger mt-1">{{ question.practice_error }}</div>{% endif %}
+</div></div>
+{% empty %}<div class="text-muted">No questions extracted yet. Add one manually above.</div>{% endfor %}
+<script>
+(function () {
+  const input = document.getElementById('id_duration_minutes'), preview = document.getElementById('preview-duration');
+  function update() {
+    const n = input.value; preview.textContent = n ? n + ' minutes' : 'Not selected';
+    document.querySelectorAll('.duration-preset').forEach(button => {
+      const selected = button.dataset.minutes === n;
+      button.classList.toggle('active', selected); button.setAttribute('aria-pressed', String(selected));
+    });
+  }
+  document.querySelectorAll('.duration-preset').forEach(button => button.addEventListener('click', function () {
+    input.value = this.dataset.minutes; update(); input.focus();
+  }));
+  input.addEventListener('input', update); update();
+})();
+</script>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}<script src="{% static 'js/ai-batch.js' %}"></script>{% endblock %}

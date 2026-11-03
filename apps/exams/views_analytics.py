@@ -9,7 +9,7 @@ from decimal import Decimal
 
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
-from django.http import HttpResponse, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -23,7 +23,18 @@ from .models import Exam, ExamAttempt, ExamResponse
 from .pdf_generator import generate_student_scorecard_pdf
 
 
-class StudentResultDetailView(ActiveUserRequiredMixin, DetailView):
+class PrivateResultRedirectMixin:
+    """Private attempts never enter institutional result/analytics templates."""
+    def get(self, request, *args, **kwargs):
+        attempt = get_object_or_404(ExamAttempt.objects.select_related("exam"), attempt_uuid=kwargs["attempt_uuid"])
+        if attempt.exam.is_private_practice:
+            if attempt.student_id != request.user.pk or attempt.exam.creator_id != request.user.pk:
+                raise Http404()
+            return redirect("questions:practice_result", attempt_uuid=attempt.attempt_uuid)
+        return super().get(request, *args, **kwargs)
+
+
+class StudentResultDetailView(ActiveUserRequiredMixin, PrivateResultRedirectMixin, DetailView):
     """
     Detailed Student Result Scorecard and Diagnostic Dashboard.
     Displays marks, percentage, pass/fail status, accuracy, subject/topic analytics,
@@ -90,7 +101,7 @@ class StudentResultDetailView(ActiveUserRequiredMixin, DetailView):
         return context
 
 
-class StudentResultReviewView(ActiveUserRequiredMixin, DetailView):
+class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixin, DetailView):
     """
     Question-by-Question Solution & Answer Review Workspace.
     Allows candidates to review their selected answers, correct answers,
@@ -141,7 +152,7 @@ class StudentResultReviewView(ActiveUserRequiredMixin, DetailView):
                 "exam_question__question",
                 "selected_option",
             )
-            .prefetch_related("exam_question__question__options")
+            .prefetch_related("exam_question__question__options__figures", "exam_question__question__figures")
             .order_by("order")
         )
 
@@ -150,7 +161,7 @@ class StudentResultReviewView(ActiveUserRequiredMixin, DetailView):
         for r in responses:
             eq = r.exam_question
             q = eq.question
-            options = list(q.options.all().order_by("option_key"))
+            options = list(q.options.all())
 
             correct_option = next((opt for opt in options if opt.is_correct), None)
 
@@ -193,7 +204,7 @@ class StudentResultReviewView(ActiveUserRequiredMixin, DetailView):
         return context
 
 
-class StudentResultPdfView(ActiveUserRequiredMixin, View):
+class StudentResultPdfView(ActiveUserRequiredMixin, PrivateResultRedirectMixin, View):
     """
     Generates and downloads the official candidate scorecard PDF.
     Uses PyMuPDF (fitz) to create publication-quality vector reports.
@@ -205,6 +216,10 @@ class StudentResultPdfView(ActiveUserRequiredMixin, View):
             attempt_uuid=attempt_uuid,
         )
         user = request.user
+        if attempt.exam.is_private_practice:
+            if attempt.student_id != user.pk or attempt.exam.creator_id != user.pk:
+                raise Http404()
+            return redirect("questions:practice_result", attempt_uuid=attempt.attempt_uuid)
 
         # Access Control
         if attempt.student != user and not user.is_admin_role:
@@ -235,6 +250,9 @@ class ExamLeaderboardView(ActiveUserRequiredMixin, DetailView):
     context_object_name = "exam"
     slug_field = "slug"
     slug_url_kwarg = "slug"
+
+    def get_queryset(self):
+        return super().get_queryset().filter(is_private_practice=False)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -278,6 +296,8 @@ class TeacherExamAnalyticsView(TeacherRequiredMixin, DetailView):
 
     def get_object(self, queryset=None):
         exam = super().get_object(queryset)
+        if exam.is_private_practice:
+            raise Http404()
         user = self.request.user
 
         # Strict Teacher Category & Exam Ownership Scoping
@@ -319,7 +339,7 @@ class TeacherExportExamResultsCsvView(TeacherRequiredMixin, View):
     """
 
     def get(self, request, pk):
-        exam = get_object_or_404(Exam, pk=pk)
+        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False)
         user = request.user
 
         if not user.is_admin_role and exam.creator != user:

@@ -21,7 +21,9 @@
                 <span class="badge bg-white text-primary px-3 py-2 fw-bold text-uppercase">
                     <i class="bi bi-tag-fill me-1"></i> {{ exam.category.name }}
                 </span>
-                {% if exam.is_free %}
+                {% if exam.is_private_practice %}
+                    <span class="badge bg-success px-3 py-2 fw-bold">PRIVATE PRACTICE</span>
+                {% elif exam.is_free %}
                     <span class="badge bg-success px-3 py-2 fw-bold">FREE TEST</span>
                 {% else %}
                     <span class="badge bg-warning text-dark px-3 py-2 fw-bold">PREMIUM MOCK</span>
@@ -56,7 +58,7 @@
                     <div class="bg-white bg-opacity-10 rounded-3 p-3 text-center border border-white border-opacity-10">
                         <small class="text-white-50 d-block mb-1">Marking Scheme</small>
                         <h4 class="fw-bold mb-0 text-white">
-                            +{{ exam.default_positive_marks }} / -{{ exam.default_negative_marks }}
+                            {% if exam.is_private_practice %}Per question{% else %}+{{ exam.default_positive_marks }} / -{{ exam.default_negative_marks }}{% endif %}
                         </h4>
                     </div>
                 </div>
@@ -136,16 +138,19 @@
                     <h6 class="fw-bold text-dark mb-2">3. Server Timer & Auto-Submit:</h6>
                     <ul class="mb-4 ps-3">
                         <li class="mb-1">The server-synchronized countdown timer runs continuously in the top bar.</li>
-                        <li class="mb-1"><strong>Auto-Submit:</strong> When the countdown timer reaches zero, the examination will automatically submit, regardless of client browser activity.</li>
+                        <li class="mb-1"><strong>Auto-Submit:</strong> After the deadline, answers are locked and the attempt is submitted. Refreshing or reconnecting never extends its expiry.</li>
                         <li class="mb-1">Ensure your responses are saved before the final minutes elapse.</li>
                     </ul>
 
-                    <h6 class="fw-bold text-dark mb-2">4. Anti-Cheating & Proctoring Protocol:</h6>
+                    {% if exam.is_private_practice %}
+                    <h6 class="fw-bold text-dark mb-2">4. Private practice:</h6>
+                    <div class="alert alert-info small mb-0">Only questions with a confirmed answer key are graded. Selecting an option saves it automatically; keep an eye on the connection indicator. Practice attempts and their answers are not included in faculty results or public rankings.</div>
+                    {% else %}<h6 class="fw-bold text-dark mb-2">4. Anti-Cheating & Proctoring Protocol:</h6>
                     <div class="alert alert-warning border-warning p-3 rounded-3 small mb-0">
                         <i class="bi bi-shield-exclamation text-warning fs-5 me-2"></i>
                         <strong>Examination Proctoring Warning:</strong> This examination environment requests full-screen mode.
                         Tab switching, minimizing the browser, copy-paste keystrokes, and right-click context menu actions are strictly monitored and logged into your examination audit profile. Repeated violations may be flagged for faculty review.
-                    </div>
+                    </div>{% endif %}
                 </div>
             </div>
         </div>
@@ -168,13 +173,13 @@
                         <span class="text-muted">Sections:</span>
                         <span class="badge bg-light text-dark border">{{ sections|join:", " }}</span>
                     </li>
-                    <li class="list-group-item d-flex justify-content-between px-0">
+                    {% if not exam.is_private_practice %}<li class="list-group-item d-flex justify-content-between px-0">
                         <span class="text-muted">Passing Score:</span>
                         <strong class="text-success">{{ exam.passing_percentage }}%</strong>
-                    </li>
+                    </li>{% endif %}
                     <li class="list-group-item d-flex justify-content-between px-0">
                         <span class="text-muted">Attempt Limit:</span>
-                        <strong>{% if exam.max_attempts %}{{ completed_count }}/{{ exam.max_attempts }} Used{% else %}Unlimited{% endif %}</strong>
+                        <strong>{% if exam.is_private_practice %}{% if private_attempt_limit != None %}{{ completed_count }}/{{ private_attempt_limit }} used{% else %}Unlimited{% endif %}{% elif exam.max_attempts %}{{ completed_count }}/{{ exam.max_attempts }} Used{% else %}Unlimited{% endif %}</strong>
                     </li>
                 </ul>
 

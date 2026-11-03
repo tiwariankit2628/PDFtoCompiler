@@ -1,0 +1,15 @@
+{% extends 'dashboard_base.html' %}
+{% block title %}Edit practice question | {{ PLATFORM_NAME }}{% endblock %}
+{% block dashboard_content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4"><div><a href="{% url 'questions:practice_settings' question.paper_id %}" class="small">← Review paper</a><h2 class="fw-bold mt-2">Edit question {{ question.question_number }}</h2><span class="text-muted">Source page {{ question.page_number }}</span></div>
+  <div class="d-flex flex-wrap gap-2"><a class="btn btn-primary" href="{% url 'questions:practice_answer_suggestion' question.pk %}">AI answer review</a><a class="btn btn-outline-primary" href="{% url 'questions:practice_figures' question.pk %}">Manage images</a><a class="btn btn-outline-secondary" target="_blank" rel="noopener" href="{% url 'questions:practice_pdf' question.paper_id %}#page={{ question.page_number }}">Open source</a></div></div>
+<div class="alert alert-info small">You can attach images to the question or individual options. Answer keys are optional: leave blank if unknown. Marks apply only where a key is supplied.</div>
+{% if question.source_regions %}<details class="card border shadow-sm p-3 mb-3"><summary class="fw-semibold">Compare original question excerpts ({{ question.source_regions|length }})</summary><p class="small text-muted mt-2">These are original page regions, not regenerated images. A question may continue across columns or pages. Check all text, choices, tables and diagrams before confirming.</p><div class="d-flex flex-wrap gap-2">{% for region in question.source_regions %}<figure class="mb-0"><img loading="lazy" src="{% url 'questions:practice_source_region' question.pk forloop.counter0 %}" alt="Original question {{ question.question_number }}, page {{ region.page }}" class="img-fluid border rounded" style="max-height:480px"><figcaption class="small text-muted">Page {{ region.page }}</figcaption></figure>{% endfor %}</div></details>{% endif %}
+<form method="post" class="card border shadow-sm p-4">{% csrf_token %}
+  {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+  {% for field in form %}<div class="mb-3 {% if field.field.widget.input_type == 'checkbox' %}form-check{% endif %}">
+    {% if field.field.widget.input_type == 'checkbox' %}{{ field }}<label class="form-check-label" for="{{ field.id_for_label }}">{{ field.label }}</label>{% else %}<label class="form-label fw-semibold" for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{% endif %}
+    {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}{% if field.errors %}<div class="text-danger small">{{ field.errors|striptags }}</div>{% endif %}</div>{% endfor %}
+  <div><button class="btn btn-primary px-4">Save question</button> <a class="btn btn-outline-secondary" href="{% url 'questions:practice_settings' question.paper_id %}">Cancel</a></div>
+</form>
+{% endblock %}

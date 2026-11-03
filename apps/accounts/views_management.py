@@ -102,7 +102,7 @@ class StudentDetailView(AdminRequiredMixin, DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         student = self.get_object()
-        context["attempts"] = ExamAttempt.objects.filter(student=student).order_by("-started_at")
+        context["attempts"] = ExamAttempt.objects.filter(student=student, exam__is_private_practice=False).order_by("-started_at")
         context["total_attempts"] = context["attempts"].count()
         return context
 
@@ -173,7 +173,7 @@ class TeacherListView(AdminRequiredMixin, ListView):
         qs = (
             User.objects.filter(role=User.Roles.TEACHER)
             .prefetch_related("assigned_categories")
-            .annotate(exams_created_count=Count("created_exams"))
+            .annotate(exams_created_count=Count("created_exams", filter=Q(created_exams__is_private_practice=False)))
             .order_by("-date_joined")
         )
         query = self.request.GET.get("q", "").strip()
@@ -247,10 +247,10 @@ class TeacherDetailView(AdminRequiredMixin, DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         teacher = self.get_object()
-        context["created_exams"] = Exam.objects.filter(creator=teacher).order_by("-created_at")
+        context["created_exams"] = Exam.objects.filter(creator=teacher, is_private_practice=False).order_by("-created_at")
         context["total_exams"] = context["created_exams"].count()
         context["total_student_attempts"] = ExamAttempt.objects.filter(
-            exam__creator=teacher
+            exam__creator=teacher, exam__is_private_practice=False
         ).count()
         return context
 
@@ -420,7 +420,7 @@ class AdminUserDeleteView(SuperAdminRequiredMixin, View):
     """Super Admin deletes an Administrator account."""
 
     def post(self, request, pk):
-        admin_user = get_object_or_404(User, pk=pk)
+        admin_user = get_object_or_404(User, pk=pk, role__in=[User.Roles.ADMIN, User.Roles.SUPER_ADMIN])
 
         if admin_user == request.user:
             messages.error(request, "You cannot delete your own account.")
@@ -428,6 +428,12 @@ class AdminUserDeleteView(SuperAdminRequiredMixin, View):
 
         if admin_user.is_super_admin:
             messages.error(request, "Super Administrator accounts cannot be deleted.")
+            return redirect("accounts:admin_list")
+
+        if (admin_user.uploaded_papers.filter(is_student_private=True).exists()
+                or admin_user.created_exams.filter(is_private_practice=True).exists()
+                or admin_user.exam_attempts.filter(exam__is_private_practice=True).exists()):
+            messages.error(request, "Cannot delete an account that contains private practice data.")
             return redirect("accounts:admin_list")
 
         username = admin_user.username

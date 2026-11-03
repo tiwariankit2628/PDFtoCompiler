@@ -1,0 +1,10 @@
+{% extends 'dashboard_base.html' %}
+{% block title %}Edit question | {{ PLATFORM_NAME }}{% endblock %}
+{% block extra_head %}{% include 'questions/_practice_math.html' %}{% endblock %}
+{% block dashboard_content %}
+<div class="d-flex justify-content-between align-items-start gap-3 mb-4"><div><a class="small" href="{% url 'questions:practice_bank' %}">← My question bank</a><h2 class="fw-bold mt-2 mb-1">Edit bank question</h2><p class="text-muted mb-0">Existing tests keep their original version. Only enter a key you have checked.</p></div><form method="post" action="{% url 'questions:practice_bank_delete' question.pk %}" onsubmit="return confirm('Remove this question from your bank? Existing tests and their results will be retained.');">{% csrf_token %}<button class="btn btn-outline-danger">Remove from bank</button></form></div>
+<div class="card border shadow-sm p-4"><form method="post">{% csrf_token %}{% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors|striptags }}</div>{% endif %}
+{% for field in form %}<div class="mb-3"><label class="form-label fw-semibold" for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}{% if field.errors %}<div class="small text-danger">{{ field.errors|striptags }}</div>{% endif %}</div>{% endfor %}
+{% if question.private_image %}<p><img src="{% url 'questions:practice_bank_image' question.pk %}" class="img-fluid border rounded" style="max-height:200px" alt="Question figure"></p>{% endif %}
+<button class="btn btn-primary">Save changes</button> <a class="btn btn-light" href="{% url 'questions:practice_bank' %}">Cancel</a></form></div>
+{% endblock %}

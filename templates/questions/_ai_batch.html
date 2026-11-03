@@ -1,0 +1,10 @@
+<details class="card border shadow-sm p-3 mb-3" id="ai-batch-panel" hidden>
+  <summary class="fw-semibold">AI suggestions for several questions</summary>
+  <p class="small text-muted mt-2 mb-2">Select up to five questions below. Each is sent as a separate request, may use quota and incur provider charges, and must still be reviewed individually. Keep this page open until the batch finishes; an interrupted request may still be billed.</p>
+  <form id="ai-batch-form">{% csrf_token %}
+    <div class="form-check mb-2"><input class="form-check-input" type="checkbox" id="batch-vision"><label class="form-check-label small" for="batch-vision">Also send original question regions and attached images for every selected question</label></div>
+    <div class="form-check mb-2"><input class="form-check-input" type="checkbox" id="batch-consent" required><label class="form-check-label small" for="batch-consent">I consent to sending each selected question, its options and tables, and images if selected, to Google Gemini. Provider terms, retention and charges apply.</label></div>
+    <button class="btn btn-sm btn-outline-primary" type="submit">Request selected suggestions</button>
+    <div class="small mt-2" id="ai-batch-status" role="status" aria-live="polite"></div>
+  </form>
+</details>

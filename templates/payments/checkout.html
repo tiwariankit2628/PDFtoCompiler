@@ -1,0 +1,20 @@
+{% extends 'dashboard_base.html' %}
+{% block title %}Test checkout | {{ PLATFORM_NAME }}{% endblock %}
+{% block dashboard_content %}
+<div class="col-lg-8 mx-auto"><a class="small" href="{% url 'payments:plans' %}">← Plans & billing</a><div class="card border shadow-sm mt-3"><div class="card-body p-4 p-md-5"><span class="badge text-bg-warning mb-2">Razorpay test mode</span><h2 class="fw-bold">{{ checkout.plan.name }}</h2><p class="text-muted">Checkout reference {{ checkout.reference }}</p><div class="bg-light rounded p-3 mb-3"><strong>₹{{ checkout.price_rupees }}</strong> · {% if checkout.billing == 'recurring' %}every {{ checkout.billing_interval }} {{ checkout.billing_period }} interval(s), up to {{ checkout.recurring_cycles }} cycles. Cancel renewal from billing history.{% else %}one-time payment for {{ checkout.duration_days }} days of access.{% endif %}</div><p class="small text-muted">The server verifies the provider signature, captured amount, currency and payment status. A browser callback alone never activates your plan.</p>
+{% if checkout.status == 'paid' %}<div class="alert alert-success">This checkout has a verified payment. See billing history for its expiry.</div>{% elif public_key %}<button id="pay-button" class="btn btn-primary btn-lg">Open secure test checkout</button><div id="checkout-message" class="small mt-3" role="status" aria-live="polite"></div><form id="csrf-holder">{% csrf_token %}</form>{% else %}<div class="alert alert-warning">Test checkout is unavailable. No access has been activated.</div>{% endif %}</div></div></div>
+{% if checkout.status != 'paid' and public_key %}<script src="https://checkout.razorpay.com/v1/checkout.js"></script><script>
+(function(){
+ const button=document.getElementById('pay-button'), output=document.getElementById('checkout-message');
+ button.addEventListener('click', function(){
+  if(typeof Razorpay === 'undefined'){output.textContent='Razorpay Checkout could not load. No payment has been confirmed.';return;}
+  const options={key:'{{ public_key|escapejs }}',name:'Practice plan',description:'{{ checkout.plan.name|escapejs }}',
+   {% if checkout.billing == 'recurring' %}subscription_id:'{{ checkout.provider_subscription_id|escapejs }}',{% else %}order_id:'{{ checkout.provider_order_id|escapejs }}',amount:{{ checkout.amount_paise }},currency:'INR',{% endif %}
+   handler:function(result){button.disabled=true;output.textContent='Verifying with the server…';fetch('{% url "payments:verify" checkout.reference %}',{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':document.querySelector('#csrf-holder input[name=csrfmiddlewaretoken]').value},body:JSON.stringify(result)})
+    .then(async function(response){const data=await response.json();output.textContent=data.message||'Verification unavailable.';if(response.ok&&data.status==='verified'){window.location.href='{% url "payments:plans" %}';}else{button.disabled=false;}})
+    .catch(function(){output.textContent='Verification unavailable. No activation is assumed; check billing history later.';button.disabled=false;});},
+   modal:{ondismiss:function(){output.textContent='Checkout closed. No payment is assumed.';}}};
+  new Razorpay(options).open();
+ });
+})();</script>{% endif %}
+{% endblock %}

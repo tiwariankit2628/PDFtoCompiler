@@ -1,0 +1,100 @@
+{% extends 'dashboard_base.html' %}
+{% load static question_content %}
+{% block title %}Manage question images | {{ PLATFORM_NAME }}{% endblock %}
+{% block extra_head %}
+<!-- KaTeX for live mathematical formula preview -->
+<link rel="stylesheet" href="{% static 'vendor/katex/katex.min.css' %}">
+<script defer src="{% static 'vendor/katex/katex.min.js' %}"></script>
+<script defer src="{% static 'vendor/katex/contrib/auto-render.min.js' %}" onload="renderMathInElement(document.body, {delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false},{left:'\\[',right:'\\]',display:true}],throwOnError:false});"></script>
+{% endblock %}
+{% block dashboard_content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-4 gap-2">
+  <div><h2 class="fw-bold mb-1">Images for Q{{ question.question_number }}</h2>
+    <p class="text-muted mb-0">{{ question.paper.title }} · starts on page {{ question.page_number }}</p></div>
+  <div class="d-flex gap-2">{% if student_practice %}
+    <a class="btn btn-outline-secondary" href="{% url 'questions:practice_question_edit' question.pk %}">Edit question</a>
+    <a class="btn btn-outline-secondary" href="{% url 'questions:practice_settings' question.paper_id %}">Review paper</a>
+    {% else %}<a class="btn btn-outline-secondary" href="{% url 'questions:extracted_edit' question.pk %}">Edit question</a>
+    <a class="btn btn-outline-secondary" href="{% url 'questions:paper_review' question.paper_id %}">Review paper</a>{% endif %}</div>
+</div>
+{% if question.status == 'approved' %}<div class="alert alert-warning">This question is already approved. Staging images are read-only; changes here would not update the bank item.</div>{% endif %}
+<div class="alert alert-info small">Compare with the original. Images can belong to the question or to any option. A crop is made from the PDF itself, not redrawn. Every image change flags the question for review.</div>
+<div class="row g-4">
+  <div class="col-lg-7">
+    <div class="card shadow-sm p-3 mb-4">
+      <h5>Crop from source PDF</h5>
+      <p class="small text-muted">Choose a page, then drag a rectangle on the preview. You can also edit the normalized coordinates (0 to 1) directly.</p>
+      <form method="post" id="crop-form">{% csrf_token %}<input type="hidden" name="action" value="crop">
+        <div class="row g-2 mb-3">
+          <div class="col-sm-4"><label class="form-label" for="crop-page">Page</label><select id="crop-page" name="page_number" class="form-select">
+            {% for page in page_range %}<option value="{{ page }}" {% if page == question.page_number %}selected{% endif %}>Page {{ page }}</option>{% endfor %}
+          </select></div>
+          <div class="col-sm-4"><label class="form-label" for="crop-target">Attach to</label><select id="crop-target" name="target" class="form-select"><option value="">Question</option><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option></select></div>
+          <div class="col-sm-4"><label class="form-label" for="crop-replace">Replace</label><select id="crop-replace" name="replace_id" class="form-select"><option value="">Append image</option>{% for figure in figures %}<option value="{{ figure.pk }}">Image {{ forloop.counter }} ({{ figure.option_key|default:'question' }})</option>{% endfor %}</select></div>
+        </div>
+        <div id="crop-stage" class="position-relative d-inline-block border bg-light" style="max-width:100%; line-height:0; touch-action:none; user-select:none;">
+          <img id="source-preview" src="{% if student_practice %}{% url 'questions:practice_source_page' question.pk question.page_number %}{% else %}{% url 'questions:source_page_image' question.pk question.page_number %}{% endif %}" alt="Source PDF page; drag to select a crop" draggable="false" style="display:block; max-width:100%; height:auto;">
+          <div id="crop-box" style="position:absolute; border:2px solid #0d6efd; background:rgba(13,110,253,.15); display:none; pointer-events:none;"></div>
+        </div>
+        <div class="row g-2 mt-2">
+          <div class="col-3"><label class="small" for="x0">Left</label><input id="x0" name="x0" type="number" min="0" max="1" step="0.0001" class="form-control" required></div>
+          <div class="col-3"><label class="small" for="y0">Top</label><input id="y0" name="y0" type="number" min="0" max="1" step="0.0001" class="form-control" required></div>
+          <div class="col-3"><label class="small" for="x1">Right</label><input id="x1" name="x1" type="number" min="0" max="1" step="0.0001" class="form-control" required></div>
+          <div class="col-3"><label class="small" for="y1">Bottom</label><input id="y1" name="y1" type="number" min="0" max="1" step="0.0001" class="form-control" required></div>
+        </div>
+        <button class="btn btn-primary mt-3" {% if question.status == 'approved' %}disabled{% endif %}>Save crop</button>
+      </form>
+    </div>
+    <div class="card shadow-sm p-3">
+      <h5>Attach an image file</h5><p class="small text-muted">PNG, JPEG or another supported image up to 8 MB / 16 megapixels; converted to PNG.</p>
+      <form method="post" enctype="multipart/form-data">{% csrf_token %}<input type="hidden" name="action" value="upload">
+        <input class="form-control mb-2" type="file" accept="image/*" name="image" required>
+        <div class="d-flex gap-2 flex-wrap"><select name="target" class="form-select w-auto" aria-label="Attach to"><option value="">Question</option><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option></select>
+        <select name="replace_id" class="form-select w-auto" aria-label="Replace"><option value="">Append image</option>{% for figure in figures %}<option value="{{ figure.pk }}">Replace image {{ forloop.counter }}</option>{% endfor %}</select>
+        <button class="btn btn-primary" {% if question.status == 'approved' %}disabled{% endif %}>Attach image</button></div>
+      </form>
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="card p-3 shadow-sm mb-3"><h5>Compare question</h5><p class="mb-2">{{ question|render_question }}</p>
+      <ul class="small mb-2">{% for option in question.options %}<li><strong>{{ option.key }}.</strong> {{ option.text }}</li>{% endfor %}</ul>
+      <a class="small" target="_blank" rel="noopener" href="{% if student_practice %}{% url 'questions:practice_pdf' question.paper_id %}{% else %}{% url 'questions:paper_download' question.paper_id %}{% endif %}#page={{ question.page_number }}">Open original PDF</a></div>
+    <h5>Assigned images</h5>
+    {% if student_practice and question.private_image %}<div class="card p-3 mb-3"><strong>Extracted question image</strong>
+      <img class="img-fluid my-2" src="{% url 'questions:practice_extracted_image' question.pk %}" alt="Extracted question image">
+      <form method="post">{% csrf_token %}<button name="action" value="remove_primary" class="btn btn-sm btn-outline-danger">Remove image</button></form></div>{% endif %}
+    {% if not student_practice and question.image %}<div class="card p-3 mb-3"><strong>Legacy question image</strong><img class="img-fluid my-2" src="{{ question.image.url }}" alt="Legacy question image"><a href="{% url 'questions:extracted_edit' question.pk %}" class="small">Replace or remove the legacy image in question editor</a></div>{% endif %}
+    {% for figure in figures %}<div class="card p-3 mb-3 shadow-sm">
+      <strong>Image {{ forloop.counter }} · {% if figure.option_key %}Option {{ figure.option_key }}{% else %}Question{% endif %}</strong>
+      <span class="small text-muted">Page {{ figure.page_number }} · {{ figure.source }}</span>
+      <img class="img-fluid my-2 border" src="{% if student_practice %}{% url 'questions:practice_figure_file' figure.pk %}{% else %}{% url 'questions:figure_file' figure.pk %}{% endif %}" alt="Assigned figure {{ forloop.counter }}">
+      {% if question.status != 'approved' %}
+      <form method="post" class="d-flex gap-2 flex-wrap">{% csrf_token %}<input type="hidden" name="figure_id" value="{{ figure.pk }}">
+        <select name="target" class="form-select form-select-sm w-auto" aria-label="Move image to"><option value="">Question</option>{% for key in 'ABCDE' %}<option value="{{ key }}" {% if key == figure.option_key %}selected{% endif %}>Option {{ key }}</option>{% endfor %}</select>
+        <button name="action" value="retarget" class="btn btn-sm btn-outline-primary">Move</button>
+        <button name="action" value="unassign" class="btn btn-sm btn-outline-secondary">Return to pool</button>
+        <button name="action" value="delete" class="btn btn-sm btn-outline-danger" onclick="return confirm('Remove this image from staging?')">Remove</button>
+      </form>{% endif %}
+    </div>{% empty %}<p class="text-muted">No additional images assigned yet.</p>{% endfor %}
+    <a href="{% if student_practice %}{% url 'questions:practice_figure_pool' question.paper_id %}{% else %}{% url 'questions:figure_pool' question.paper_id %}{% endif %}" class="btn btn-outline-secondary">Review unassigned image pool</a>
+  </div>
+</div>
+<script>
+(function () {
+  const page = document.getElementById('crop-page'), img = document.getElementById('source-preview');
+  const stage = document.getElementById('crop-stage'), box = document.getElementById('crop-box');
+  const inputs = ['x0','y0','x1','y1'].map(id => document.getElementById(id));
+  const pageUrl = "{% if student_practice %}{% url 'questions:practice_source_page' question.pk 0 %}{% else %}{% url 'questions:source_page_image' question.pk 0 %}{% endif %}";
+  page.addEventListener('change', () => { img.src = pageUrl.replace('/0/', '/' + encodeURIComponent(page.value) + '/'); box.style.display='none'; inputs.forEach(i => i.value=''); });
+  let start = null;
+  function position(event) { const r = img.getBoundingClientRect(); return [Math.min(1,Math.max(0,(event.clientX-r.left)/r.width)), Math.min(1,Math.max(0,(event.clientY-r.top)/r.height))]; }
+  function show(a,b) { const left=Math.min(a[0],b[0]), top=Math.min(a[1],b[1]), right=Math.max(a[0],b[0]), bottom=Math.max(a[1],b[1]);
+    box.style.display='block'; box.style.left=(left*100)+'%'; box.style.top=(top*100)+'%'; box.style.width=((right-left)*100)+'%'; box.style.height=((bottom-top)*100)+'%';
+    [left,top,right,bottom].forEach((v,i) => inputs[i].value=v.toFixed(4)); }
+  stage.addEventListener('pointerdown', e => { if (!img.complete || !img.naturalWidth) return; start=position(e); stage.setPointerCapture(e.pointerId); show(start,start); });
+  stage.addEventListener('pointermove', e => { if (start) show(start, position(e)); });
+  stage.addEventListener('pointerup', e => { if (start) { show(start,position(e)); start=null; } });
+  stage.addEventListener('pointercancel', () => { start=null; });
+})();
+</script>
+{% endblock %}

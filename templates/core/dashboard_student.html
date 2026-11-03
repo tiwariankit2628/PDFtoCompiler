@@ -15,7 +15,10 @@
             {% if user.institute_name %} | Institute: <strong class="text-dark">{{ user.institute_name }}</strong>{% endif %}
         </p>
     </div>
-    <div class="mt-3 mt-md-0 d-flex gap-2">
+    <div class="mt-3 mt-md-0 d-flex flex-wrap gap-2">
+        <a href="{% url 'questions:practice_upload' %}" class="btn btn-sm btn-cbt-primary">
+            <i class="bi bi-file-earmark-pdf me-1"></i> Create PDF Practice
+        </a>
         <a href="{% url 'accounts:profile' %}" class="btn btn-sm btn-cbt-outline">
             <i class="bi bi-person me-1"></i> Edit Profile
         </a>
@@ -24,6 +27,9 @@
         </a>
     </div>
 </div>
+
+<div class="card border-0 shadow-sm mb-4 overflow-hidden"><div class="card-body p-4" style="background:linear-gradient(120deg,#eef5ff,#f4f2ff)"><div class="d-flex flex-wrap justify-content-between align-items-center gap-3"><div><span class="small fw-bold text-primary text-uppercase">Your private workspace</span><h4 class="fw-bold mt-1 mb-1">Practice, reflect, improve.</h4><p class="text-muted small mb-0">{{ practice_count }} practice attempt{{ practice_count|pluralize }} · {{ practice_usage.plan.name }} plan · Usage resets monthly</p></div><div class="d-flex flex-wrap gap-2"><a class="btn btn-primary" href="{% url 'questions:practice_list' %}">My practice</a><a class="btn btn-outline-primary" href="{% url 'questions:practice_bank' %}">Question bank</a><a class="btn btn-light" href="{% url 'payments:plans' %}">Plans & usage</a></div></div><div class="row g-2 mt-3">{% for counter in practice_usage.counters %}<div class="col-md-4"><div class="bg-white rounded p-3 h-100"><div class="d-flex justify-content-between small"><span>{{ counter.label }}</span><strong>{{ counter.used }} / {% if counter.limit != None %}{{ counter.limit }}{% else %}∞{% endif %}</strong></div><div class="progress mt-2" style="height:5px"><div class="progress-bar" style="width:{{ counter.percent }}%"></div></div></div></div>{% endfor %}</div></div></div>
+{% if recent_practice_attempts %}<div class="card border shadow-sm mb-4"><div class="card-header bg-white py-3 d-flex justify-content-between"><h5 class="fw-bold mb-0">Recent private practice</h5><a class="small" href="{% url 'questions:practice_history' %}">All history →</a></div><div class="list-group list-group-flush">{% for attempt in recent_practice_attempts %}<div class="list-group-item d-flex justify-content-between align-items-center"><div><strong>{{ attempt.exam.title }}</strong><div class="small text-muted">{{ attempt.started_at|date:'d M Y, H:i' }} · {{ attempt.get_status_display }}</div></div>{% if attempt.status == 'in_progress' %}<a href="{% url 'exams:exam_session' attempt.attempt_uuid %}" class="btn btn-sm btn-primary">Resume</a>{% else %}<a href="{% url 'questions:practice_result' attempt.attempt_uuid %}" class="btn btn-sm btn-outline-primary">Insights</a>{% endif %}</div>{% endfor %}</div></div>{% endif %}
 
 <!-- Candidate Metrics & Freemium Card -->
 <div class="row g-3 mb-4">

@@ -9,6 +9,7 @@ from django.contrib.auth.views import (
 )
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import View
 
 from .forms import StudentRegistrationForm, UserLoginForm, UserProfileForm
@@ -65,7 +66,7 @@ class UserLoginView(View):
             login(request, user)
             messages.success(request, f"Welcome back, {user.get_full_name() or user.username}!")
             next_url = request.GET.get("next")
-            if next_url:
+            if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
                 return redirect(next_url)
             return redirect("core:dashboard_router")
         return render(request, self.template_name, {"form": form})

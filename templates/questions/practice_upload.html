@@ -1,0 +1,19 @@
+{% extends 'dashboard_base.html' %}
+{% block title %}Create PDF practice | {{ PLATFORM_NAME }}{% endblock %}
+{% block dashboard_content %}
+<a href="{% url 'questions:practice_list' %}" class="small text-decoration-none">← My PDF practice</a>
+<div class="card border shadow-sm p-4 p-md-5 mt-3" style="max-width: 760px;">
+  <h2 class="fw-bold">Turn a PDF into practice</h2>
+  <p class="text-muted">Upload a question paper, review the extracted questions and diagrams, then choose your test duration.</p>
+  <div class="alert alert-info small"><strong>Local (default):</strong> no PDF is sent to external providers. Digital text works best; scans require OCR on the server. All extraction can be incomplete or inaccurate.</div>
+  <div class="alert alert-warning small"><strong>Optional cloud:</strong> only if you select it and give consent, the PDF is sent to Mathpix and page images/OCR text to Google Gemini. Both can incur charges and apply their own retention policies; Mathpix deletion is requested but caches or metadata may persist. The server must be configured for this option. Review their <a href="https://mathpix.com/pricing/api" target="_blank" rel="noopener">pricing</a>, <a href="https://docs.mathpix.com/concepts/data-retention" target="_blank" rel="noopener">retention</a> and <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener">Google terms</a> before consenting.</div>
+  <form method="post" enctype="multipart/form-data" novalidate>{% csrf_token %}
+    {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors|striptags }}</div>{% endif %}
+    {% for field in form %}<div class="mb-3 {% if field.field.widget.input_type == 'checkbox' %}form-check{% endif %}">
+      {% if field.field.widget.input_type == 'checkbox' %}{{ field }}<label class="form-check-label" for="{{ field.id_for_label }}">{{ field.label }}</label>{% else %}<label class="form-label fw-semibold" for="{{ field.id_for_label }}">{{ field.label }}{% if field.field.required %} *{% endif %}</label>{{ field }}{% endif %}
+      {% if field.errors %}<div class="text-danger small mt-1">{{ field.errors|striptags }}</div>{% endif %}</div>{% endfor %}
+    <p class="small text-muted">PDF only · up to 25 MB and {{ max_pages }} pages · no password-protected PDFs.</p>
+    <button class="btn btn-primary px-4"><i class="bi bi-file-earmark-arrow-up me-1"></i> Upload & extract</button>
+  </form>
+</div>
+{% endblock %}

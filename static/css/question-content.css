@@ -1,0 +1,23 @@
+/* Original question content: preserve readable grids without page overflow. */
+.question-table-wrap { max-width: 100%; overflow-x: auto; margin: .8rem 0; border-radius: .55rem; }
+.question-table { border-collapse: collapse; width: auto; min-width: min(100%, 20rem); max-width: 100%; color: #1e293b; background: #fff; font-size: .96rem; }
+.question-table th, .question-table td { border: 1px solid #aab9cc; padding: .52rem .7rem; vertical-align: top; white-space: pre-line; overflow-wrap: anywhere; }
+.question-table th { background: #eef4ff; font-weight: 700; }
+.statement-label { display: block; margin-top: .55rem; color: #172554; }
+.table-editor-grid { display: block; max-width: 100%; overflow-x: auto; margin: .75rem 0; }
+.table-editor-grid table { min-width: 22rem; width: 100%; border-collapse: collapse; }
+.table-editor-grid td, .table-editor-grid th { border: 1px solid #cbd5e1; padding: .3rem; vertical-align: top; }
+.table-editor-grid textarea { min-width: 6rem; min-height: 3.5rem; width: 100%; resize: vertical; }
+.table-editor-toolbar { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin: .5rem 0; }
+@media (max-width: 575px) { .question-table th, .question-table td { padding: .42rem .5rem; font-size: .91rem; } }
+.answer-review-hero { background: linear-gradient(115deg, #142f69, #405ed7); border-radius: 1rem; color: white; box-shadow: 0 12px 30px #1d4ed820; }
+.answer-option-preview { border: 1px solid #e1e8f2; border-radius: .6rem; padding: .65rem .8rem; margin-bottom: .45rem; background: #fbfdff; }
+.answer-note { background: #f5f8fd; border-left: 3px solid #8aa5ed; border-radius: .4rem; padding: .8rem 1rem; }
+
+.review-hero { padding: 1.6rem; border-radius: 1.1rem; background: linear-gradient(120deg,#152d62,#3150aa 72%,#5677de); color: #fff; box-shadow: 0 12px 32px #25489924; }
+.review-hero h2 { color: #fff; }
+.review-hero-link, .review-hero-link:hover { color: #dbeafe; }
+.review-hero-subtitle { color: #d6e1ff; }
+
+/* Do not expose controls that require JavaScript when scripting is unavailable. */
+#ai-batch-panel[hidden], .ai-batch-select[hidden] { display: none !important; }

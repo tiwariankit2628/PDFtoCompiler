@@ -3,6 +3,13 @@
    Designed for high-performance, modern educational SaaS aesthetics
    ------------------------------------------------------------------------- */
 
+@font-face {
+  font-family: "CBT Devanagari";
+  src: url("../fonts/NotoSansDevanagari.ttf") format("truetype");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
 :root {
   --cbt-primary: #1e3a8a;
   --cbt-primary-dark: #0f172a;
@@ -21,7 +28,7 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "CBT Devanagari", sans-serif;
   color: var(--cbt-text-dark);
   background-color: var(--cbt-bg-light);
   min-height: 100vh;
@@ -33,7 +40,7 @@ body {
 .navbar-cbt {
   background-color: #ffffff;
   border-bottom: 1px solid var(--cbt-card-border);
-  padding: 0.85rem 1rem;
+  padding: 0.85rem 0;
 }
 
 .navbar-brand-badge {
@@ -171,3 +178,43 @@ body {
   color: #ffffff;
 }
 
+
+/* Keep the original visual language while making navigation resilient on
+   narrow screens, long account names, and keyboard navigation. */
+.fw-extrabold { font-weight: 800 !important; }
+.navbar-cbt .navbar-brand { min-width: 0; }
+.navbar-brand-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.navbar-cbt .navbar-toggler { flex-shrink: 0; }
+.navbar-cbt .navbar-collapse, .navbar-actions, .navbar-account, .navbar-account-toggle, .navbar-account-name, .navbar-role-badge { min-width: 0; }
+.navbar-account-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.navbar-cbt .nav-link { border-radius: .5rem; }
+.navbar-cbt .nav-link:focus-visible,
+.btn-cbt-primary:focus-visible,
+.btn-cbt-outline:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }
+.dashboard-sidebar { top: 86px; z-index: 10; }
+.dashboard-menu-toggle { display: flex; align-items: center; justify-content: space-between; }
+.hero-gradient h1 { letter-spacing: -.025em; }
+section[id] { scroll-margin-top: 6rem; }
+
+@media (max-width: 991.98px) {
+  .navbar-cbt .navbar-collapse { padding-top: .75rem; margin-top: .75rem; border-top: 1px solid var(--cbt-card-border); }
+  .navbar-cbt .navbar-nav .nav-link { padding: .55rem .65rem; }
+  .navbar-actions { width: 100%; }
+  .navbar-account { width: 100%; }
+  .navbar-account-toggle { width: 100%; justify-content: flex-start; }
+  .navbar-role-badge { max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+  .navbar-account .dropdown-menu { max-width: min(100%, 24rem); }
+}
+
+@media (max-width: 575.98px) {
+  .navbar-brand-badge { font-size: .62rem; padding: .18rem .4rem; }
+  .hero-gradient { padding: 3.5rem 0; }
+}
+
+@media (max-width: 359.98px) {
+  .navbar-brand-badge { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-hover-effect, .btn-cbt-primary, .btn-cbt-outline { transition: none; }
+}

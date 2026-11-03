@@ -1,7 +1,7 @@
 import uuid
 from decimal import Decimal
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from django.utils.text import slugify
 
@@ -50,11 +50,11 @@ class Category(models.Model):
 
     @property
     def exam_count(self):
-        return self.exams.count()
+        return self.exams.filter(is_private_practice=False).count()
 
     @property
     def active_exam_count(self):
-        return self.exams.filter(status=Exam.ExamStatus.PUBLISHED).count()
+        return self.exams.filter(status=Exam.ExamStatus.PUBLISHED, is_private_practice=False).count()
 
 
 class Exam(models.Model):
@@ -69,6 +69,7 @@ class Exam(models.Model):
         SCHEDULED = "scheduled", "Scheduled"
         ARCHIVED = "archived", "Archived"
 
+    is_private_practice = models.BooleanField(default=False, db_index=True)
     title = models.CharField("Examination Title", max_length=255)
     slug = models.SlugField("URL Slug", max_length=260, unique=True)
     category = models.ForeignKey(
@@ -241,6 +242,8 @@ class ExamAttempt(models.Model):
         default=AttemptStatus.IN_PROGRESS,
         db_index=True,
     )
+    # Snapshot needed for a database-enforced single active private attempt.
+    is_private_practice = models.BooleanField(default=False, editable=False)
     started_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField("Session Expiry Time", null=True, blank=True)
     submitted_at = models.DateTimeField(null=True, blank=True)
@@ -269,9 +272,23 @@ class ExamAttempt(models.Model):
         verbose_name = "Examination Attempt"
         verbose_name_plural = "Examination Attempts"
         ordering = ["-started_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["exam", "student"],
+                condition=models.Q(is_private_practice=True, status="in_progress"),
+                name="one_active_private_practice_attempt",
+            )
+        ]
 
     def __str__(self):
         return f"{self.student.username} - {self.exam.title} ({self.status})"
+
+    def save(self, *args, **kwargs):
+        # Keep the constraint snapshot consistent for every normal ORM create,
+        # even if a future caller forgets to pass the private flag explicitly.
+        if self._state.adding and self.exam_id:
+            self.is_private_practice = self.exam.is_private_practice
+        super().save(*args, **kwargs)
 
     @property
     def is_expired(self):
@@ -321,9 +338,26 @@ class ExamAttempt(models.Model):
         corr = 0
         incorr = 0
         unatt = 0
+        graded_marks = Decimal("0.00")
+        all_private_keys_verified = True
+        responses = self.responses.select_related("exam_question__question", "selected_option")
+        if self.exam.is_private_practice:
+            responses = responses.prefetch_related("exam_question__question__options")
 
-        for resp in self.responses.select_related("exam_question", "selected_option").all():
-            if resp.selected_option is not None:
+        for resp in responses.all():
+            # Student PDFs commonly contain no answer key. Never interpret a
+            # missing key as an incorrect answer or invent the correct choice.
+            question = resp.exam_question.question
+            has_key = (not self.exam.is_private_practice or
+                       (question.key_verified and sum(1 for opt in question.options.all() if opt.is_correct) == 1))
+            if self.exam.is_private_practice and not has_key:
+                all_private_keys_verified = False
+            if has_key and self.exam.is_private_practice:
+                graded_marks += resp.exam_question.positive_marks
+            if resp.selected_option is not None and not has_key:
+                resp.is_correct = None
+                resp.marks_awarded = Decimal("0.00")
+            elif resp.selected_option is not None:
                 if resp.selected_option.is_correct:
                     marks = resp.exam_question.positive_marks
                     total_pos += marks
@@ -354,7 +388,8 @@ class ExamAttempt(models.Model):
         else:
             self.accuracy_percentage = Decimal("0.00")
 
-        total_m = Decimal(str(self.total_marks)) if self.total_marks else Decimal("0.00")
+        total_m = (graded_marks if self.exam.is_private_practice else
+                   Decimal(str(self.total_marks)) if self.total_marks else Decimal("0.00"))
         if total_m > Decimal("0.00"):
             pct = (net_score / total_m) * Decimal("100.0")
             self.percentage = max(Decimal("0.00"), round(pct, 2))
@@ -362,7 +397,12 @@ class ExamAttempt(models.Model):
             self.percentage = Decimal("0.00")
 
         passing_pct = Decimal(str(self.exam.passing_percentage)) if self.exam.passing_percentage else Decimal("0.00")
-        self.is_passed = self.percentage >= passing_pct
+        # A private practice target is meaningful only with a complete,
+        # student-confirmed key. It is not an institutional qualification.
+        if self.exam.is_private_practice:
+            self.is_passed = bool(all_private_keys_verified and graded_marks > 0 and passing_pct > 0 and self.percentage >= passing_pct)
+        else:
+            self.is_passed = self.percentage >= passing_pct
         return self.score_obtained
 
     def recalculate_ranks(self):
@@ -423,17 +463,32 @@ class ExamAttempt(models.Model):
         self.status = self.AttemptStatus.TIMED_OUT if is_timeout else self.AttemptStatus.SUBMITTED
         self.submitted_at = now
         if not self.time_taken_seconds and self.started_at:
-            self.time_taken_seconds = max(0, int((now - self.started_at).total_seconds()))
+            end = (min(now, self.expires_at)
+                   if self.exam.is_private_practice and is_timeout and self.expires_at else now)
+            self.time_taken_seconds = max(0, int((end - self.started_at).total_seconds()))
         self.evaluate_attempt()
         self.save()
-        self.recalculate_ranks()
+        if not self.exam.is_private_practice:
+            self.recalculate_ranks()
         return True
 
     def auto_timeout_if_expired(self):
-        """Checks if session has expired, and auto-submits if still IN_PROGRESS."""
-        if self.status == self.AttemptStatus.IN_PROGRESS and self.is_expired:
+        """Auto-submit once; serialize private timeout with answer saves."""
+        if self.status != self.AttemptStatus.IN_PROGRESS or not self.is_expired:
+            return False
+        if not self.exam.is_private_practice:
             return self.submit_attempt(is_timeout=True)
-        return False
+        with transaction.atomic():
+            locked = type(self).objects.select_for_update().select_related("exam").filter(pk=self.pk).first()
+            if not locked:  # The owner may have deleted the practice test.
+                return False
+            changed = (locked.status == self.AttemptStatus.IN_PROGRESS and locked.is_expired
+                       and locked.submit_attempt(is_timeout=True))
+        try:
+            self.refresh_from_db()
+        except type(self).DoesNotExist:
+            return bool(changed)
+        return bool(changed)
 
 
 class ExamResponse(models.Model):
