@@ -256,12 +256,20 @@ if not DEBUG:
     SECURE_HSTS_PRELOAD = True
 
 
-# Optional, paid cloud PDF extraction. Disabled unless deliberately configured.
+# Optional cloud PDF extraction. Each mode is separately disabled by default.
 PDF_CLOUD_ENABLED = os.environ.get("PDF_CLOUD_ENABLED", "False").lower() in ("true", "1", "yes")
+PDF_GEMINI_ENABLED = os.environ.get("PDF_GEMINI_ENABLED", "False").lower() in ("true", "1", "yes")
 MATHPIX_APP_ID = os.environ.get("MATHPIX_APP_ID", "")
 MATHPIX_APP_KEY = os.environ.get("MATHPIX_APP_KEY", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "").strip()
+# Separate model: enabling a low-cost mode must not change the Mathpix pipeline.
+PDF_GEMINI_MODEL = os.environ.get("PDF_GEMINI_MODEL", "").strip()
+# Separate generation settings let a budget model coexist with a premium one.
+PDF_GEMINI_THINKING_LEVEL = os.environ.get("PDF_GEMINI_THINKING_LEVEL", "").strip().lower()
+PDF_GEMINI_MAX_OUTPUT_TOKENS = int(os.environ.get("PDF_GEMINI_MAX_OUTPUT_TOKENS", "32768"))
+# Optional per-job pacing for rate-limited accounts; not a global rate limit.
+PDF_GEMINI_MIN_INTERVAL_SECONDS = float(os.environ.get("PDF_GEMINI_MIN_INTERVAL_SECONDS", "0"))
 PDF_CLOUD_MAX_PAGES = int(os.environ.get("PDF_CLOUD_MAX_PAGES", "50"))
 PDF_CLOUD_POLL_SECONDS = float(os.environ.get("PDF_CLOUD_POLL_SECONDS", "3"))
 PDF_CLOUD_TIMEOUT_SECONDS = int(os.environ.get("PDF_CLOUD_TIMEOUT_SECONDS", "900"))

@@ -40,7 +40,7 @@ class QuestionPaperUploadForm(BootstrapFormMixin, forms.ModelForm):
     )
     cloud_consent = forms.BooleanField(
         required=False,
-        label="I authorize sending this PDF to Mathpix and its pages/OCR to Google Gemini, and accept the related charges and provider policies.",
+        label="I consent to sending this paper's content to the provider(s) of my selected cloud method, and accept their terms and possible charges.",
     )
 
     class Meta:
@@ -102,12 +102,13 @@ class QuestionPaperUploadForm(BootstrapFormMixin, forms.ModelForm):
         cleaned = super().clean()
         mode = cleaned.get("extraction_mode") or QuestionPaperUpload.ExtractionMode.LOCAL
         cleaned["extraction_mode"] = mode
-        if mode == QuestionPaperUpload.ExtractionMode.CLOUD:
+        if mode in (QuestionPaperUpload.ExtractionMode.CLOUD, QuestionPaperUpload.ExtractionMode.GEMINI):
             if not cleaned.get("cloud_consent"):
                 self.add_error("cloud_consent", "Explicit consent is required for cloud extraction.")
-            from .cloud_providers import cloud_is_configured
-            if not cloud_is_configured():
-                self.add_error("extraction_mode", "Cloud extraction is not configured on this server. Choose local or ask an administrator to configure it.")
+            from .cloud_providers import cloud_is_configured, gemini_only_is_configured
+            configured = gemini_only_is_configured() if mode == QuestionPaperUpload.ExtractionMode.GEMINI else cloud_is_configured()
+            if not configured:
+                self.add_error("extraction_mode", "This cloud method is not configured on this server. Choose local or ask an administrator to configure it.")
             if getattr(self, "pdf_page_count", 0) > settings.PDF_CLOUD_MAX_PAGES:
                 self.add_error("pdf_file", f"Cloud extraction is limited to {settings.PDF_CLOUD_MAX_PAGES} pages per upload.")
         return cleaned

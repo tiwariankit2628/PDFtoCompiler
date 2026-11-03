@@ -170,7 +170,7 @@ class QuestionPaperUploadView(TeacherRequiredMixin, CreateView):
         paper.file_size_bytes = form.cleaned_data["pdf_file"].size
         paper.total_pages = getattr(form, "pdf_page_count", 0)
         paper.extraction_mode = form.cleaned_data["extraction_mode"]
-        if paper.extraction_mode == QuestionPaperUpload.ExtractionMode.CLOUD:
+        if paper.extraction_mode in (QuestionPaperUpload.ExtractionMode.CLOUD, QuestionPaperUpload.ExtractionMode.GEMINI):
             paper.cloud_consent_at = timezone.now()
         paper.save()
 
@@ -181,7 +181,7 @@ class QuestionPaperUploadView(TeacherRequiredMixin, CreateView):
             request=self.request,
         )
 
-        if paper.extraction_mode == QuestionPaperUpload.ExtractionMode.CLOUD:
+        if paper.extraction_mode in (QuestionPaperUpload.ExtractionMode.CLOUD, QuestionPaperUpload.ExtractionMode.GEMINI):
             from .tasks import extract_cloud_paper
 
             # Enqueue after commit so a worker never sees an uncommitted upload.

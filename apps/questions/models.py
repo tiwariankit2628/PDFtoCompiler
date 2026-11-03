@@ -24,6 +24,7 @@ class QuestionPaperUpload(models.Model):
 
     class ExtractionMode(models.TextChoices):
         LOCAL = "local", "Local PyMuPDF / Tesseract"
+        GEMINI = "gemini", "Gemini only (lower-cost cloud)"
         CLOUD = "cloud", "Mathpix + Gemini"
 
     # Private student material is stored separately from the teacher media tree.

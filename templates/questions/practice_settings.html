@@ -12,8 +12,9 @@
 {% else %}
 {% if paper.status == 'failed' %}<div class="alert alert-warning"><strong>Automatic extraction could not identify questions.</strong> You can add them manually or upload a different PDF. {{ paper.extraction_log|linebreaksbr }}</div>{% endif %}
 {% if extraction_warnings %}<div class="alert alert-warning small"><strong>Extraction warnings:</strong><ul class="mb-0">{% for warning in extraction_warnings %}<li>{{ warning }}</li>{% endfor %}</ul></div>{% endif %}
+{% if cloud_usage %}<details class="card border p-3 mb-3 small"><summary class="fw-semibold">Cloud extraction usage</summary>{% for line in cloud_usage %}<div class="mt-1">{{ line }}</div>{% endfor %}<div class="text-muted mt-1">Token counts are not a price or an amount you owe. The provider's billing dashboard is authoritative.</div></details>{% endif %}
 {% if unassigned_figure_count %}<div class="alert alert-info small">{{ unassigned_figure_count }} image candidate{{ unassigned_figure_count|pluralize }} could not be assigned automatically. <a href="{% url 'questions:practice_figure_pool' paper.pk %}">Review the image pool</a> before creating your test.</div>{% endif %}
-<div class="alert alert-warning small">Check every question, formula, option and image against the original. Local extraction is not guaranteed accurate. Only single-answer multiple-choice questions are supported. AI suggestions are optional and are never treated as confirmed keys automatically.</div>
+<div class="alert alert-warning small">Check every question, formula, option and image against the original. Automated extraction is not guaranteed accurate. Only single-answer multiple-choice questions are supported. AI suggestions are optional and are never treated as confirmed keys automatically.</div>
 <div class="row g-4 mb-4">
   <div class="col-xl-7"><div class="card border shadow-sm p-4 h-100">
     <h4 class="fw-bold">Set your duration</h4>

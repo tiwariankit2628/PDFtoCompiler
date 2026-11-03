@@ -119,3 +119,39 @@ class BrowserUpgradeSmokeTests(StaticLiveServerTestCase):
             self.assertIn("BROWSER_UPGRADE_OK", result.stdout)
             self.assertEqual(provider.return_value.suggest.call_count, 4)
             self.assertTrue(all(call.args[1] == [] for call in provider.return_value.suggest.call_args_list))  # text-only consent
+
+
+@skipUnless(os.environ.get("RUN_BROWSER_E2E") == "1", "Optional Chromium Gemini-only test")
+class BrowserGeminiOnlySmokeTests(StaticLiveServerTestCase):
+    """Mobile consent and private-practice flow; all provider responses are fake."""
+    @classmethod
+    def setUpClass(cls):
+        from .test_gemini_only import GEMINI_ONLY
+        cls.workspace = tempfile.TemporaryDirectory(prefix="gemini-only-browser-")
+        cls.addClassCleanup(cls.workspace.cleanup)
+        root = Path(cls.workspace.name)
+        cls.enterClassContext(override_settings(
+            **{**GEMINI_ONLY, "PRIVATE_PRACTICE_ROOT": str(root / "private"), "MEDIA_ROOT": str(root / "media"),
+               "RAZORPAY_KEY_ID": "", "RAZORPAY_KEY_SECRET": "", "RAZORPAY_WEBHOOK_SECRET": ""}
+        ))
+        super().setUpClass()
+
+    def test_lower_cost_consent_review_and_practice_creation_in_chromium(self):
+        from unittest.mock import patch
+        from .test_cloud_pipeline import synthetic_pdf
+        from .test_gemini_only import fake_google_request
+
+        if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):
+            self.fail("Set CHROMIUM_PATH and install Node and browser dependencies first.")
+        source = Path(self.workspace.name) / "synthetic.pdf"
+        source.write_bytes(synthetic_pdf())
+        env = os.environ.copy()
+        env.update(GEMINI_ONLY_TEST_URL=self.live_server_url, GEMINI_ONLY_TEST_PDF=str(source))
+        script = Path(settings.BASE_DIR) / "tests" / "browser" / "gemini-only-smoke.cjs"
+        calls = []
+        with patch("apps.questions.cloud_providers.requests.Session.request", side_effect=fake_google_request(calls)):
+            result = subprocess.run(["node", str(script)], env=env, text=True, capture_output=True, timeout=120)
+        self.assertEqual(result.returncode, 0, f"Gemini-only browser test failed:\n{result.stdout}\n{result.stderr}")
+        self.assertIn("GEMINI_ONLY_BROWSER_OK", result.stdout)
+        self.assertEqual([method for method, _, _ in calls], ["GET", "POST"])
+        self.assertTrue(all("mathpix" not in url for _, url, _ in calls))

@@ -6,7 +6,7 @@
 <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom">
     <div>
         <h2 class="fw-bold mb-1">Upload Question Paper PDF</h2>
-        <p class="text-muted mb-0">Choose local extraction or explicitly consent to paid Mathpix + Gemini processing. All results require review against the original PDF.</p>
+        <p class="text-muted mb-0">Choose local extraction or an optional cloud method. All results require review against the original PDF.</p>
     </div>
     <div class="mt-3 mt-md-0">
         <a href="{% url 'questions:paper_list' %}" class="btn btn-sm btn-cbt-outline">
@@ -83,15 +83,13 @@
                     {% if form.extraction_mode.errors %}<div class="text-danger small">{{ form.extraction_mode.errors.0 }}</div>{% endif %}
                 </div>
                 <div class="alert alert-warning small">
-                    <strong>Cloud option:</strong> the PDF is sent to Mathpix; page images and OCR text are sent to Google Gemini.
-                    Both may charge your configured accounts. Mathpix currently lists $0.005 per page for the first tier plus a one-time setup fee;
-                    Gemini is billed separately. Prices and provider terms can change. Check current pricing and privacy policies before uploading.
-                    The application requests Mathpix deletion after processing, but provider retention, CDN caching and billing metadata may still apply.
-                    Never upload confidential papers without permission. Local mode does not send the PDF to these services.
+                    <p class="mb-2"><strong>Gemini only (lower-cost cloud):</strong> locally extracted text and page images are sent to Google Gemini; Mathpix is not used. Gemini charges depend on the configured model and token usage, so this is not a fixed-price option. Scanned or vector diagrams may need manual cropping.</p>
+                    <p class="mb-2"><strong>Mathpix + Gemini:</strong> the full PDF is sent to Mathpix; OCR text and page images go to Google Gemini. Both may charge. The app requests Mathpix deletion, but provider retention, caching and billing metadata may still apply.</p>
+                    <p class="mb-0">Cloud methods require configuration and your consent. Google’s unpaid and paid tiers can have different data-use terms; do not send sensitive information to an unpaid service. Never upload confidential papers without permission. Local mode does not send the PDF to these services.
                     <a href="https://mathpix.com/pricing/api" target="_blank" rel="noopener">Mathpix pricing</a> ·
                     <a href="https://docs.mathpix.com/concepts/data-retention" target="_blank" rel="noopener">Mathpix retention</a> ·
                     <a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank" rel="noopener">Gemini pricing</a> ·
-                    <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener">Gemini terms</a>.
+                    <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener">Gemini terms</a>.</p>
                 </div>
                 <div class="form-check mb-4">
                     {{ form.cloud_consent }}
@@ -113,7 +111,7 @@
             <h6 class="fw-bold text-primary mb-2"><i class="bi bi-info-circle-fill me-1"></i> Extraction Pipeline Highlights:</h6>
             <ul class="mb-0 ps-3 text-muted">
                 <li>Local mode uses PDF layout and optionally Tesseract; formulas, scanned text and diagrams can be missed or misread.</li>
-                <li>The optional cloud pipeline uses Mathpix OCR, Gemini interpretation and original-PDF crops. Verify all results.</li>
+                <li>Gemini-only uses local text and Gemini page images without Mathpix. Mathpix + Gemini adds paid OCR. Verify all results and original-PDF crops.</li>
                 <li>Never assumes 100% extraction accuracy — every question is presented in an editable review workspace prior to publishing.</li>
             </ul>
         </div>

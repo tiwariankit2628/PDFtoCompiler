@@ -147,7 +147,10 @@ class PracticeUploadView(PrivateStudentMixin, View):
         upload = form.cleaned_data["pdf_file"]
         try:
             with transaction.atomic():
-                if form.cleaned_data["extraction_mode"] == QuestionPaperUpload.ExtractionMode.CLOUD:
+                cloud_mode = form.cleaned_data["extraction_mode"] in (
+                    QuestionPaperUpload.ExtractionMode.CLOUD, QuestionPaperUpload.ExtractionMode.GEMINI,
+                )
+                if cloud_mode:
                     require_feature(request.user, "cloud_extraction")
                 consume(request.user, "pdf_uploads")
                 paper = QuestionPaperUpload.objects.create(
@@ -155,7 +158,7 @@ class PracticeUploadView(PrivateStudentMixin, View):
                     subject=form.cleaned_data["subject"], category=_system_category(),
                     uploaded_by=request.user, private_pdf_file=upload, file_size_bytes=upload.size,
                     total_pages=form.pdf_page_count, extraction_mode=form.cleaned_data["extraction_mode"],
-                    cloud_consent_at=timezone.now() if form.cleaned_data["extraction_mode"] == QuestionPaperUpload.ExtractionMode.CLOUD else None,
+                    cloud_consent_at=timezone.now() if cloud_mode else None,
                 )
         except (QuotaExceeded, FeatureUnavailable) as exc:
             messages.error(request, str(exc))
@@ -166,7 +169,9 @@ class PracticeUploadView(PrivateStudentMixin, View):
             messages.warning(request, "Practice is busy. Please retry your upload.")
             return redirect("questions:practice_upload")
         log_audit(request.user, "PRIVATE_PDF_UPLOADED", f"Private paper {paper.pk} uploaded.", request=request)
-        task = extract_cloud_paper if paper.extraction_mode == QuestionPaperUpload.ExtractionMode.CLOUD else extract_private_practice_paper
+        task = extract_cloud_paper if paper.extraction_mode in (
+            QuestionPaperUpload.ExtractionMode.CLOUD, QuestionPaperUpload.ExtractionMode.GEMINI,
+        ) else extract_private_practice_paper
         try:
             if settings.CELERY_TASK_ALWAYS_EAGER:
                 task(paper.pk)
@@ -197,6 +202,9 @@ class PracticeSettingsView(PrivateStudentMixin, View):
             "flagged_count": sum(q.is_flagged for q in included),
             "unassigned_figure_count": paper.figures.filter(question__isnull=True).count(),
             "extraction_warnings": [line.removeprefix("Warning: ") for line in paper.extraction_log.splitlines() if line.startswith("Warning: ")],
+            "cloud_usage": [line for line in paper.extraction_log.splitlines() if line.startswith((
+                "Gemini model:", "Gemini reported", "Gemini did not report usable token counts",
+            ))],
             "form": form or PracticeSettingsForm(questions=included, unassigned_count=paper.figures.filter(question__isnull=True).count()),
             "presets": [x for x in (15, 30, 45, 60, 90, 120) if settings.PRACTICE_MIN_DURATION_MINUTES <= x <= settings.PRACTICE_MAX_DURATION_MINUTES],
         }

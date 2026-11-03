@@ -1,4 +1,4 @@
-"""Consent-gated Mathpix -> Gemini extraction with original-PDF figure crops.
+"""Consent-gated Gemini-only and Mathpix -> Gemini PDF extraction.
 
 Provider output is untrusted and never overwrites an existing review workspace.
 Every AI-derived question is flagged for a human comparison with the source.
@@ -6,6 +6,7 @@ Every AI-derived question is flagged for a human comparison with the source.
 import io
 import math
 import re
+import time
 from collections import Counter, defaultdict
 
 import pymupdf as fitz
@@ -16,7 +17,9 @@ from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
 
-from .cloud_providers import CloudExtractionError, GeminiClient, MathpixClient, cloud_is_configured
+from .cloud_providers import (
+    CloudExtractionError, GeminiClient, MathpixClient, cloud_is_configured, gemini_only_is_configured,
+)
 from .figure_utils import page_image, validate_box
 from .models import ExtractedFigure, ExtractedQuestion, QuestionPaperUpload
 from .pdf_layout import DigitalQuestionLayout, FIGURE_REFERENCE
@@ -143,6 +146,57 @@ def build_pages(doc, result, log):
         low_confidence = any(line["text"] and line["confidence"] is not None and line["confidence"] < .8 for line in clean_lines)
         pages.append({"page": page_number, "lines": clean_lines, "candidates": public_figures,
                       "coordinates_align": aspect_ok, "low_confidence": low_confidence})
+    return pages, candidates
+
+
+def build_gemini_only_pages(doc, log):
+    """Collect local PDF text and embedded-image candidates without OCR services.
+
+    Scans have little or no embedded text. Gemini receives page previews, but
+    figure candidates are limited to embedded PDF images, not all vector or
+    scanned diagrams. The same conservative crop validation as cloud OCR is used.
+    """
+    raw_pages = []
+    rotated = set()
+    for index, page in enumerate(doc):
+        page_number = index + 1
+        width, height = page.rect.width, page.rect.height
+        if not (0 < width <= 20000 and 0 < height <= 20000):
+            raise CloudExtractionError(f"Unsupported dimensions on page {page_number}.")
+        if page.rotation:
+            rotated.add(page_number)
+        lines, text_chars = [], 0
+        for block in page.get_text("blocks", sort=True):
+            # PyMuPDF's image blocks contain descriptions, not document text.
+            if len(block) < 7 or block[6] != 0 or not isinstance(block[4], str):
+                continue
+            text = block[4].strip()
+            if not text:
+                continue
+            text_chars += len(text)
+            if text_chars > 200000 or len(lines) >= 5000:
+                raise CloudExtractionError(f"Local PDF text is too large on page {page_number}; split the PDF.")
+            region = None
+            if not page.rotation:
+                rect = fitz.Rect(block[:4]) & page.rect
+                if not rect.is_empty:
+                    region = {"top_left_x": rect.x0 - page.rect.x0, "top_left_y": rect.y0 - page.rect.y0,
+                              "width": rect.width, "height": rect.height}
+            lines.append({"type": "text", "text": text, "region": region})
+        if text_chars < 40:
+            log(f"Warning: Page {page_number} has little embedded text; Gemini must read its image. Scan accuracy is unverified.")
+        raw_pages.append({"page": page_number, "page_width": width, "page_height": height, "lines": lines})
+    pages, candidates = build_pages(doc, {"pages": raw_pages}, log)
+    # PyMuPDF text/image coordinates and rendered pixels may use different
+    # frames on rotated pages; don't auto-crop uncertain regions.
+    if rotated:
+        removed = {key for key, value in candidates.items() if value["page"] in rotated}
+        candidates = {key: value for key, value in candidates.items() if key not in removed}
+        for page_number in rotated:
+            pages[page_number - 1]["candidates"] = []
+            log(f"Warning: Automatic figure crops on rotated page {page_number} were withheld; crop manually.")
+    log("Gemini-only mode uses locally read PDF text and page previews; Mathpix is not contacted.")
+    log("Warning: Scanned or vector diagrams may not appear as candidates; inspect and crop missing figures manually.")
     return pages, candidates
 
 
@@ -273,8 +327,9 @@ def _gemini_page_image(page):
 class CloudPDFQuestionExtractor:
     def __init__(self, paper, mathpix=None, gemini=None):
         self.paper = paper
-        self.mathpix = mathpix or MathpixClient(on_submitted=self._record_provider_id)
-        self.gemini = gemini or GeminiClient()
+        # Provider clients are created only after the worker rechecks mode and consent.
+        self.mathpix = mathpix
+        self.gemini = gemini
         self.logs = []
         self._stored_files = []
 
@@ -299,8 +354,13 @@ class CloudPDFQuestionExtractor:
             if locked.status != QuestionPaperUpload.ProcessingStatus.PENDING:
                 # Duplicate deliveries must not create another paid provider request.
                 return 0
-            if (locked.extraction_mode != QuestionPaperUpload.ExtractionMode.CLOUD
-                    or not locked.cloud_consent_at or not cloud_is_configured()):
+            mode = locked.extraction_mode
+            configured = (
+                gemini_only_is_configured() if mode == QuestionPaperUpload.ExtractionMode.GEMINI
+                else cloud_is_configured() if mode == QuestionPaperUpload.ExtractionMode.CLOUD
+                else False
+            )
+            if not locked.cloud_consent_at or not configured:
                 locked.status = QuestionPaperUpload.ProcessingStatus.FAILED
                 locked.extraction_log = "Cloud extraction is disabled, unconfigured, or missing per-upload consent; no data was sent."
                 locked.save(update_fields=["status", "extraction_log"])
@@ -312,8 +372,14 @@ class CloudPDFQuestionExtractor:
             if not claimed:
                 return 0
         paper.status = QuestionPaperUpload.ProcessingStatus.PROCESSING
+        paper.extraction_mode = mode
+        gemini_only = mode == QuestionPaperUpload.ExtractionMode.GEMINI
         succeeded = False
         try:
+            if self.gemini is None:
+                self.gemini = GeminiClient(model=settings.PDF_GEMINI_MODEL, local_source=True) if gemini_only else GeminiClient()
+            if not gemini_only and self.mathpix is None:
+                self.mathpix = MathpixClient(on_submitted=self._record_provider_id)
             source_field = paper.private_pdf_file if paper.is_student_private else paper.pdf_file
             with source_field.open("rb") as source:
                 pdf_bytes = source.read(MAX_PDF_BYTES + 1)
@@ -324,30 +390,42 @@ class CloudPDFQuestionExtractor:
                     raise CloudExtractionError("PDF is empty, password-protected, or exceeds the configured cloud page limit.")
                 paper.total_pages = len(doc)
                 self.log(f"Cloud extraction started for {len(doc)} page(s).")
-                # Verify the configured model before a paid Mathpix submission.
-                # This metadata call does not contain the PDF.
-                self.gemini.check_model()
-                try:
-                    ocr = self.mathpix.read_pdf(pdf_bytes)
-                finally:
-                    # Request deletion after retrieving OCR or on a processing error.
-                    # CDN caches and billing metadata can remain under provider policy.
-                    if self.mathpix.pdf_id:
-                        if self.mathpix.delete():
-                            self.log("Mathpix accepted the document deletion request; provider cache/metadata policies still apply.")
-                        else:
-                            self.log(f"Warning: Mathpix deletion request failed for document {self.mathpix.pdf_id}; contact Mathpix to delete it.")
-                pages, candidates = build_pages(doc, ocr, self.log)
-                _check_crop_budget(doc, candidates)
+                if gemini_only:
+                    # Build/validate local text and figure candidates before any
+                    # document-bearing request. Nothing is sent to Mathpix.
+                    pages, candidates = build_gemini_only_pages(doc, self.log)
+                    _check_crop_budget(doc, candidates)
+                    self.gemini.check_model()
+                else:
+                    # Metadata only; verify the model before a paid Mathpix submission.
+                    self.gemini.check_model()
+                    try:
+                        ocr = self.mathpix.read_pdf(pdf_bytes)
+                    finally:
+                        # Request deletion after OCR or on a processing error.
+                        # CDN caches and billing metadata can remain under provider policy.
+                        if self.mathpix.pdf_id:
+                            if self.mathpix.delete():
+                                self.log("Mathpix accepted the document deletion request; provider cache/metadata policies still apply.")
+                            else:
+                                self.log(f"Warning: Mathpix deletion request failed for document {self.mathpix.pdf_id}; contact Mathpix to delete it.")
+                    pages, candidates = build_pages(doc, ocr, self.log)
+                    _check_crop_budget(doc, candidates)
                 items = []
                 # Two primary pages, plus one page before and after for
                 # cross-page continuation and column-order context.
+                last_started = None
                 for start in range(0, len(doc), 2):
                     last = min(start + 2, len(doc))
                     context_start = max(0, start - 1)
                     context_end = min(last + 1, len(doc))
                     image_pages = [(i + 1, _gemini_page_image(doc[i]))
                                    for i in range(context_start, context_end)]
+                    if gemini_only and last_started is not None:
+                        remaining = settings.PDF_GEMINI_MIN_INTERVAL_SECONDS - (time.monotonic() - last_started)
+                        if remaining > 0:
+                            time.sleep(remaining)
+                    last_started = time.monotonic()
                     raw_items = self.gemini.interpret(start + 1, last, pages[context_start:context_end], image_pages)
                     items.extend(validate_questions(raw_items, start + 1, last, self.log, context_end))
                 if not items:
@@ -368,7 +446,8 @@ class CloudPDFQuestionExtractor:
                             explicit_ocr_numbers.add(int(match.group(1)))
                 missing_ocr = sorted(explicit_ocr_numbers - found_numbers)
                 if missing_ocr:
-                    self.log("Warning: Explicit OCR labels missing from cloud output: "
+                    source_label = "local PDF" if gemini_only else "OCR"
+                    self.log(f"Warning: Explicit {source_label} labels missing from cloud output: "
                              + ", ".join(map(str, missing_ocr[:40])) + (" ..." if len(missing_ocr) > 40 else "")
                              + ". Compare the source and add any missing questions manually.")
                 for previous, current in zip(items, items[1:]):
@@ -418,6 +497,11 @@ class CloudPDFQuestionExtractor:
                         storage.delete(name)
                     except Exception:
                         self.log("Warning: A temporary image could not be removed from storage.")
+            if isinstance(self.gemini, GeminiClient):
+                summary = self.gemini.usage_summary()
+                if summary:
+                    self.log(f"Gemini model: {self.gemini.model}.")
+                    self.log(summary)
             paper.extraction_log = "\n".join(self.logs)
             paper.save(update_fields=["status", "extraction_log", "total_pages", "questions_found", "ocr_used"])
         return len(items) if succeeded else 0
