@@ -3,45 +3,92 @@
 This is deliberately conservative: PDF text is not a semantic document, and
 reading order, mathematical layout and illustrations cannot always be inferred
 reliably.  Ambiguities are returned as review issues rather than guessed away.
-Scanned PDFs are handled by the caller's OCR fallback instead.
+Scanned pages can use a local Tesseract text layer supplied by the caller;
+all OCR and geometrical guesses remain subject to human review.
 """
 
 from collections import Counter
+from copy import deepcopy
 from dataclasses import dataclass, field
 from statistics import median
 import re
+import unicodedata
 
 import pymupdf as fitz
 
 from .pdf_tables import repair_simple_superscripts, source_box, table_from_pdf
-from .pdf_math import reconstruct_option_fractions
+from .pdf_math import is_type3_font, reconstruct_option_fractions
+from .pdf_graphics import scanned_graphic_candidates
 
 
 PREFIXED_QUESTION = re.compile(
-    r"^(?:(?:Q(?:uestion)?\.?\s*(\d+)[:.]?)|(?:प्रश्न\s*(\d+)[:.]?)|(?:प्र\.\s*(\d+)[:.]?))(?=\s|$)",
+    r"^(?:(?:Q(?:uestion)?\.?\s*(\d+)[:.)]?)|(?:प्रश्न\s*(\d+)[:.)]?)|(?:प्र\.\s*(\d+)[:.)]?))(?=\s|$)",
     re.IGNORECASE,
 )
-NUMBERED_QUESTION = re.compile(r"^([1-9]\d{0,3})[.)](?=\s|$)")
+NUMBERED_QUESTION = re.compile(r"^([1-9१-९]\d{0,3})[.)](?=\s|$)")
+# Support common printed labels without treating decimal numbers or arbitrary
+# parenthesised references in prose as answers. Parsing still requires an
+# ordered sequence starting at A / 1.
 OPTION_MARKER = re.compile(
-    r"\((?P<paren>[A-Da-d1-4कखगघ])\)|(?<!\S)(?P<dot>[A-Da-d1-4])\.(?=\s|$)"
+    r"\((?P<paren>[A-Ea-e1-5कखगघङ१२३४५])\)"
+    r"|\[(?P<bracket>[A-Ea-e1-5कखगघङ१२३४५])\]"
+    r"|(?<!\S)(?P<dot>[A-Ea-e1-5१२३४५])\.(?=\s|$)"
+    r"|(?<!\S)(?P<right>[A-Ea-e1-5१२३४५])\)(?=\s|$)"
 )
-OPTION_AT_START = re.compile(r"^\s*(?:\([A-Da-d1-4कखगघ]\)|[A-Da-d1-4]\.)")
+OPTION_AT_START = re.compile(r"^\s*(?:\([A-Ea-e1-5कखगघङ१२३४५]\)|\[[A-Ea-e1-5कखगघङ१२३४५]\]|[A-Ea-e1-5१२३४५][.)](?=\s|$))")
 FIGURE_REFERENCE = re.compile(r"\b(?:figure|diagram|illustration|graph)\b|\bas shown\b|चित्र|आरेख|ग्राफ", re.IGNORECASE)
 TABLE_REFERENCE = re.compile(
-    r"\b(?:match\s+(?:the\s+)?(?:list|column)|(?:list|column)[-\s]*[i1]+\b|"
-    r"(?:given|following|below|above)\s+table\b|table\s+(?:below|above))",
+    r"\b(?:match\s+(?:the\s+)?(?:list|column)|(?:list|column)[-\s]*[i1]+|table)\b"
+    r"|तालिका|सारणी",
     re.IGNORECASE,
 )
+
+
+def _option_raw(match):
+    return next((value for value in match.groupdict().values() if value), "")
+
+
+def _option_style(raw):
+    if raw in "12345१२३४५":
+        return "numeric"
+    if raw in "कखगघङ":
+        return "hindi"
+    return "letter"
 
 
 def _normalize_option(raw):
-    return {"1": "A", "2": "B", "3": "C", "4": "D", "क": "A", "ख": "B", "ग": "C", "घ": "D"}.get(
-        raw, raw.upper()
-    )
+    return dict(zip("12345१२३४५कखगघङ", "ABCDEABCDEABCDE")).get(raw, raw.upper())
 
 
 def _compact(value):
     return re.sub(r"\s+", " ", value).strip()
+
+
+def _ocr_line_text(spans):
+    """Restore clearly separated OCR word spans when no space glyph was emitted.
+
+    Tesseract can emit Hindi words as separate positioned spans but omit the
+    whitespace between them. Insert a space only at a substantial source gap
+    between word characters; never try to infer the characters themselves.
+    """
+    parts, previous = [], None
+    def word_edge(char):
+        return char.isalnum() or unicodedata.category(char).startswith("M")
+    for span in spans:
+        value = span.get("text", "")
+        if not value:
+            continue
+        box = fitz.Rect(span["bbox"])
+        if previous and not previous[0][-1].isspace() and not value[0].isspace():
+            prev_value, prev_box = previous
+            gap = box.x0 - prev_box.x1
+            height = min(prev_box.height, box.height)
+            if (word_edge(prev_value[-1]) and word_edge(value[0])
+                    and gap > max(1.5, .15 * height)):
+                parts.append(" ")
+        parts.append(value)
+        previous = (value, box)
+    return "".join(parts).strip()
 
 
 @dataclass
@@ -51,6 +98,7 @@ class Anchor:
     rect: fitz.Rect
     label: str
     prefixed: bool
+    inferred: bool = False
 
 
 @dataclass
@@ -95,9 +143,9 @@ def parse_options(text):
     for line in text.splitlines(keepends=True):
         accepted = []
         for match in OPTION_MARKER.finditer(line):
-            raw = match.group("paren") or match.group("dot")
+            raw = _option_raw(match)
             key = _normalize_option(raw)
-            style = "numeric" if raw in "1234" else "hindi" if raw in "कखगघ" else "letter"
+            style = _option_style(raw)
             prefix = line[:match.start()].strip()
             if not accepted:
                 if prefix and (len(prefix) > 30 or re.search(r"[A-Za-z]{3,}", prefix)):
@@ -126,14 +174,16 @@ def parse_options(text):
             if candidate[2] == expected:
                 sequence.append(candidate)
                 expected = chr(ord(expected) + 1)
-                if expected == "E":
+                if expected == "F":
                     break
             elif candidate[2] == "A":
                 break
         # Among equally complete runs, the later one is usually the answer
         # list following a list of statements or a matching table.
-        previous_score = (len(best), best[0][0]) if best else (0, -1)
-        if (len(sequence), sequence[0][0]) > previous_score:
+        # Four or five labels are both complete runs. Prefer the later one
+        # when a longer labelled statement/list precedes the actual answers.
+        previous_score = (min(len(best), 4), best[0][0]) if best else (0, -1)
+        if (min(len(sequence), 4), sequence[0][0]) > previous_score:
             best = sequence
 
     if not best:
@@ -148,23 +198,29 @@ def parse_options(text):
 class DigitalQuestionLayout:
     """Read numbered digital pages in column order and map embedded figures.
 
-    Only pages with an extractable text layer are supported here.  Existing
-    Tesseract handling is retained separately for scanned pages.  The method
-    returns None when there are no explicit Q/Question/प्रश्न anchors so the
-    caller can use the more general text/OCR fallback.
+    The optional OCR text pages are local, temporary Tesseract results. Source
+    crops always come from the original PDF, not the OCR rendering. The caller
+    can use a basic fallback when question anchors are not sufficiently clear.
     """
 
-    def __init__(self, doc, log):
+    def __init__(self, doc, log, ocr_pages=None, unreadable_pages=None):
         self.doc = doc
         self.log = log
+        # Keep the Page alive with each TextPage: PyMuPDF retains only a weak
+        # parent reference. Keys are zero-based original page numbers.
+        self.ocr_pages = ocr_pages or {}
+        self.unreadable_pages = set(unreadable_pages or ())
         self.lines = []
         self.images = []
+        self.raster_pages = set()
         self.prefixed = []
         self.numbered = []
         self.edge_counts = Counter()
         self.image_pages = {}
         self._tables_by_page = {}
+        self._table_data_cache = {}
         self._drawings_by_page = {}
+        self._vectors_by_page = {}
         self.two_columns = False
         self._index_document()
 
@@ -172,11 +228,17 @@ class DigitalQuestionLayout:
         for page_index, page in enumerate(self.doc):
             page_lines = []
             page_edge_keys = set()
-            for block in page.get_text("dict")["blocks"]:
+            if page_index in self.ocr_pages:
+                ocr_page, textpage = self.ocr_pages[page_index]
+                blocks = ocr_page.get_text("dict", textpage=textpage)["blocks"]
+            else:
+                blocks = page.get_text("dict")["blocks"]
+            for block in blocks:
                 if block["type"] != 0:
                     continue
                 for line in block["lines"]:
-                    text = "".join(span["text"] for span in line["spans"]).strip()
+                    text = (_ocr_line_text(line["spans"]) if page_index in self.ocr_pages
+                            else "".join(span["text"] for span in line["spans"]).strip())
                     if not text:
                         continue
                     rect = fitz.Rect(line["bbox"])
@@ -196,6 +258,12 @@ class DigitalQuestionLayout:
             self.lines.append(page_lines)
             page_images = page.get_image_info(xrefs=True)
             self.images.append(page_images)
+            # A full-page raster may already have an invisible OCR text layer.
+            # Keep that text, but inspect ink regions rather than attaching the
+            # entire scanned page as one question image.
+            if any((fitz.Rect(image["bbox"]) & page.rect).get_area() > page.rect.get_area() * .80
+                   for image in page_images):
+                self.raster_pages.add(page_index)
             for image in page_images:
                 signature = image.get("digest") or image.get("xref")
                 if signature:
@@ -211,9 +279,185 @@ class DigitalQuestionLayout:
     def _edge_key(page, text, rect):
         return (_compact(text), round(rect.x0 / page.rect.width, 2), round(rect.y0 / page.rect.height, 2))
 
+    def _numbered_anchors(self):
+        """Find plain numeric question labels only when option evidence exists.
+
+        Numbered instructions, decimal fragments and numbered options can look
+        like question labels. Use the outer margin and a sequential option run
+        to establish anchors rather than accepting every ``1.``/``1)`` line.
+        """
+        candidates = []
+        repeated_threshold = max(2, int(len(self.doc) * 0.15))
+        for anchor in self.numbered:
+            page = self.doc[anchor.page_index]
+            source_line = next((text for text, box, _ in self.lines[anchor.page_index]
+                                if box == anchor.rect), "")
+            if re.match(r"^\d+\.\s+\d+\s*$", source_line):
+                continue  # e.g. a split decimal 2. 574, not a question
+            if self.edge_counts[self._edge_key(page, source_line, anchor.rect)] >= repeated_threshold:
+                continue
+            candidates.append(anchor)
+        if not candidates:
+            return []
+
+        # Establish two columns from increasing question numbers at comparable
+        # left margins in the two halves, not from arbitrary right-hand options.
+        for page_index in {anchor.page_index for anchor in candidates}:
+            page = self.doc[page_index]
+            left = [a for a in candidates if a.page_index == page_index and a.rect.x0 / page.rect.width < .30]
+            right = [a for a in candidates if a.page_index == page_index and .45 <= a.rect.x0 / page.rect.width < .75]
+            if left and right:
+                lx = min(a.rect.x0 / page.rect.width for a in left)
+                rx = min(a.rect.x0 / page.rect.width for a in right)
+                lgroup = [a for a in left if abs(a.rect.x0 / page.rect.width - lx) <= .02]
+                rgroup = [a for a in right if abs(a.rect.x0 / page.rect.width - rx) <= .02]
+                if (len(lgroup) + len(rgroup) >= 3 and abs((rx - .5) - lx) <= .05
+                        and min(a.number for a in rgroup) > max(a.number for a in lgroup)):
+                    self.two_columns = True
+                    break
+
+        def col(anchor):
+            return int(self.two_columns and anchor.rect.x0 >= self.doc[anchor.page_index].rect.width / 2)
+
+        def order(anchor):
+            return anchor.page_index, col(anchor), anchor.rect.y0
+
+        def region_text(anchor, following):
+            # A differently indented numbered question can intervene before the
+            # next member of this margin group (notably after a cover page).
+            # Do not use that other question's choices to confirm the cover.
+            for other in sorted(candidates, key=order):
+                if order(other) <= order(anchor) or (following and order(other) >= order(following)):
+                    continue
+                if other.number > anchor.number:
+                    continue
+                line = next((text for text, box, _ in self.lines[other.page_index] if box == other.rect), "")
+                body = line[len(other.label):].strip()
+                question_like = ("?" in body or bool(re.match(
+                    r"(?i)^(?:which|what|why|how|find|calculate|choose|identify|select)\b|^(?:क्या|कौन|किस)", body)))
+                if question_like:
+                    following = other
+                    break
+            # Read up to the next question in column order, including a bounded
+            # continuation into the next column/page. This also lets a question
+            # at the end of a page establish confidence from its actual choices.
+            start_page, start_col, _ = order(anchor)
+            last_page = min(len(self.doc) - 1, start_page + 1,
+                            following.page_index if following else len(self.doc) - 1)
+            pieces = []
+            for page_index in range(start_page, last_page + 1):
+                page = self.doc[page_index]
+                page_anchors = [a for a in candidates if a.page_index == page_index]
+                top, bottom = self._content_bounds(page_index, page_anchors)
+                for column in range(2 if self.two_columns else 1):
+                    if page_index == start_page and column < start_col:
+                        continue
+                    if following and (page_index, column) > (following.page_index, col(following)):
+                        break
+                    x0 = page.rect.width * column / 2 if self.two_columns else 0
+                    x1 = page.rect.width * (column + 1) / 2 if self.two_columns else page.rect.width
+                    y0 = max(top, anchor.rect.y0 - 5) if (page_index, column) == (start_page, start_col) else top
+                    y1 = min(bottom, following.rect.y0 - 5) if following and (page_index, column) == (following.page_index, col(following)) else bottom
+                    if y1 > y0:
+                        pieces.append(self._text_in_rect(page_index, fitz.Rect(x0, y0, x1, y1)))
+                    if following and (page_index, column) == (following.page_index, col(following)):
+                        break
+            body = "\n".join(pieces)
+            return re.sub(r"(?<!\w)" + re.escape(anchor.label.strip()) + r"(?!\d)", "", body, count=1)
+
+        # Cluster margins instead of assuming the leftmost number in the PDF
+        # is a question; a cover can have instructions at a different indent.
+        groups = []
+        positioned = sorted(((a.rect.x0 / self.doc[a.page_index].rect.width - .5 * col(a), a)
+                             for a in candidates), key=lambda pair: pair[0])
+        for position, anchor in positioned:
+            if groups and abs(position - median(value for value, _ in groups[-1])) <= .015:
+                groups[-1].append((position, anchor))
+            else:
+                groups.append([(position, anchor)])
+
+        best = []
+        alternatives = []
+        best_score = (0, 0, 0)
+        for group in groups:
+            aligned = sorted((anchor for _, anchor in group), key=order)
+            # If numeric choices are printed at exactly the question margin,
+            # identify an ordered 1,2,... answer run after a question-like line.
+            # Reject this interpretation when a candidate itself contains an
+            # independent option run (then it may be another question).
+            choice_ids = set()
+            for index, candidate in enumerate(aligned):
+                if candidate.number != 1 or index == 0 or id(candidate) in choice_ids:
+                    continue
+                previous = aligned[index - 1]
+                if (previous.page_index != candidate.page_index or col(previous) != col(candidate)
+                        or candidate.rect.y0 - previous.rect.y0 > 180):
+                    continue
+                previous_line = next((text for text, box, _ in self.lines[previous.page_index]
+                                      if box == previous.rect), "")
+                remainder = previous_line[len(previous.label):].strip()
+                if len(remainder) < 12 and "?" not in remainder:
+                    continue
+                run = [candidate]
+                for later in aligned[index + 1:]:
+                    if (later.page_index != candidate.page_index or col(later) != col(candidate)
+                            or later.number != len(run) + 1 or later.number > 5
+                            or later.rect.y0 - run[-1].rect.y0 > 120):
+                        break
+                    if len(parse_options(region_text(run[-1], later))[1]) >= 2:
+                        break
+                    run.append(later)
+                if len(run) >= 2:
+                    choice_ids.update(id(item) for item in run)
+            aligned = [a for a in aligned if id(a) not in choice_ids]
+            confirmed = []
+            for index, anchor in enumerate(aligned):
+                following = aligned[index + 1] if index + 1 < len(aligned) else None
+                if len(parse_options(region_text(anchor, following))[1]) >= 2:
+                    confirmed.append(anchor)
+            score = (len(confirmed), len({a.number for a in confirmed}), len(aligned))
+            alternatives.extend(confirmed)
+            if score > best_score:
+                # Preserve otherwise unsupported questions when their number
+                # fills an unambiguous gap in a confirmed sequence. Their
+                # content/options are explicitly flagged, not invented.
+                selected = []
+                for index, anchor in enumerate(aligned):
+                    if anchor in confirmed:
+                        selected.append(anchor)
+                        continue
+                    previous = selected[-1] if selected else None
+                    following = next((a for a in aligned[index + 1:] if a in confirmed), None)
+                    between = (previous and following and anchor.number == previous.number + 1
+                               and anchor.number < following.number)
+                    first = (not previous and following and anchor.number + 1 == following.number
+                             and not any(a.number == anchor.number for a in aligned[index + 1:aligned.index(following)]))
+                    line = next((text for text, box, _ in self.lines[anchor.page_index] if box == anchor.rect), "")
+                    last = (previous and not following and anchor.number == previous.number + 1
+                            and "?" in line)
+                    if between or first or last:
+                        anchor.inferred = True
+                        selected.append(anchor)
+                best, best_score = selected, score
+        # A paper can shift its question margin between pages. Recover a
+        # separately confirmed anchor from another margin only when it extends
+        # the existing sequence in reading order without duplicating a number.
+        for anchor in sorted(alternatives, key=order):
+            if anchor in best or any(item.number == anchor.number for item in best):
+                continue
+            combined = sorted(best + [anchor], key=order)
+            position = combined.index(anchor)
+            previous = combined[position - 1] if position else None
+            following = combined[position + 1] if position + 1 < len(combined) else None
+            fits_before = following and anchor.number + 1 == following.number and (not previous or previous.number < anchor.number)
+            fits_after = previous and previous.number + 1 == anchor.number and (not following or anchor.number < following.number)
+            if fits_before or fits_after:
+                best = combined
+        return best
+
     def _anchors(self):
         if not self.prefixed:
-            return []
+            return self._numbered_anchors()
         leaders = {}
         for anchor in self.prefixed:
             page = self.doc[anchor.page_index]
@@ -236,6 +480,45 @@ class DigitalQuestionLayout:
                 expected = leaders.get(1 - column, 0.05) + (0.5 if column else -0.5)
             if expected is not None and abs(anchor.rect.x0 / page.rect.width - expected) <= 0.025:
                 aligned.append(anchor)
+
+        # Numeric answer labels may align with an explicit Q label. Treat an
+        # adjacent 1,2,... run following a question as choices, not new
+        # question anchors. The prefixed anchors also bound the run.
+        ordered = sorted(self.prefixed + aligned, key=reading_order)
+        numeric_choices = set()
+        for index, candidate in enumerate(ordered):
+            if candidate.prefixed or candidate.number != 1 or index == 0:
+                continue
+            previous = ordered[index - 1]
+            if (previous.page_index != candidate.page_index or column_of(previous) != column_of(candidate)
+                    or candidate.rect.y0 - previous.rect.y0 > 180):
+                continue
+            if not previous.prefixed:
+                line = next((text for text, box, _ in self.lines[previous.page_index] if box == previous.rect), "")
+                if len(line[len(previous.label):].strip()) < 12 and "?" not in line:
+                    continue
+            run = [candidate]
+            for later in ordered[index + 1:]:
+                if (later.prefixed or later.page_index != candidate.page_index
+                        or column_of(later) != column_of(candidate)
+                        or later.number != len(run) + 1 or later.number > 5
+                        or later.rect.y0 - run[-1].rect.y0 > 120):
+                    break
+                page = self.doc[candidate.page_index]
+                column = column_of(candidate)
+                x0 = page.rect.width * column / 2 if self.two_columns else 0
+                x1 = page.rect.width * (column + 1) / 2 if self.two_columns else page.rect.width
+                between = self._text_in_rect(candidate.page_index, fitz.Rect(
+                    x0, max(0, run[-1].rect.y0 - 5), x1, later.rect.y0 - 5))
+                between = re.sub(r"(?<!\w)" + re.escape(run[-1].label.strip()) + r"(?!\d)", "", between, count=1)
+                if len(parse_options(between)[1]) >= 2:
+                    break  # a numbered question with its own choices
+                run.append(later)
+            if len(run) >= 2:
+                numeric_choices.update(id(item) for item in run)
+        aligned = [anchor for anchor in aligned if id(anchor) not in numeric_choices
+                   and not re.match(r"^\d+\.\s+\d+\s*$", next(
+                       (text for text, box, _ in self.lines[anchor.page_index] if box == anchor.rect), ""))]
 
         first_prefixed = min(self.prefixed, key=reading_order)
         anchors = list(self.prefixed)
@@ -304,6 +587,26 @@ class DigitalQuestionLayout:
         )
         return repeats and (near_edge or spanning_watermark)
 
+    def _text_in_rect(self, page_index, rect):
+        page = self.doc[page_index]
+        if page_index not in self.ocr_pages:
+            return repair_simple_superscripts(page, rect, page.get_text("text", clip=rect, sort=True))
+        # PyMuPDF ignores clip= when a prebuilt OCR TextPage is passed. Filter
+        # OCR spans geometrically instead, so one question/column cannot consume
+        # the entire page. OCR spans are usually individual words.
+        rows = []
+        for text, box, spans in self.lines[page_index]:
+            if rect.contains(box):
+                value = text
+            else:
+                selected = [span for span in spans
+                            if rect.contains((fitz.Rect(span["bbox"]).tl + fitz.Rect(span["bbox"]).br) / 2)]
+                value = _ocr_line_text(selected)
+            if value:
+                rows.append((box.y0, box.x0, value))
+        rows.sort(key=lambda row: (row[0], row[1]))
+        return "\n".join(row[2] for row in rows)
+
     def _segment(self, page_index, rect):
         page = self.doc[page_index]
         images = []
@@ -311,6 +614,12 @@ class DigitalQuestionLayout:
         for image in self.images[page_index]:
             image_rect = fitz.Rect(image["bbox"])
             center = (image_rect.tl + image_rect.br) / 2
+            # A scan is ordinarily one full-page raster, not a diagram. Never
+            # attach that raster to whichever question happens to contain its
+            # centre; source-based figure cropping remains available for review.
+            if ((page_index in self.ocr_pages and image_rect.get_area() > page.rect.get_area() * 0.35)
+                    or (page_index in self.raster_pages and image_rect.get_area() > page.rect.get_area() * 0.80)):
+                continue
             if rect.contains(center) and not self._decorative_image(page_index, image):
                 images.append(image_rect)
                 crossing_image = crossing_image or not rect.contains(image_rect)
@@ -326,14 +635,14 @@ class DigitalQuestionLayout:
         sizes = [span["size"] for span in spans]
         typical_size = median(sizes) if sizes else 0
         complex_math = any(
-            span["font"].startswith("Type3")
+            is_type3_font(span["font"])
             or (typical_size and span["size"] < typical_size * 0.80 and re.search(r"\w", span["text"]))
             for span in spans
         )
         return Segment(
             page_index=page_index,
             rect=rect,
-            text=repair_simple_superscripts(page, rect, page.get_text("text", clip=rect, sort=True)),
+            text=self._text_in_rect(page_index, rect),
             images=images,
             has_crossing_image=crossing_image,
             has_complex_math=complex_math,
@@ -348,7 +657,7 @@ class DigitalQuestionLayout:
         for anchor in anchors:
             by_page.setdefault(anchor.page_index, []).append(anchor)
         self.log(
-            f"Digital layout detected: {'two columns' if self.two_columns else 'single column'}; "
+            f"{'OCR-assisted' if self.ocr_pages else 'Digital'} layout detected: {'two columns' if self.two_columns else 'single column'}; "
             "matching question labels and figures by their position."
         )
         questions = []
@@ -375,6 +684,8 @@ class DigitalQuestionLayout:
                     if current and cut > start:
                         current.segments.append(self._segment(page_index, fitz.Rect(x0, start, x1, cut)))
                     current = LayoutQuestion(anchor.number, page_index + 1, anchor.label)
+                    if anchor.inferred:
+                        current.issues.append("Question numbering was inferred from nearby labels; verify the source and choices.")
                     questions.append(current)
                     start = cut
                 if current and bottom > start and (page_anchors or current.segments):
@@ -401,8 +712,23 @@ class DigitalQuestionLayout:
 
     def _structured_table_text(self, question, texts):
         """Replace only confidently isolated ruled table regions with markers."""
-        if not TABLE_REFERENCE.search(" ".join(texts)):
-            return texts
+        has_reference = bool(TABLE_REFERENCE.search(" ".join(texts)))
+        # Never consume a grid of answer choices as if it were a question
+        # table, even when the statement happens to mention a table elsewhere.
+        joined = "\n".join(texts)
+        _, preliminary, offset, _ = parse_options(joined)
+        first_option_segment = None
+        if offset is not None:
+            cursor = 0
+            for segment_index, value in enumerate(texts):
+                if offset < cursor + len(value) + 1:
+                    first_option_segment = segment_index
+                    break
+                cursor += len(value) + 1
+        previous_options = question.options
+        question.options = preliminary
+        markers = self._option_label_boxes(question, joined, offset)
+        question.options = previous_options
         output = []
         last_table_segment = None
         last_table_geometry = None
@@ -410,18 +736,45 @@ class DigitalQuestionLayout:
             page = self.doc[segment.page_index]
             if segment.page_index not in self._tables_by_page:
                 try:
-                    self._tables_by_page[segment.page_index] = page.find_tables().tables[:100]
-                except (ValueError, RuntimeError, AttributeError):
+                    # A raster scan has no usable vector rulings for this
+                    # detector; OCR text alone cannot establish a cell grid.
+                    self._tables_by_page[segment.page_index] = (
+                        [] if segment.page_index in self.ocr_pages else page.find_tables().tables[:100]
+                    )
+                except Exception:
                     self._tables_by_page[segment.page_index] = []
+                    self.log(f"Warning: Page {segment.page_index + 1}: table detection failed; review the original page.")
             candidates = []
             for table in self._tables_by_page[segment.page_index]:
                 box = fitz.Rect(table.bbox)
                 # Never silently consume material crossing a question boundary.
                 if not (segment.rect + (-1, -1, 1, 1)).contains(box):
                     continue
-                data = table_from_pdf(page, table)
+                cache_key = (segment.page_index, tuple(table.bbox))
+                if cache_key not in self._table_data_cache:
+                    try:
+                        self._table_data_cache[cache_key] = table_from_pdf(page, table)
+                    except Exception:
+                        self._table_data_cache[cache_key] = None
+                        self.log(f"Warning: Page {segment.page_index + 1}: a table could not be parsed; review the original page.")
+                data = deepcopy(self._table_data_cache[cache_key])
                 if not data:
                     continue
+                if not has_reference:
+                    # An unreferenced grid needs stronger evidence than a
+                    # one-row header or a few incidental intersecting rules.
+                    values = [cell["text"].strip() for row in data["rows"] for cell in row]
+                    if table.row_count < 2 or sum(bool(value) for value in values) < 4:
+                        continue
+                if first_option_segment is not None:
+                    if index > first_option_segment:
+                        continue
+                    if index == first_option_segment:
+                        option_boxes = [rect for _, rect in markers.get(index, [])]
+                        # If boundaries cannot be located, do not risk silently
+                        # converting answer choices into table cells.
+                        if not option_boxes or box.y1 > min(rect.y0 for rect in option_boxes) + 1:
+                            continue
                 # A horizontal slice must not remove other prose alongside the table.
                 outside = False
                 for line_text, line_box, _ in self.lines[segment.page_index]:
@@ -490,6 +843,152 @@ class DigitalQuestionLayout:
             output.append("\n".join(fragments))
         return output
 
+    def _vector_candidates(self, page_index):
+        """Return substantial local line-art clusters, excluding ruled tables.
+
+        These are candidates, not a visual understanding model. The caller
+        either flags a source-backed crop or leaves it in the review pool.
+        """
+        if page_index in self._vectors_by_page:
+            return self._vectors_by_page[page_index]
+        page = self.doc[page_index]
+        if page_index in self.ocr_pages:
+            self._vectors_by_page[page_index] = []
+            return []
+        try:
+            if page_index not in self._drawings_by_page:
+                self._drawings_by_page[page_index] = page.get_drawings()
+            drawings = self._drawings_by_page[page_index]
+            clusters = page.cluster_drawings(drawings=drawings, x_tolerance=5, y_tolerance=5)
+        except Exception:
+            self._vectors_by_page[page_index] = []
+            self.log(f"Warning: Page {page_index + 1}: vector diagram detection failed; review the original page.")
+            return []
+        table_boxes = [fitz.Rect(table.bbox) for table in self._tables_by_page.get(page_index, [])]
+        result = []
+        for box in clusters:
+            box = fitz.Rect(box) & page.rect
+            if (box.width < 25 or box.height < 25
+                    or box.get_area() > page.rect.get_area() * .30):
+                continue
+            if any((box & table).get_area() >= box.get_area() * .60 for table in table_boxes):
+                continue
+            expanded = box + (-1, -1, 1, 1)
+            item_count = sum(len(drawing.get("items", [])) for drawing in drawings
+                             if expanded.contains((drawing["rect"].tl + drawing["rect"].br) / 2))
+            if item_count < 3:
+                continue  # a box, underline or a pair of axes is not enough
+            result.append(box)
+        self._vectors_by_page[page_index] = result
+        return result
+
+    def _figure_crop_box(self, page_index, segment, rect):
+        """Include nearby short source labels without pulling in prose/options."""
+        page = self.doc[page_index]
+        box = (rect + (-4, -4, 4, 4)) & segment.rect & page.rect
+        vicinity = rect + (-14, -14, 14, 14)
+        for text, line, _ in self.lines[page_index]:
+            if (len(text.strip()) > 12 or OPTION_AT_START.match(text)
+                    or PREFIXED_QUESTION.match(text) or NUMBERED_QUESTION.match(text)):
+                continue
+            center = (line.tl + line.br) / 2
+            if vicinity.contains(center) and segment.rect.contains(line):
+                box |= line + (-2, -2, 2, 2)
+        return box & segment.rect & page.rect
+
+    def _option_label_boxes(self, question, text, first_offset):
+        """Locate the chosen option run, including several labels on one line.
+
+        Do not use entire line rectangles as markers: two or more image choices
+        may share a line, and a numbered question label itself is not option A.
+        If an entire matching run cannot be located, leave figures unassigned.
+        """
+        result = {index: [] for index in range(len(question.segments))}
+        if first_offset is None or not question.options:
+            return result
+        first_match = OPTION_MARKER.match(text[first_offset:])
+        if not first_match:
+            return result
+        chosen_style = _option_style(_option_raw(first_match))
+        keys = [option["key"] for option in question.options]
+        candidates = []
+        skipped_label = False
+        for index, segment in enumerate(question.segments):
+            if segment.page_index in self.ocr_pages:
+                ocr_page, textpage = self.ocr_pages[segment.page_index]
+                blocks = ocr_page.get_text("rawdict", textpage=textpage).get("blocks", [])
+            else:
+                blocks = self.doc[segment.page_index].get_text("rawdict", clip=segment.rect).get("blocks", [])
+            page_candidates = []
+            for block in blocks:
+                if block.get("type") != 0:
+                    continue
+                for line in block.get("lines", []):
+                    chars = [char for span in line.get("spans", []) for char in span.get("chars", [])]
+                    line_text = "".join(char.get("c", "") for char in chars)
+                    if not chars or not line_text.strip():
+                        continue
+                    line_box = fitz.Rect(line["bbox"])
+                    if not segment.rect.intersects(line_box):
+                        continue
+                    # A plain numeric question label would otherwise look like
+                    # the first answer in a 1)/2) or 1./2. answer list.
+                    stripped = line_text.lstrip()
+                    label = NUMBERED_QUESTION.match(stripped)
+                    if (index == 0 and not skipped_label and label
+                            and label.group(0).strip() == question.label.strip()
+                            and line_box.y0 <= segment.rect.y0 + 16):
+                        skipped_label = True
+                        continue
+                    accepted = []
+                    for match in OPTION_MARKER.finditer(line_text):
+                        raw = _option_raw(match)
+                        key = _normalize_option(raw)
+                        if _option_style(raw) != chosen_style or key not in keys:
+                            continue
+                        prefix = line_text[:match.start()].strip()
+                        if not accepted:
+                            if prefix and (len(prefix) > 30 or re.search(r"[A-Za-z]{3,}", prefix)):
+                                continue
+                        elif key != chr(ord(accepted[-1]) + 1):
+                            continue
+                        relevant = chars[match.start():match.end()]
+                        if not relevant:
+                            continue
+                        box = fitz.Rect(relevant[0]["bbox"])
+                        for char in relevant[1:]:
+                            box |= fitz.Rect(char["bbox"])
+                        if segment.rect.contains((box.tl + box.br) / 2):
+                            page_candidates.append((index, key, box))
+                            accepted.append(key)
+            # Sort visually across rows, allowing OCR a few points of baseline
+            # variation between side-by-side labels.
+            rows = []
+            for candidate in sorted(page_candidates, key=lambda item: item[2].y0):
+                if rows and abs(candidate[2].y0 - rows[-1][0][2].y0) <= 5:
+                    rows[-1].append(candidate)
+                else:
+                    rows.append([candidate])
+            for row in rows:
+                candidates.extend(sorted(row, key=lambda item: item[2].x0))
+        best = []
+        for start, candidate in enumerate(candidates):
+            if candidate[1] != keys[0]:
+                continue
+            sequence = [candidate]
+            for later in candidates[start + 1:]:
+                if len(sequence) == len(keys):
+                    break
+                if later[1] == keys[len(sequence)]:
+                    sequence.append(later)
+                elif later[1] == keys[0]:
+                    break
+            if len(sequence) == len(keys):
+                best = sequence  # last complete run, as in parse_options
+        for index, key, box in best:
+            result[index].append((key, box))
+        return result
+
     def _finalize(self, question):
         texts = [segment.text for segment in question.segments]
         # The source can place a mathematical accent before Q9 on the same
@@ -499,6 +998,23 @@ class DigitalQuestionLayout:
         for index, segment_text in enumerate(texts):
             updated, count = label_pattern.subn("", segment_text, count=1)
             if count:
+                # OCR sometimes splits an adjacent question prefix (for
+                # example प्रश्न) and its number into separate text lines.
+                # Remove only an isolated, geometrically adjacent prefix.
+                segment = question.segments[index]
+                if segment.page_index in self.ocr_pages and NUMBERED_QUESTION.match(question.label.strip()):
+                    lines = self.lines[segment.page_index]
+                    number_line = next((box for value, box, _ in lines
+                                        if value.lstrip().startswith(question.label.strip())
+                                        and box.y0 <= segment.rect.y0 + 16), None)
+                    if number_line:
+                        for value, box, _ in lines:
+                            prefix = value.strip()
+                            if (prefix.lower() in {"q", "q.", "question", "प्रश्न", "प्र."}
+                                    and abs(box.y0 - number_line.y0) <= 6
+                                    and -2 <= number_line.x0 - box.x1 <= 30):
+                                updated = re.sub(r"^\s*" + re.escape(prefix) + r"\s*\n", "", updated, count=1, flags=re.I)
+                                break
                 texts[index] = updated
                 break
         texts = self._structured_table_text(question, texts)
@@ -506,14 +1022,20 @@ class DigitalQuestionLayout:
         question.text, question.options, first_option_offset, ambiguous = parse_options(text)
         # Only geometrically unambiguous ruled fractions are converted to
         # LaTeX. A human still needs to verify every complex-math question.
-        for segment in question.segments:
-            if not segment.has_complex_math or not question.options:
+        reconstructed_by_segment = {}
+        for segment_index, segment in enumerate(question.segments):
+            if segment.page_index in self.ocr_pages or not segment.has_complex_math or not question.options:
                 continue
-            if segment.page_index not in self._drawings_by_page:
-                self._drawings_by_page[segment.page_index] = self.doc[segment.page_index].get_drawings()
-            reconstructed = reconstruct_option_fractions(
-                self.doc[segment.page_index], segment, question.options, OPTION_MARKER,
-                _normalize_option, self._drawings_by_page[segment.page_index])
+            try:
+                if segment.page_index not in self._drawings_by_page:
+                    self._drawings_by_page[segment.page_index] = self.doc[segment.page_index].get_drawings()
+                reconstructed = reconstruct_option_fractions(
+                    self.doc[segment.page_index], segment, question.options, OPTION_MARKER,
+                    _normalize_option, self._drawings_by_page[segment.page_index])
+            except Exception:
+                self.log(f"Warning: Page {segment.page_index + 1}: math reconstruction failed; review the original page.")
+                continue
+            reconstructed_by_segment[segment_index] = set(reconstructed)
             for option in question.options:
                 if option["key"] in reconstructed:
                     option["text"] = reconstructed[option["key"]]
@@ -521,15 +1043,20 @@ class DigitalQuestionLayout:
             {"page": segment.page_index + 1, "box": source_box(self.doc[segment.page_index], segment.rect)}
             for segment in question.segments if segment.text.strip() or segment.images
         ]
+        if any(segment.page_index in self.ocr_pages for segment in question.segments):
+            question.issues.append("Local OCR may misread text, formulas, options or diagrams; check the original page.")
+        elif any(segment.page_index in self.raster_pages for segment in question.segments):
+            question.issues.append("Full-page raster with text layer detected; verify its text, formulas and diagrams against the original.")
+        if any(segment.page_index in self.unreadable_pages for segment in question.segments):
+            question.issues.append("A scanned page could not be read; the question may be incomplete.")
         if ambiguous:
             question.issues.append("Option boundaries may be ambiguous; compare with the source.")
         if any(segment.has_complex_math for segment in question.segments):
             question.issues.append("Mathematical formatting may be inaccurate; compare with the source.")
-        if TABLE_REFERENCE.search(question.text):
-            if question.tables:
-                question.issues.append("Extracted table structure needs checking against the source, including merged cells and formulas.")
-            else:
-                question.issues.append("Table or matching layout may be inaccurate; compare with the source.")
+        if question.tables:
+            question.issues.append("Extracted table structure needs checking against the source, including merged cells and formulas.")
+        elif TABLE_REFERENCE.search(question.text):
+            question.issues.append("Table or matching layout may be inaccurate; compare with the source.")
         if any(segment.has_crossing_image for segment in question.segments):
             question.issues.append("A diagram crosses a question or column boundary; check the source.")
 
@@ -544,28 +1071,47 @@ class DigitalQuestionLayout:
                     first_option_segment = index
                     break
                 offset += len(seg_text) + 1
-        markers = {}
-        for index, segment in enumerate(question.segments):
-            found = []
-            for line_text, line_rect, _ in self.lines[segment.page_index]:
-                center = (line_rect.tl + line_rect.br) / 2
-                match = OPTION_MARKER.match(line_text.strip()) if segment.rect.contains(center) else None
-                if match:
-                    raw = match.group("paren") or match.group("dot")
-                    found.append((_normalize_option(raw), raw, line_rect))
-            markers[index] = found
-        # A numeric answer list is stronger than (A)-(D) labels inside a table.
-        numeric = any(raw in "1234" for found in markers.values() for _, raw, _ in found)
-        valid_keys = {option["key"] for option in question.options}
-        for index in markers:
-            markers[index] = [(key, rect) for key, raw, rect in markers[index]
-                              if key in valid_keys and (not numeric or raw in "1234")]
+        markers = self._option_label_boxes(question, text, first_option_offset)
+        # Raised numerator/overbar glyphs can sort before the first option
+        # label, contaminating the end of the question statement. Remove that
+        # short prefix only when source glyphs at the answer row match exactly
+        # and every answer on the row was successfully reconstructed.
+        if first_option_segment is not None and first_option_offset is not None:
+            row_markers = markers[first_option_segment]
+            if row_markers:
+                first_y = min(box.y0 for _, box in row_markers)
+                first_row = [(key, box) for key, box in row_markers if abs(box.y0 - first_y) <= 5]
+                prefix = text[:first_option_offset].splitlines()[-1].strip() if text[:first_option_offset].splitlines() else ""
+                normalized_prefix = "".join(prefix.split())
+                if (normalized_prefix and len(normalized_prefix) <= 30
+                        and not re.search(r"[A-Za-z]{2,}", normalized_prefix)
+                        and {key for key, _ in first_row} <= reconstructed_by_segment.get(first_option_segment, set())):
+                    segment = question.segments[first_option_segment]
+                    page = self.doc[segment.page_index]
+                    source_chars = []
+                    min_x = min(box.x0 for _, box in first_row) - 3
+                    for block in page.get_text("rawdict", clip=segment.rect).get("blocks", []):
+                        if block.get("type") != 0:
+                            continue
+                        for line in block.get("lines", []):
+                            for span in line.get("spans", []):
+                                for char in span.get("chars", []):
+                                    box = fitz.Rect(char["bbox"])
+                                    if (char.get("c", "").strip() and box.x0 >= min_x
+                                            and first_y - 12 <= box.y0 < first_y - .5):
+                                        source_chars.append(char["c"])
+                    compact_prefix = _compact(prefix)
+                    if (Counter(normalized_prefix) == Counter(source_chars)
+                            and question.text.endswith(compact_prefix)
+                            and len(question.text) > len(compact_prefix)):
+                        question.text = question.text[:-len(compact_prefix)].rstrip()
 
         def option_for(rect, candidates):
             # Require a clear left-to-right column and vertical interval.
             possible = []
             for key, marker in candidates:
-                if rect.x0 < marker.x0 - 3 or rect.y0 < marker.y0 - 3:
+                if (rect.x0 < marker.x0 - 3 or rect.y0 < marker.y0 - 3
+                        or rect.y0 - marker.y0 > 120):
                     continue
                 right = min((other.x0 for _, other in candidates
                              if other.x0 > marker.x0 + 20 and abs(other.y0 - marker.y0) < 12), default=float("inf"))
@@ -581,33 +1127,81 @@ class DigitalQuestionLayout:
                 return None
             return possible[0][2]
 
+        vector_by_segment = {}
+        scan_by_segment = {}
+        for index, segment in enumerate(question.segments):
+            vectors = []
+            for rect in self._vector_candidates(segment.page_index):
+                if not segment.rect.contains(rect):
+                    continue
+                # Do not duplicate a vector overlay already inside an embedded
+                # raster illustration.
+                if any((rect & image).get_area() >= rect.get_area() * .5 for image in segment.images):
+                    continue
+                vectors.append(rect)
+            vector_by_segment[index] = vectors
+            scan_by_segment[index] = []
+            if segment.page_index in self.ocr_pages or segment.page_index in self.raster_pages:
+                try:
+                    scanned = scanned_graphic_candidates(
+                        self.doc[segment.page_index], segment.rect, self.lines[segment.page_index])
+                    # A vector overlay on a scanned page is also visible to the
+                    # pixel detector; do not duplicate the same source figure.
+                    scan_by_segment[index] = [rect for rect in scanned if not any(
+                        (rect & vector).get_area() >= min(rect.get_area(), vector.get_area()) * .60
+                        for vector in vectors)]
+                except Exception:
+                    self.log(f"Warning: Page {segment.page_index + 1}: scanned diagram detection failed; review the original page.")
+        graphic_stems = []
+        for index, vectors in vector_by_segment.items():
+            first_y = min((rect.y0 for _, rect in markers[index]), default=None)
+            for rect in vectors + scan_by_segment[index]:
+                if first_option_segment is None or index < first_option_segment or (
+                    index == first_option_segment and first_y is not None and rect.y1 < first_y
+                ):
+                    graphic_stems.append((index, rect))
+
         main_figures = []
         for index, segment in enumerate(question.segments):
             page = self.doc[segment.page_index]
             page_markers = markers[index]
             first_y = min((rect.y0 for _, rect in page_markers), default=None)
-            for rect in segment.images:
+            sources = [(rect, "embedded") for rect in segment.images] + [
+                (rect, "vector") for rect in vector_by_segment[index]
+            ] + [(rect, "scan") for rect in scan_by_segment[index]]
+            for rect, source in sources:
                 if rect.get_area() > page.rect.get_area() * 0.55:
                     question.issues.append("Full-page image cannot be assigned as a diagram; compare with the source.")
                     continue
+                unknown_position = first_option_segment is not None and index == first_option_segment and first_y is None
                 in_options = first_option_segment is not None and (
                     index > first_option_segment
-                    or (index == first_option_segment and first_y is not None and rect.y0 > first_y)
+                    or (index == first_option_segment and first_y is not None and rect.y0 >= first_y - 3)
                 )
-                target = option_for(rect, page_markers) if in_options else ""
-                if in_options:
+                if source in ("vector", "scan"):
+                    rect = self._figure_crop_box(segment.page_index, segment, rect)
+                target = None if unknown_position else option_for(rect, page_markers) if in_options else ""
+                if source in ("vector", "scan"):
+                    description = "vector" if source == "vector" else "scanned-page"
+                    question.issues.append(f"Possible {description} diagram detected; check its crop and assignment against the source.")
+                    if (target == "" and (not FIGURE_REFERENCE.search(question.text)
+                                          or len(graphic_stems) != 1 or main_figures)):
+                        target = None
+                if in_options or unknown_position:
                     question.issues.append("Possible option image detected; check its assignment against the source.")
                 if not segment.rect.contains(rect):
                     target = None
                 try:
-                    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=rect, alpha=False)
+                    # Bound memory on PDFs with enormous physical page boxes.
+                    factor = min(2.0, 2200 / max(rect.width, rect.height))
+                    pix = page.get_pixmap(matrix=fitz.Matrix(factor, factor), clip=rect, alpha=False)
                     crop = {"page": segment.page_index + 1, "box": source_box(page, rect),
-                            "data": pix.tobytes("png"), "option_key": target}
-                    if target == "" and not in_options:
+                            "data": pix.tobytes("png"), "option_key": target, "source": source}
+                    if target == "" and not in_options and not unknown_position:
                         main_figures.append(crop)
                     else:
                         question.extra_figures.append(crop)
-                except (RuntimeError, ValueError):
+                except Exception:
                     question.issues.append("Could not save a detected diagram; compare with the source.")
         if main_figures:
             primary = main_figures[0]

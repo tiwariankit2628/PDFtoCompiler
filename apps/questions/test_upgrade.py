@@ -125,6 +125,12 @@ class OriginalPdfTests(SimpleTestCase):
         self.assertEqual(table["rows"][4][3]["text"], "n²")
         self.assertEqual(table["rows"][0][0]["colspan"], 2)
         self.assertIn("10⁻³⁴", by_number[52].text)
+        self.assertEqual(by_number[16].options[3]["text"], r"\(50\sqrt{3}N\)")
+        self.assertTrue(by_number[39].text.endswith("origin."), by_number[39].text)
+        self.assertEqual([o["text"] for o in by_number[39].options], [
+            r"\(\frac{a}{10}\sqrt{74}\)", r"\(\frac{a}{5}\sqrt{74}\)",
+            r"\(\frac{a}{10}\sqrt{34}\)", r"\(\frac{a}{5}\sqrt{34}\)",
+        ])
         self.assertEqual(by_number[44].options[1]["text"], r"\(\frac{g}{\sqrt{3}}\)")
         self.assertEqual(by_number[45].options[0]["text"], r"\(\frac{3L}{4}\)")
         self.assertEqual(by_number[56].options[1]["text"], r"\(\frac{RT}{2F}\ln \frac{P_{1}}{P_{2}}\)")

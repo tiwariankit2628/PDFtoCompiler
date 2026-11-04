@@ -232,9 +232,13 @@ class DigitalLayoutTests(SimpleTestCase):
         self.assertEqual([len(question.options) for question in questions], [2, 2])
         doc.close()
 
-    def test_digit_only_document_uses_fallback(self):
+    def test_digit_only_document_uses_layout_without_attaching_footer(self):
         with fitz.open(stream=make_numbered_pdf(), filetype="pdf") as doc:
-            self.assertIsNone(DigitalQuestionLayout(doc, lambda _: None).extract())
+            questions = DigitalQuestionLayout(doc, lambda _: None).extract()
+        self.assertEqual([q.number for q in questions], [1])
+        self.assertIsNone(questions[0].image)
+        self.assertTrue(any("no question diagram" in issue for issue in questions[0].issues))
+        self.assertTrue(all(figure["option_key"] is None for figure in questions[0].extra_figures))
 
 
 class ExtractionAndApprovalSafetyTests(TestCase):
@@ -275,7 +279,7 @@ class ExtractionAndApprovalSafetyTests(TestCase):
         q1.refresh_from_db()
         self.assertEqual(q1.approved_question.image.name, q1.image.name)
 
-    def test_basic_fallback_does_not_attach_unrelated_page_logo(self):
+    def test_numbered_layout_does_not_attach_unrelated_page_logo(self):
         paper = self.paper(make_numbered_pdf())
         self.assertEqual(PDFQuestionExtractor(paper).extract(), 1)
         item = paper.extracted_questions.get()
@@ -283,11 +287,11 @@ class ExtractionAndApprovalSafetyTests(TestCase):
         self.assertTrue(item.is_flagged)
         self.assertIn("no question diagram", item.flag_reason)
         paper.refresh_from_db()
-        self.assertIn("cannot be reliably assigned", paper.extraction_log)
+        self.assertIn("layout detected", paper.extraction_log)
+        self.assertFalse(paper.figures.filter(question=item).exists())
         self.client.force_login(self.teacher)
         response = self.client.get(reverse("questions:paper_review", args=[paper.pk]))
-        self.assertContains(response, "Extraction limitations:")
-        self.assertContains(response, "diagrams cannot be reliably assigned")
+        self.assertContains(response, "no question diagram")
 
     def test_scanned_page_without_ocr_is_not_reported_as_success(self):
         doc = fitz.open()

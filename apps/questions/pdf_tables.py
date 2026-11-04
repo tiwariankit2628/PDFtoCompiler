@@ -10,7 +10,7 @@ import pymupdf as fitz
 from django.core.exceptions import ValidationError
 
 from .structured_content import validate_tables
-from .pdf_math import latex_chars
+from .pdf_math import is_type3_font, latex_chars
 
 _SUPER = str.maketrans({"0":"⁰", "1":"¹", "2":"²", "3":"³", "4":"⁴", "5":"⁵", "6":"⁶", "7":"⁷", "8":"⁸", "9":"⁹", "-":"⁻", "−":"⁻", "–":"⁻", "+":"⁺", "t":"ᵗ", "h":"ʰ"})
 _SUPER_CHARS = set("0123456789-−–+th")
@@ -43,7 +43,7 @@ def repair_simple_superscripts(page, clip, text):
     pairs = Counter()
     for span in spans:
         value = span["text"]
-        if not value or any(c not in _SUPER_CHARS for c in value) or span["font"].startswith("Type3"):
+        if not value or any(c not in _SUPER_CHARS for c in value) or is_type3_font(span["font"]):
             continue
         candidates = [g for g in glyphs if g["font"] == span["font"]
                       and 0.60 <= span["size"] / g["size"] <= 0.82
@@ -93,7 +93,7 @@ def reconstruct_cell_fraction(page, clip, drawings):
                     if char.get("c", "").strip():
                         glyphs.append({"text": char["c"], "box": fitz.Rect(char["bbox"]),
                                        "y": char["origin"][1], "size": span["size"], "font": span["font"]})
-    if not glyphs or len(glyphs) > 20 or any(not g["font"].startswith("Type3") for g in glyphs):
+    if not glyphs or len(glyphs) > 20 or any(not is_type3_font(g["font"]) for g in glyphs):
         return None
     bars = []
     for drawing in drawings:

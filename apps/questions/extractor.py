@@ -1,7 +1,9 @@
 import io
+import math
 import os
 import re
 import shutil
+import subprocess
 from decimal import Decimal
 
 from django.conf import settings
@@ -16,7 +18,7 @@ except ImportError:
     pytesseract = None
 
 from .models import ExtractedQuestion, QuestionPaperUpload
-from .pdf_layout import DigitalQuestionLayout, FIGURE_REFERENCE
+from .pdf_layout import DigitalQuestionLayout, FIGURE_REFERENCE, _normalize_option
 
 
 class ReviewWorkPreserved(Exception):
@@ -26,22 +28,21 @@ class ReviewWorkPreserved(Exception):
 class PDFQuestionExtractor:
     """Extract questions for teacher review, without guessing answer keys.
 
-    Digital papers with explicit question labels use page geometry to read
-    columns in order and associate embedded figures with their question. A
-    simpler text/Tesseract fallback remains available for other layouts. Both
-    approaches can misread formulae, figures and OCR; review is essential.
+    Page geometry is preserved for digital pages and local Tesseract OCR pages.
+    A basic fallback remains for layouts with no reliable anchors. All paths can
+    misread formulae, figures and OCR; human review is essential.
     """
 
     # Question start patterns: Q.1, Q1., Question 1:, 1., 1), प्रश्न 1:, प्र. 1.
     QUESTION_PATTERN = re.compile(
-        r"^(?:(?:Q(?:uestion)?\.?\s*(\d+)[:.]?)|(?:(\d+)[\.\)](?!\d))|(?:प्रश्न\s*(\d+)[:.]?)|(?:प्र\.\s*(\d+)[:.]?))\s*(.*)",
+        r"^(?:(?:Q(?:uestion)?\.?\s*(\d+)[:.)]?)|(?:(\d+)[\.\)](?!\d))|(?:प्रश्न\s*(\d+)[:.]?)|(?:प्र\.\s*(\d+)[:.]?))\s*(.*)",
         re.IGNORECASE,
     )
     OPTION_INLINE_PATTERN = re.compile(
-        r"(?:\(([A-Da-d1-4कखगघ])\)|(?:^|\s+)([A-Da-d1-4])\.)\s*(.*?)(?=(?:\([A-Da-d1-4कखगघ]\)|(?:^|\s+)[A-Da-d1-4]\.|$))",
+        r"(?:\(([A-Ea-e1-5कखगघङ१२३४५])\)|(?:^|\s+)([A-Ea-e1-5१२३४५])[.)])\s*(.*?)(?=(?:\([A-Ea-e1-5कखगघङ१२३४५]\)|(?:^|\s+)[A-Ea-e1-5१२३४५][.)]|$))",
         re.DOTALL,
     )
-    OPTION_LINE_PATTERN = re.compile(r"^\s*(?:\(([A-Da-d1-4कखगघ])\)|([A-Da-d1-4])\.)\s*(.*)")
+    OPTION_LINE_PATTERN = re.compile(r"^\s*(?:\(([A-Ea-e1-5कखगघङ१२३४५])\)|([A-Ea-e1-5१२३४५])[.)])\s*(.*)")
 
     def __init__(self, paper_upload: QuestionPaperUpload):
         self.paper = paper_upload
@@ -61,20 +62,108 @@ class PDFQuestionExtractor:
         return bool(shutil.which("tesseract"))
 
     @staticmethod
-    def _has_scanned_page(doc):
-        """Treat an almost textless page with a large raster as a scan.
-
-        Empty end pages are not sufficient reason to switch the entire paper
-        away from the digital layout parser.
-        """
-        for page in doc:
+    def _scanned_page_indices(doc):
+        """Find text-poor pages covered substantially by one or more images."""
+        scanned = []
+        for index, page in enumerate(doc):
             if len(page.get_text("text").strip()) >= 40:
                 continue
             page_area = page.rect.get_area()
-            for image in page.get_image_info():
-                if fitz.Rect(image["bbox"]).get_area() > page_area * 0.35:
-                    return True
-        return False
+            images = [fitz.Rect(image["bbox"]) & page.rect for image in page.get_image_info()]
+            if any(rect.get_area() > page_area * 0.35 for rect in images):
+                scanned.append(index)
+            elif len(images) > 1 and sum(rect.get_area() for rect in images) > page_area * 0.60:
+                # Some scanners tile a page instead of embedding one image.
+                # Repeated overlapping illustrations are not a tiled scan.
+                bounds = fitz.Rect(images[0])
+                for rect in images[1:]:
+                    bounds |= rect
+                if bounds.get_area() > page_area * 0.60:
+                    scanned.append(index)
+        return scanned
+
+    @staticmethod
+    def _safe_ocr_dpi(page):
+        """Limit OCR rendering to 16 megapixels; skip impractically large pages."""
+        area = page.rect.get_area()
+        if not math.isfinite(area) or area <= 0:
+            return None
+        if area <= 16_000_000 / (200 / 72) ** 2:
+            return 200
+        dpi = int(72 * math.sqrt(16_000_000 / area))
+        return dpi if dpi >= 72 else None
+
+    def _ocr_textpages(self, doc, indices):
+        """Build transient, geometrically aligned Tesseract text pages locally.
+
+        Unlike flattening the entire document into text, this leaves the
+        original PDF and every digital page intact. No document leaves the
+        machine. An unreadable page is explicitly reported rather than guessed.
+        """
+        results, failed = {}, []
+        if not indices:
+            return results, failed
+        tessdata = os.environ.get("TESSDATA_PREFIX", "")
+        configured = getattr(settings, "TESSERACT_CMD", "")
+        if not tessdata and configured:
+            adjacent = os.path.join(os.path.dirname(configured), "tessdata")
+            if os.path.isdir(adjacent):
+                tessdata = adjacent
+            elif os.path.isfile(configured):
+                try:
+                    result = subprocess.run([configured, "--list-langs"], capture_output=True, text=True, timeout=5, check=False)
+                    match = re.search(r'List of available languages in "([^"]+)"', result.stdout)
+                    if result.returncode == 0 and match:
+                        tessdata = match.group(1)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+        if not tessdata:
+            try:
+                tessdata = fitz.get_tessdata()
+            except (RuntimeError, OSError, AttributeError):
+                tessdata = ""
+        if not tessdata:
+            self._log("Warning: Scanned pages detected but Tesseract OCR is not installed or its language data could not be found. Scanned content may be missing; digital pages will still be extracted.")
+            return results, list(indices)
+        has_english = os.path.isfile(os.path.join(tessdata, "eng.traineddata"))
+        has_hindi = os.path.isfile(os.path.join(tessdata, "hin.traineddata"))
+        if not has_english:
+            self._log("Warning: English OCR data not found; English text may be missing or inaccurate.")
+        languages = (["eng+hin", "eng"] if has_english and has_hindi else
+                     ["eng"] if has_english else ["hin"] if has_hindi else [])
+        for index in indices:
+            page = doc.load_page(index)
+            result = None
+            dpi = self._safe_ocr_dpi(page)
+            if dpi is None:
+                failed.append(index)
+                self._log(f"Warning: Page {index + 1}: page dimensions are too large for safe local OCR; questions may be missing.")
+                continue
+            if dpi < 200:
+                self._log(f"Warning: Page {index + 1}: local OCR resolution was reduced for a large page; review carefully.")
+            for language in languages:
+                try:
+                    textpage = page.get_textpage_ocr(language=language, dpi=dpi, full=True, tessdata=tessdata)
+                    if page.get_text("text", textpage=textpage).strip():
+                        result = (page, textpage)
+                        if language == "eng":
+                            self._log(f"Warning: Page {index + 1}: Hindi OCR data unavailable or failed; using English only.")
+                        elif language == "hin":
+                            self._log(f"Warning: Page {index + 1}: using Hindi-only OCR because English data is unavailable.")
+                        break
+                except Exception as exc:
+                    # PyMuPDF's native Tesseract errors are not necessarily
+                    # subclasses of RuntimeError. A broken language install
+                    # must never discard otherwise readable digital pages.
+                    self._log(f"Warning: Page {index + 1}: local OCR with {language} failed: {exc}")
+            if result:
+                results[index] = result
+                self.paper.ocr_used = True
+                self._log(f"Page {index + 1}: local Tesseract OCR completed; verify all text, formulas and figures.")
+            else:
+                failed.append(index)
+                self._log(f"Warning: Page {index + 1}: local OCR found no usable text. Questions on this page may be missing.")
+        return results, failed
 
     def extract(self) -> int:
         """Process the PDF into staging items and return the number saved."""
@@ -97,19 +186,14 @@ class PDFQuestionExtractor:
                 self.paper.total_pages = len(doc)
                 self._log(f"PDF verified: {len(doc)} total pages.")
 
-                items = None
-                if not self._has_scanned_page(doc):
-                    items = DigitalQuestionLayout(doc, self._log).extract()
-                else:
-                    self._log(
-                        "Warning: Scanned pages detected: using the basic OCR/text fallback. "
-                        "Column order and figure matching must be checked manually."
-                    )
+                scanned = self._scanned_page_indices(doc)
+                ocr_pages, unreadable_pages = self._ocr_textpages(doc, scanned)
+                items = DigitalQuestionLayout(doc, self._log, ocr_pages, unreadable_pages).extract()
                 if items is None:
                     self._log(
                         "Warning: Using basic text/OCR extraction; diagrams cannot be reliably assigned automatically in this mode."
                     )
-                    items = self._extract_text_fallback(doc)
+                    items = self._extract_text_fallback(doc, ocr_pages, set(scanned))
 
                 if not items:
                     # In particular, do not replace earlier review work with
@@ -195,7 +279,7 @@ class PDFQuestionExtractor:
             figure = ExtractedFigure(
                 paper=self.paper, question=extracted if target_key is not None else None,
                 option_key=target_key or "", page_number=candidate["page"],
-                bounding_box=candidate["box"], source="embedded", order=index,
+                bounding_box=candidate["box"], source=candidate.get("source", "embedded"), order=index,
             )
             target = figure.private_image if self.paper.is_student_private else figure.image
             target.save(f"paper_{self.paper.pk}_q{item.number}_extra_{index}.png", ContentFile(candidate["data"]), save=False)
@@ -203,7 +287,7 @@ class PDFQuestionExtractor:
                 self._private_files_written.append(target.name)
             figure.save()
 
-    def _extract_text_fallback(self, doc):
+    def _extract_text_fallback(self, doc, ocr_pages=None, scanned_pages=None):
         """Basic parser for unlabelled/numerical and OCR-only papers.
 
         It deliberately does not attach the largest image on a page: that
@@ -213,26 +297,37 @@ class PDFQuestionExtractor:
 
         items = []
         current = None
+        ocr_pages = ocr_pages or {}
+        scanned_pages = scanned_pages or set()
         for page_index, page in enumerate(doc):
             page_num = page_index + 1
-            page_text = page.get_text("text")
-            if len(page_text.strip()) < 40:
-                if self.ocr_available and pytesseract:
+            if page_index in ocr_pages:
+                ocr_page, textpage = ocr_pages[page_index]
+                page_text = ocr_page.get_text("text", textpage=textpage, sort=True)
+            else:
+                page_text = page.get_text("text")
+            if page_index not in ocr_pages and page_index in scanned_pages and len(page_text.strip()) < 40:
+                dpi = self._safe_ocr_dpi(page)
+                if self.ocr_available and pytesseract and dpi is not None:
                     self._log(f"Page {page_num}: sparse text; executing Tesseract OCR.")
-                    pix = page.get_pixmap(dpi=200)
-                    image = Image.open(io.BytesIO(pix.tobytes("png")))
                     try:
-                        ocr_text = pytesseract.image_to_string(image, lang="eng+hin")
-                    except Exception:
+                        pix = page.get_pixmap(dpi=dpi)
+                        image = Image.open(io.BytesIO(pix.tobytes("png")))
                         try:
+                            ocr_text = pytesseract.image_to_string(image, lang="eng+hin")
+                        except Exception:
                             ocr_text = pytesseract.image_to_string(image, lang="eng")
                             self._log(f"Warning: Page {page_num}: Hindi OCR unavailable; using English only.")
-                        except Exception as exc:
-                            self._log(f"Warning: Page {page_num}: OCR extraction error: {exc}")
-                            ocr_text = ""
+                    except Exception as exc:
+                        # Rendering can fail before Tesseract is invoked. Keep
+                        # all other pages' text and report the unreadable page.
+                        self._log(f"Warning: Page {page_num}: OCR extraction error: {exc}")
+                        ocr_text = ""
                     if len(ocr_text.strip()) > len(page_text.strip()):
                         page_text = ocr_text
                         self.paper.ocr_used = True
+                elif dpi is None:
+                    self._log(f"Warning: Page {page_num}: page dimensions are too large for safe OCR; questions may be missing.")
                 else:
                     self._log(
                         f"Warning: Page {page_num}: sparse text, but Tesseract OCR is not installed or configured."
@@ -281,6 +376,4 @@ class PDFQuestionExtractor:
         return items
 
     def _normalize_key(self, raw_key: str) -> str:
-        return {"1": "A", "2": "B", "3": "C", "4": "D", "क": "A", "ख": "B", "ग": "C", "घ": "D"}.get(
-            raw_key, raw_key.upper()
-        )
+        return _normalize_option(raw_key)

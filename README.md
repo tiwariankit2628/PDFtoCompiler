@@ -216,7 +216,18 @@ If a local page still looks unstyled, confirm the checkout/branch and `DEBUG` va
 
 ## PDF extraction: setup, privacy and review
 
-**The default is local extraction.** It does not send the PDF to Mathpix or Google. Digital layout extraction is heuristic; scanned pages require a separately installed Tesseract executable and appropriate English/Hindi language packs. The local automatic parser may miss equations, diagrams, option images, and difficult layouts. Manual cropping/attachment is available regardless of extraction mode.
+**The default is local extraction.** It does not send the PDF to Mathpix, Google, or another provider and requires no paid API key. The parser uses PDF geometry for plain numbered and prefixed questions, additional option-label styles, some ruled tables, embedded images and candidate vector drawings. On mixed PDFs, readable digital pages keep their layout while scanned pages are OCRed locally. Some scanned-page ink clusters, including those on full-page scans with an existing text layer, are saved as flagged diagram candidates. Source crops and uncertain assignments need human review; this is not a guarantee of correct extraction.
+
+For scans, install Tesseract with **English (`eng`) and Hindi (`hin`) language data** on the machine running the app/worker. The primary OCR path uses PyMuPDF's local Tesseract integration and needs access to those `.traineddata` files; its basic fallback additionally uses the Tesseract executable. Most installations are detected automatically. If not, set these in the server's private `.env` (example paths for Windows; use your own install path):
+
+```dotenv
+TESSERACT_CMD=C:/Program Files/Tesseract-OCR/tesseract.exe
+TESSDATA_PREFIX=C:/Program Files/Tesseract-OCR/tessdata
+```
+
+The `tessdata` directory should contain `eng.traineddata` and `hin.traineddata`; restart the app and any worker after changing settings. If Hindi data cannot be used, the log warns that English-only OCR was attempted. If OCR is unavailable or a scanned page fails, the review screen warns that questions may be missing; readable digital pages are still processed. OCR and region detection can miss, merge or misread text and images, especially on noisy, rotated or low-resolution scans. Review every page, formula, table and diagram; use the original page/crop and unassigned-image pool to correct omissions. The parser never confirms an answer key automatically.
+
+**Existing extracted questions are not replaced.** To apply an updated parser to an old paper, upload a fresh copy and review the new results; existing staging work, tests and bank records remain intact.
 
 ### Lower-cost Gemini-only extraction
 
@@ -295,7 +306,7 @@ The optional thinking level may be set to `low`, `medium`, or `high` only when t
 
 Digital extraction uses text geometry, table rulings and a conservative fraction/superscript reconstruction. It stores actual table cell grids with merged rows/columns and `[[table:1]]` markers. The cell editor supports edits and adding/removing rows; advanced JSON allows more complex spans. Staging, bank, CBT and result views render escaped responsive HTML tables and KaTeX math. Original-page region previews and crop/option-image controls help reviewers correct failures. Figures retain source, page and normalized rectangle where known; auto-association is heuristic and uncertain items must be reviewed. Manually uploaded figures have no original coordinates.
 
-Extraction is not a general math/layout OCR system. A ruled fraction or single-character radical may be reconstructed, but complex equations, Type3 glyphs, borderless tables, vector drawings, scans, Hindi OCR and page/column continuation can still be wrong or omitted. Even unflagged items need checking against the original. Cloud-returned source coordinates are model suggestions, not independently verified; missing coordinates can be reviewed on the original page. Deleting the original paper removes its source PDF, even if separately retained bank snapshots survive. PDF reports render tables but currently include LaTeX as text rather than typeset formulas; Hindi copy/search and accessibility need further validation.
+Extraction is not a general math/layout OCR system. Some ruled fractions and short radicals can be reconstructed, but complex equations, Type3 glyphs, borderless tables, vector drawings, scans, Hindi OCR and page/column continuation can still be wrong or omitted. Even unflagged items need checking against the original. Cloud-returned source coordinates are model suggestions, not independently verified; missing coordinates can be reviewed on the original page. Deleting the original paper removes its source PDF, even if separately retained bank snapshots survive. PDF reports render tables but currently include LaTeX as text rather than typeset formulas; Hindi copy/search and accessibility need further validation.
 
 Local-only source-paper observations and test scope are in [the upgrade validation report](docs/upgrade-validation.md).
 

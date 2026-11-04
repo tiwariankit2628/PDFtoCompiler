@@ -1,13 +1,18 @@
 """Recover very simple, ruled fractions from digital PDF option geometry.
 
-Only Type3 math glyphs around an actual horizontal rule are reconstructed. We
-reject radical signs, overlaps and ambiguous geometry and keep the review flag:
-this is not a general mathematical OCR engine.
+Only simple Type3 math glyphs around a visible rule or radical are reconstructed.
+Ambiguous geometry is left unchanged and remains flagged for review: this is
+not a general mathematical OCR engine.
 """
 from collections import defaultdict
 import re
 
 import pymupdf as fitz
+
+
+def is_type3_font(name):
+    """Recognize PyMuPDF's current and legacy names for anonymous Type3 fonts."""
+    return name.startswith("Type3") or name == "Unnamed-T3"
 
 
 def latex_chars(chars):
@@ -58,7 +63,7 @@ def reconstruct_option_fractions(page, segment, options, marker_pattern, normali
             match = marker_pattern.match(stripped)
             if not match or not chars:
                 continue
-            raw = match.group("paren") or match.group("dot")
+            raw = next((value for value in match.groupdict().values() if value), "")
             key = normalize(raw)
             if key not in keys:
                 continue
@@ -71,8 +76,8 @@ def reconstruct_option_fractions(page, segment, options, marker_pattern, normali
                 box |= item["box"]
             markers.append((key, raw, box, stripped[match.end():].strip()))
             label_ids.update(id(item) for item in relevant)
-    if any(raw in "1234" for _, raw, _, _ in markers):
-        markers = [(key, raw, box, rest) for key, raw, box, rest in markers if raw in "1234"]
+    if any(raw in "12345१२३४५" for _, raw, _, _ in markers):
+        markers = [(key, raw, box, rest) for key, raw, box, rest in markers if raw in "12345१२३४५"]
     if len(markers) != len(keys) or {key for key, _, _, _ in markers} != keys:
         return {}
 
@@ -109,44 +114,73 @@ def reconstruct_option_fractions(page, segment, options, marker_pattern, normali
     for key in keys:
         candidate_bars = list(bars[key])
         chars = option_glyphs[key]
-        if not chars or any(not c["font"].startswith("Type3") for c in chars):
+        if not chars:
             continue
-        # A one-character radical is reconstructed only when its overbar is
-        # visibly present as either a raised Type3 glyph or a vector rule.
-        # More complicated roots are left untouched for human review.
+        math_chars = [c for c in chars if is_type3_font(c["font"])]
+        trailing_text = [c for c in chars if not is_type3_font(c["font"])]
+        if trailing_text:
+            # Some PDFs switch back to a text font for a short unit after a
+            # Type3 expression (for example N in 50√3 N). Accept only a small,
+            # alphabetic suffix entirely to the right, on the same baseline;
+            # any intermixed prose or uncertain geometry remains untouched.
+            if (not math_chars or len(trailing_text) > 4
+                    or any(not c["text"].isalpha() for c in trailing_text)
+                    or min(c["box"].x0 for c in trailing_text) < max(c["box"].x1 for c in math_chars) - .5
+                    or any(min(abs(c["y"] - m["y"]) for m in math_chars) > 2 for c in trailing_text)):
+                continue
+        # Reconstruct a short radical only when every source character under
+        # its overbar is accounted for. Some PDFs draw the overbar as one
+        # vector rule; others emit one raised Type3 dash per radicand glyph.
         radicals = [c for c in chars if c["text"] == "√"]
         removed, root_tokens, radical_rules = set(), [], set()
         for root in radicals:
             box = root["box"]
-            base_candidates = [c for c in chars if c is not root and c["text"].isalnum()
-                               and -1 <= c["box"].x0 - box.x1 <= 3
-                               and abs(c["y"] - root["y"]) <= 2]
-            if len(base_candidates) != 1:
+            bases = sorted((c for c in chars if c is not root and c["text"].isalnum()
+                            and c["box"].x0 >= box.x1 - 1 and abs(c["y"] - root["y"]) <= 2),
+                           key=lambda c: c["box"].x0)
+            if not bases or bases[0]["box"].x0 - box.x1 > 3:
                 break
-            base = base_candidates[0]
-            accent = [c for c in chars if c["text"] in {"-", "–", "−"} and c.get("flags", 0) & 1
-                      and abs(c["box"].x0 - base["box"].x0) <= 1.5
-                      and c["y"] < base["y"] - 2]
-            rules = [bar for bar in candidate_bars if abs(bar.x0 - base["box"].x0) <= 2
-                     and bar.x1 >= base["box"].x1 - 1.5
-                     and base["box"].y0 - 2 <= (bar.y0 + bar.y1) / 2 <= base["box"].y0 + 1]
-            if len(accent) + len(rules) != 1:
+            contiguous = [bases[0]]
+            for base in bases[1:]:
+                if len(contiguous) >= 4 or base["box"].x0 - contiguous[-1]["box"].x1 > 2:
+                    break
+                contiguous.append(base)
+            rules = [bar for bar in candidate_bars
+                     if abs(bar.x0 - bases[0]["box"].x0) <= 2
+                     and bar.x1 >= bases[0]["box"].x1 - 1.5
+                     and bases[0]["box"].y0 - 2 <= (bar.y0 + bar.y1) / 2 <= bases[0]["box"].y0 + 1]
+            accents, selected = [], []
+            if len(rules) == 1:
+                bar = rules[0]
+                selected = [base for base in contiguous if base["box"].x1 <= bar.x1 + 1.5]
+                if not selected or bar.x1 > selected[-1]["box"].x1 + 3:
+                    break
+                radical_rules.add(id(bar))
+            elif not rules:
+                for base in contiguous:
+                    matches = [c for c in chars if c["text"] in {"-", "–", "−"}
+                               and c["y"] < base["y"] - 2
+                               and abs(c["box"].x0 - base["box"].x0) <= 1.5
+                               and c["box"].x1 >= base["box"].x1 - 1.5
+                               and id(c) not in {id(a) for a in accents}]
+                    if len(matches) != 1:
+                        break
+                    selected.append(base)
+                    accents.append(matches[0])
+                if not selected:
+                    break
+            else:
                 break
-            # The inferred radicand must be one visible character only.
-            if rules and any(c is not base and c is not root and c["text"].isalnum()
-                             and c["box"].x0 >= base["box"].x1 - .5
-                             and c["box"].x0 < rules[0].x1 - .5 and abs(c["y"] - base["y"]) <= 2
-                             for c in chars):
-                break
-            radicand = latex_chars([base])
+            radicand = latex_chars(selected)
             if not radicand:
                 break
-            combined = fitz.Rect(box) | base["box"]
+            combined = fitz.Rect(box)
+            for base in selected:
+                combined |= base["box"]
             root_tokens.append({"text": "√", "latex": r"\sqrt{" + radicand + "}", "box": combined,
                                 "y": root["y"], "size": root["size"], "font": root["font"]})
-            removed.update([id(root), id(base)])
-            removed.update(id(c) for c in accent)
-            radical_rules.update(id(bar) for bar in rules)
+            removed.add(id(root))
+            removed.update(id(c) for c in selected + accents)
         if len(root_tokens) != len(radicals):
             continue
         chars = [c for c in chars if id(c) not in removed] + root_tokens
@@ -208,7 +242,7 @@ def reconstruct_option_fractions(page, segment, options, marker_pattern, normali
             raw = "".join(c["text"] for c in ordered)
             if inline and re.sub(r"\s+", "", inline) == re.sub(r"\s+", "", raw):
                 results[key] = inline
-            elif len(chars) <= 15 and all(c["font"].startswith("Type3") for c in chars):
+            elif len(chars) <= 15 and all(is_type3_font(c["font"]) for c in chars):
                 value = latex_chars(chars)
                 if value:
                     results[key] = r"\(" + value + r"\)"
