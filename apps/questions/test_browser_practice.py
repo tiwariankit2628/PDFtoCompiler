@@ -155,3 +155,57 @@ class BrowserGeminiOnlySmokeTests(StaticLiveServerTestCase):
         self.assertIn("GEMINI_ONLY_BROWSER_OK", result.stdout)
         self.assertEqual([method for method, _, _ in calls], ["GET", "POST"])
         self.assertTrue(all("mathpix" not in url for _, url, _ in calls))
+
+
+@skipUnless(os.environ.get("RUN_BROWSER_E2E") == "1", "Optional Chromium local-improvements test")
+class BrowserLocalImprovementsTests(StaticLiveServerTestCase):
+    """Cloud-error switching and local estimate UI with a synthetic loopback stub."""
+    @classmethod
+    def setUpClass(cls):
+        cls.workspace = tempfile.TemporaryDirectory(prefix="local-improvements-browser-")
+        cls.addClassCleanup(cls.workspace.cleanup)
+        root = Path(cls.workspace.name)
+        cls.enterClassContext(override_settings(
+            PRIVATE_PRACTICE_ROOT=str(root / "private"), MEDIA_ROOT=str(root / "media"),
+            CELERY_TASK_ALWAYS_EAGER=True, PDF_CLOUD_ENABLED=False, PDF_GEMINI_ENABLED=False,
+            LOCAL_PRACTICE_AI_ENABLED=True, LOCAL_PRACTICE_AI_MODEL="test-local:latest",
+            LOCAL_PRACTICE_AI_TIMEOUT="5", LOCAL_PRACTICE_AI_MAX_QUESTIONS="300",
+            PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"],
+        ))
+        super().setUpClass()
+
+    def test_local_upload_switch_and_unverified_ai_ui(self):
+        from django.urls import reverse
+        from apps.accounts.models import User
+        from apps.exams.models import Category, Exam, ExamAttempt, ExamQuestion, ExamResponse
+        from .models import Question, QuestionOption, PracticeLocalEstimate
+        from .test_local_practice_ai import LocalStub
+
+        if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):
+            self.fail("Set CHROMIUM_PATH and install Node and browser dependencies first.")
+        stub = LocalStub(); self.addCleanup(stub.close)
+        student = User.objects.create_user(username="local_browser_student", email="localbrowser@example.test",
+                    password="BrowserPracticePass987!", role=User.Roles.STUDENT)
+        category = Category.objects.create(name="Browser local", slug="browser-local")
+        exam = Exam.objects.create(title="Browser ungraded test", slug="browser-ungraded-test", category=category,
+                                   creator=student, is_private_practice=True)
+        question = Question.objects.create(category=category, creator=student, is_private_practice=True,
+                                           subject="Math", question_text="What is two plus two?")
+        QuestionOption.objects.create(question=question, option_key="A", option_text="Three", order=0)
+        selected = QuestionOption.objects.create(question=question, option_key="B", option_text="Four", order=1)
+        exam_question = ExamQuestion.objects.create(exam=exam, question=question, order=1)
+        attempt = ExamAttempt.objects.create(exam=exam, student=student, status=ExamAttempt.AttemptStatus.SUBMITTED)
+        response = ExamResponse.objects.create(attempt=attempt, exam_question=exam_question, selected_option=selected, order=1)
+        source = Path(self.workspace.name) / "synthetic.pdf"; source.write_bytes(make_two_column_pdf())
+        env = os.environ.copy()
+        env.update(LOCAL_IMPROVE_URL=self.live_server_url, LOCAL_IMPROVE_PDF=str(source),
+                   LOCAL_IMPROVE_RESULT_PATH=reverse("questions:practice_result", args=[attempt.attempt_uuid]))
+        script = Path(settings.BASE_DIR) / "tests" / "browser" / "local-improvements-smoke.cjs"
+        with override_settings(LOCAL_PRACTICE_AI_PORT=str(stub.port)):
+            result = subprocess.run(["node", str(script)], env=env, text=True, capture_output=True, timeout=120)
+        self.assertEqual(result.returncode, 0, f"Local browser test failed:\n{result.stdout}\n{result.stderr}")
+        self.assertIn("LOCAL_IMPROVEMENTS_BROWSER_OK", result.stdout)
+        self.assertEqual([entry[1] for entry in stub.calls], ["/api/status", "/api/tags", "/api/generate"])
+        self.assertTrue(PracticeLocalEstimate.objects.get(attempt=attempt).results[0]["match"])
+        response.refresh_from_db(); question.refresh_from_db()
+        self.assertIsNone(response.is_correct); self.assertFalse(question.key_verified)

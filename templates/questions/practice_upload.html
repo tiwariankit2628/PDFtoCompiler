@@ -1,6 +1,7 @@
 {% extends 'dashboard_base.html' %}
 {% block title %}Create PDF practice | {{ PLATFORM_NAME }}{% endblock %}
 {% block dashboard_content %}
+<style>#cloud-consent-field[hidden], [data-mode-error][hidden], [data-consent-error][hidden], [data-cloud-page-error][hidden] { display:none !important; }</style>
 <a href="{% url 'questions:practice_list' %}" class="small text-decoration-none">← My PDF practice</a>
 <div class="card border shadow-sm p-4 p-md-5 mt-3" style="max-width: 760px;">
   <h2 class="fw-bold">Turn a PDF into practice</h2>
@@ -13,11 +14,32 @@
   </div>
   <form method="post" enctype="multipart/form-data" novalidate>{% csrf_token %}
     {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors|striptags }}</div>{% endif %}
-    {% for field in form %}<div class="mb-3 {% if field.field.widget.input_type == 'checkbox' %}form-check{% endif %}">
+    {% for field in form %}<div class="mb-3 {% if field.field.widget.input_type == 'checkbox' %}form-check{% endif %}" {% if field.name == 'cloud_consent' %}id="cloud-consent-field"{% endif %}>
       {% if field.field.widget.input_type == 'checkbox' %}{{ field }}<label class="form-check-label" for="{{ field.id_for_label }}">{{ field.label }}</label>{% else %}<label class="form-label fw-semibold" for="{{ field.id_for_label }}">{{ field.label }}{% if field.field.required %} *{% endif %}</label>{{ field }}{% endif %}
-      {% if field.errors %}<div class="text-danger small mt-1">{{ field.errors|striptags }}</div>{% endif %}</div>{% endfor %}
-    <p class="small text-muted">PDF only · up to 25 MB and {{ max_pages }} pages · no password-protected PDFs.</p>
+      {% for error in field.errors %}<div class="text-danger small mt-1" {% if field.name == 'extraction_mode' %}data-mode-error{% elif field.name == 'cloud_consent' %}data-consent-error{% elif field.name == 'pdf_file' and 'Cloud extraction is limited to' in error %}data-cloud-page-error{% endif %}>{{ error }}</div>{% endfor %}</div>{% endfor %}
+    <p class="small text-muted" id="method-changed-note" hidden role="status">Extraction method changed. It will be checked when you upload again; please reselect the PDF if needed.</p>
+    <p class="small text-muted">PDF only · up to 25 MB and {{ max_pages }} pages · no password-protected PDFs. If a submission fails, select the PDF again.</p>
     <button class="btn btn-primary px-4"><i class="bi bi-file-earmark-arrow-up me-1"></i> Upload & extract</button>
   </form>
 </div>
+<script>
+(() => {
+  const mode = document.getElementById('id_extraction_mode');
+  const consent = document.getElementById('id_cloud_consent');
+  const consentField = document.getElementById('cloud-consent-field');
+  if (!mode || !consent || !consentField) return;
+  const submittedMode = mode.value;
+  const update = () => {
+    const isCloud = mode.value !== 'local' && mode.value !== '';
+    consentField.hidden = !isCloud;
+    document.querySelectorAll('[data-mode-error]').forEach((el) => { el.hidden = mode.value !== submittedMode; });
+    document.querySelectorAll('[data-consent-error]').forEach((el) => { el.hidden = !isCloud || consent.checked; });
+    document.querySelectorAll('[data-cloud-page-error]').forEach((el) => { el.hidden = !isCloud; });
+    document.getElementById('method-changed-note').hidden = mode.value === submittedMode;
+  };
+  mode.addEventListener('change', update);
+  consent.addEventListener('change', update);
+  update();
+})();
+</script>
 {% endblock %}

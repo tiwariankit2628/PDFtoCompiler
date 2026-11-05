@@ -12,6 +12,7 @@ const assert = require('assert');
   const errors = [];
   page.on('pageerror', e => errors.push('pageerror: '+e.message));
   page.on('console', msg => {if(msg.type()==='error') errors.push('console: '+msg.text());});
+  page.on('response', response => {if(response.status() >= 500) errors.push('server '+response.status()+': '+response.url());});
   const base=process.env.PRACTICE_TEST_URL;
   const sourcePdf=process.env.PRACTICE_TEST_PDF;
   const reportPdf=process.env.PRACTICE_TEST_REPORT;

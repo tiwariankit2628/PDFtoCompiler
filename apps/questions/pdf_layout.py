@@ -16,9 +16,10 @@ import unicodedata
 
 import pymupdf as fitz
 
-from .pdf_tables import repair_simple_superscripts, source_box, table_from_pdf
+from .pdf_tables import borderless_table_from_pdf, repair_simple_superscripts, source_box, table_from_pdf
 from .pdf_math import is_type3_font, reconstruct_option_fractions
-from .pdf_graphics import scanned_graphic_candidates
+from .pdf_graphics import bounded_ink_candidate, scanned_graphic_candidates
+from .pdf_options import reorder_wrapped_options
 
 
 PREFIXED_QUESTION = re.compile(
@@ -711,7 +712,7 @@ class DigitalQuestionLayout:
         return questions
 
     def _structured_table_text(self, question, texts):
-        """Replace only confidently isolated ruled table regions with markers."""
+        """Replace confidently isolated ruled or text-aligned table regions."""
         has_reference = bool(TABLE_REFERENCE.search(" ".join(texts)))
         # Never consume a grid of answer choices as if it were a question
         # table, even when the statement happens to mention a table elsewhere.
@@ -745,21 +746,60 @@ class DigitalQuestionLayout:
                     self._tables_by_page[segment.page_index] = []
                     self.log(f"Warning: Page {segment.page_index + 1}: table detection failed; review the original page.")
             candidates = []
-            for table in self._tables_by_page[segment.page_index]:
+            tables = [(table, False) for table in self._tables_by_page[segment.page_index]]
+            # Borderless tables have no vector grid. Run text alignment only
+            # for explicitly table/matching questions and clip above the first
+            # answer, so ordinary grids of options cannot become table cells.
+            # OCR-only pages remain too uncertain for this detector.
+            if (has_reference and segment.page_index not in self.ocr_pages
+                    and segment.page_index not in self.raster_pages
+                    and (first_option_segment is None or index <= first_option_segment)):
+                clip = fitz.Rect(segment.rect)
+                if first_option_segment == index:
+                    option_boxes = [rect for _, rect in markers.get(index, [])]
+                    if option_boxes:
+                        clip.y1 = min(clip.y1, min(rect.y0 for rect in option_boxes) - 1)
+                    else:
+                        clip.y1 = clip.y0  # Unknown answer boundary: do not guess.
+                if clip.height >= 25 and clip.width >= 35:
+                    try:
+                        text_tables = page.find_tables(clip=clip, strategy="text").tables[:20]
+                        tables.extend((table, True) for table in text_tables)
+                    except Exception:
+                        self.log(f"Warning: Page {segment.page_index + 1}: borderless table detection failed; review the source.")
+            for table, borderless in tables:
                 box = fitz.Rect(table.bbox)
                 # Never silently consume material crossing a question boundary.
                 if not (segment.rect + (-1, -1, 1, 1)).contains(box):
                     continue
-                cache_key = (segment.page_index, tuple(table.bbox))
+                # Do not add a text-strategy duplicate of an already accepted
+                # ruled grid or replace it with a weaker inferred structure.
+                if borderless and any((box & previous[0]).get_area() >= min(box.get_area(), previous[0].get_area()) * .6 for previous in candidates):
+                    continue
+                cache_key = (segment.page_index, tuple(table.bbox), borderless)
                 if cache_key not in self._table_data_cache:
                     try:
-                        self._table_data_cache[cache_key] = table_from_pdf(page, table)
+                        self._table_data_cache[cache_key] = (borderless_table_from_pdf(page, table)
+                                                           if borderless else table_from_pdf(page, table))
                     except Exception:
                         self._table_data_cache[cache_key] = None
                         self.log(f"Warning: Page {segment.page_index + 1}: a table could not be parsed; review the original page.")
                 data = deepcopy(self._table_data_cache[cache_key])
                 if not data:
                     continue
+                if borderless:
+                    # Preserve every word in the inferred rectangle. If the
+                    # text strategy drops an overflowing/overlapping cell,
+                    # retain the original flat text instead of losing it.
+                    try:
+                        words = page.get_text("words", clip=segment.rect)
+                        source_words = [word[4] for word in words if len(word) >= 5
+                                        and box.contains((fitz.Rect(word[:4]).tl + fitz.Rect(word[:4]).br) / 2)]
+                        tokens = lambda value: Counter(re.findall(r"\w+|[^\w\s]", value, flags=re.UNICODE))
+                        if tokens(" ".join(source_words)) != tokens(" ".join(cell["text"] for row in data["rows"] for cell in row)):
+                            continue
+                    except Exception:
+                        continue
                 if not has_reference:
                     # An unreferenced grid needs stronger evidence than a
                     # one-row header or a few incidental intersecting rules.
@@ -783,6 +823,17 @@ class DigitalQuestionLayout:
                         if line_text.strip():
                             outside = True
                             break
+                if not outside and borderless:
+                    # A single line box can span both a table cell and prose
+                    # beside the table. Check individual words as well, since
+                    # replacing a horizontal slice must not remove that prose.
+                    for word in words:
+                        word_box = fitz.Rect(word[:4])
+                        center = (word_box.tl + word_box.br) / 2
+                        if (segment.rect.contains(center) and box.y0 <= center.y <= box.y1
+                                and not (box + (-2, -2, 2, 2)).contains(center)):
+                            outside = True
+                            break
                 if not outside:
                     # Track the central divider when a header and body are
                     # separated by a page/column break. Only a geometrically
@@ -793,6 +844,8 @@ class DigitalQuestionLayout:
                     if table.col_count in (2, 4) and len(row_cells) > mid_index and row_cells[mid_index]:
                         boundary = (row_cells[mid_index][2] - box.x0) / box.width
                     candidates.append((box, data, boundary))
+                    if borderless:
+                        question.issues.append("Borderless table inferred from source alignment; check all cells against the original.")
             candidates.sort(key=lambda item: item[0].y0)
             if not candidates:
                 output.append(texts[index])
@@ -1072,6 +1125,19 @@ class DigitalQuestionLayout:
                     break
                 offset += len(seg_text) + 1
         markers = self._option_label_boxes(question, text, first_option_offset)
+        # Flat reading order can interleave wrapped answers printed side by
+        # side. Repair only complete, non-mathematical runs contained in one
+        # segment, and only when every source token remains accounted for.
+        if first_option_segment is not None and question.options:
+            segment = question.segments[first_option_segment]
+            if not segment.has_complex_math and len(markers[first_option_segment]) == len(question.options):
+                ocr = self.ocr_pages.get(segment.page_index)
+                page, textpage = ocr if ocr else (self.doc[segment.page_index], None)
+                repaired = reorder_wrapped_options(page, segment, markers[first_option_segment], question.options, textpage)
+                if repaired and any(option["text"] != repaired[option["key"]] for option in question.options):
+                    for option in question.options:
+                        option["text"] = repaired[option["key"]]
+                    question.issues.append("Wrapped answer text was reordered using source layout; check every option.")
         # Raised numerator/overbar glyphs can sort before the first option
         # label, contaminating the end of the question statement. Remove that
         # short prefix only when source glyphs at the answer row match exactly
@@ -1203,6 +1269,70 @@ class DigitalQuestionLayout:
                         question.extra_figures.append(crop)
                 except Exception:
                     question.issues.append("Could not save a detected diagram; compare with the source.")
+        # Some image-only answers consist of many disconnected small vector
+        # strokes or scan fragments. Existing component detectors can discard
+        # every piece. Search only inside an unambiguous, empty option cell;
+        # preserve the original pixels and flag the assignment for review.
+        if first_option_segment is not None:
+            for index in range(first_option_segment, len(question.segments)):
+                segment = question.segments[index]
+                page = self.doc[segment.page_index]
+                page_markers = markers[index]
+                rows = []
+                for marker in sorted(page_markers, key=lambda item: (item[1].y0, item[1].x0)):
+                    if rows and abs(marker[1].y0 - rows[-1][0][1].y0) <= 5:
+                        rows[-1].append(marker)
+                    else:
+                        rows.append([marker])
+                for row_index, row in enumerate(rows):
+                    row.sort(key=lambda item: item[1].x0)
+                    next_top = min((box.y0 for _, box in rows[row_index + 1]), default=segment.rect.y1) if row_index + 1 < len(rows) else segment.rect.y1
+                    for column_index, (key, marker) in enumerate(row):
+                        option = next((option for option in question.options if option["key"] == key), None)
+                        if (not option or option["text"].strip()
+                                or any(figure["option_key"] == key for figure in question.extra_figures)):
+                            continue
+                        right = row[column_index + 1][1].x0 - 3 if column_index + 1 < len(row) else segment.rect.x1
+                        cell = fitz.Rect(max(segment.rect.x0, marker.x0 - 3), max(segment.rect.y0, marker.y0 - 3),
+                                         right, min(segment.rect.y1, next_top - 3, marker.y0 + 180)) & segment.rect
+                        rect = bounded_ink_candidate(page, cell, self.lines[segment.page_index])
+                        if not rect:
+                            continue
+                        try:
+                            crop = self._figure_crop_box(segment.page_index, segment, rect) & cell
+                            factor = min(2.0, 2200 / max(crop.width, crop.height))
+                            pix = page.get_pixmap(matrix=fitz.Matrix(factor, factor), clip=crop, alpha=False)
+                            question.extra_figures.append({"page": segment.page_index + 1, "box": source_box(page, crop),
+                                                           "data": pix.tobytes("png"), "option_key": key, "source": "option-ink"})
+                            question.issues.append("Possible disconnected option diagram detected; check its crop and assignment against the source.")
+                        except Exception:
+                            question.issues.append("Could not save a possible option diagram; compare with the source.")
+        # Likewise, if a referenced diagram has no detected components at all,
+        # retain disconnected non-text ink from its stem as an unassigned
+        # candidate rather than inventing ownership or silently dropping it.
+        if FIGURE_REFERENCE.search(question.text) and not main_figures and not graphic_stems:
+            for index, segment in enumerate(question.segments):
+                if first_option_segment is not None and index > first_option_segment:
+                    continue
+                region = fitz.Rect(segment.rect)
+                if index == first_option_segment:
+                    option_boxes = [rect for _, rect in markers[index]]
+                    if not option_boxes:
+                        continue
+                    region.y1 = min(region.y1, min(rect.y0 for rect in option_boxes) - 3)
+                page = self.doc[segment.page_index]
+                rect = bounded_ink_candidate(page, region, self.lines[segment.page_index])
+                if not rect:
+                    continue
+                try:
+                    crop = self._figure_crop_box(segment.page_index, segment, rect) & region
+                    factor = min(2.0, 2200 / max(crop.width, crop.height))
+                    pix = page.get_pixmap(matrix=fitz.Matrix(factor, factor), clip=crop, alpha=False)
+                    question.extra_figures.append({"page": segment.page_index + 1, "box": source_box(page, crop),
+                                                   "data": pix.tobytes("png"), "option_key": None, "source": "stem-ink"})
+                    question.issues.append("Possible disconnected stem diagram saved to the unassigned pool; verify it against the source.")
+                except Exception:
+                    question.issues.append("Could not save a possible stem diagram; compare with the source.")
         if main_figures:
             primary = main_figures[0]
             question.image = (primary["page"], primary["data"])

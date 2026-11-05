@@ -226,6 +226,14 @@ CELERY_BEAT_SCHEDULE = {
 # ------------------------------------------------------------------------------
 TESSERACT_CMD = os.environ.get("TESSERACT_CMD", "")
 
+# Optional, explicitly requested AI comparisons for completed private tests.
+# The server must be a local-only Ollama instance; no model is bundled.
+LOCAL_PRACTICE_AI_ENABLED = os.environ.get("LOCAL_PRACTICE_AI_ENABLED", "False").lower() in ("true", "1")
+LOCAL_PRACTICE_AI_MODEL = os.environ.get("LOCAL_PRACTICE_AI_MODEL", "").strip()
+LOCAL_PRACTICE_AI_PORT = os.environ.get("LOCAL_PRACTICE_AI_PORT", "11434")
+LOCAL_PRACTICE_AI_TIMEOUT = os.environ.get("LOCAL_PRACTICE_AI_TIMEOUT", "120")
+LOCAL_PRACTICE_AI_MAX_QUESTIONS = os.environ.get("LOCAL_PRACTICE_AI_MAX_QUESTIONS", "300")
+
 # ------------------------------------------------------------------------------
 # RAZORPAY CONFIGURATION
 # ------------------------------------------------------------------------------

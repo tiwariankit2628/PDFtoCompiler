@@ -514,6 +514,8 @@ class PracticeResultView(PrivateStudentMixin, View):
             return redirect("exams:exam_session", attempt_uuid=attempt.attempt_uuid)
         from .practice_analytics import compute_practice_result
         result = compute_practice_result(attempt)
+        from .practice_estimate_views import estimate_context
+        result.update(estimate_context(attempt, result["rows"]))
         log_audit(request.user, "PRACTICE_RESULT_VIEWED", f"Private attempt {attempt.attempt_uuid} viewed.", request=request)
         history = (ExamAttempt.objects.filter(exam=attempt.exam, student=request.user)
                    .exclude(status=ExamAttempt.AttemptStatus.IN_PROGRESS).order_by("-started_at", "-pk"))

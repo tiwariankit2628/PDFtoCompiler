@@ -157,3 +157,30 @@ def source_box(page, rect):
             round((clip.y0-page.rect.y0)/page.rect.height, 6),
             round((clip.x1-page.rect.x0)/page.rect.width, 6),
             round((clip.y1-page.rect.y0)/page.rect.height, 6)]
+
+
+def borderless_table_from_pdf(page, table):
+    """Return a dense text-aligned grid, or None when it is too ambiguous.
+
+    PyMuPDF's text strategy inserts blank spacer rows. Remove only completely
+    empty, unmerged rows; do not synthesize cells or infer missing values.
+    """
+    data = table_from_pdf(page, table)
+    if not data or data["columns"] < 2:
+        return None
+    if any(cell["rowspan"] != 1 or cell["colspan"] != 1
+           for row in data["rows"] for cell in row):
+        return None
+    rows = [row for row in data["rows"] if any(cell["text"].strip() for cell in row)]
+    if len(rows) < 3 or any(len(row) != data["columns"] for row in rows):
+        return None
+    filled = sum(bool(cell["text"].strip()) for row in rows for cell in row)
+    if filled / (len(rows) * data["columns"]) < .8:
+        return None
+    # A single prose line flanked by column text is not sufficient evidence.
+    if sum(sum(bool(cell["text"].strip()) for cell in row) >= 2 for row in rows) < 3:
+        return None
+    try:
+        return validate_tables([{"columns": data["columns"], "rows": rows}])[0]
+    except ValidationError:
+        return None

@@ -1,5 +1,5 @@
 from django.urls import path
-from . import views, figure_views, practice_views, practice_bank, answer_views
+from . import views, figure_views, practice_views, practice_bank, answer_views, practice_estimate_views
 
 app_name = "questions"
 
@@ -31,6 +31,9 @@ urlpatterns = [
     path("practice/history/", practice_views.PracticeHistoryView.as_view(), name="practice_history"),
     path("practice/results/<uuid:attempt_uuid>/", practice_views.PracticeResultView.as_view(), name="practice_result"),
     path("practice/results/<uuid:attempt_uuid>/report.pdf", practice_views.PracticeReportView.as_view(), name="practice_report"),
+    path("practice/results/<uuid:attempt_uuid>/local-estimate/start/", practice_estimate_views.PracticeEstimateStartView.as_view(), name="practice_estimate_start"),
+    path("practice/results/<uuid:attempt_uuid>/local-estimate/step/", practice_estimate_views.PracticeEstimateStepView.as_view(), name="practice_estimate_step"),
+    path("practice/results/<uuid:attempt_uuid>/local-estimate/delete/", practice_estimate_views.PracticeEstimateDeleteView.as_view(), name="practice_estimate_delete"),
 
     # Question Papers
     path("papers/", views.QuestionPaperListView.as_view(), name="paper_list"),

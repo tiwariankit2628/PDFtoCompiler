@@ -388,3 +388,21 @@ class AIAnswerSuggestion(models.Model):
             condition=models.Q(status__in=["processing", "suggested"]),
             name="unique_active_ai_question_request",
         )]
+
+
+class PracticeLocalEstimate(models.Model):
+    """Optional, untrusted comparison for a completed private attempt.
+
+    This record is never used as a grading key and never changes exam scores.
+    Only the owner can request or see it; deletion of the attempt cascades.
+    """
+    attempt = models.OneToOneField("exams.ExamAttempt", on_delete=models.CASCADE, related_name="local_estimate")
+    model_id = models.CharField(max_length=100)
+    candidate_ids = models.JSONField(default=list)
+    results = models.JSONField(default=list)
+    current_response_id = models.PositiveBigIntegerField(null=True, blank=True)
+    request_token = models.UUIDField(null=True, blank=True)
+    request_started_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)

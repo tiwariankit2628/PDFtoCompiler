@@ -85,3 +85,44 @@ def scanned_graphic_candidates(page, region, text_lines):
     # of substantial candidates; unreturned material is still in the source PDF.
     found.sort(key=lambda box: box.get_area(), reverse=True)
     return sorted(found[:8], key=lambda box: (box.y0, box.x0))
+
+
+def bounded_ink_candidate(page, region, text_lines):
+    """Find disconnected, non-text ink inside a known question/option region.
+
+    The returned bounding rectangle is evidence for a *review candidate*, not
+    image recognition. It can contain rules, unrecognized text or scan noise.
+    Crops must always come from the untouched original page.
+    """
+    region = fitz.Rect(region) & page.rect
+    if region.is_empty or region.width < 18 or region.height < 18:
+        return None
+    scale = min(1.5, 1200 / max(region.width, region.height))
+    try:
+        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=region,
+                              colorspace=fitz.csGRAY, alpha=False)
+        image = Image.frombytes("L", (pix.width, pix.height), pix.samples)
+        mask = image.point(lambda value: 255 if value < 190 else 0)
+        draw = ImageDraw.Draw(mask)
+        for _, line, spans in text_lines:
+            if not region.intersects(line):
+                continue
+            for span in spans:
+                if not span.get("text", "").strip():
+                    continue
+                box = fitz.Rect(span["bbox"]) & region
+                if box.is_empty:
+                    continue
+                draw.rectangle(((box.x0 - region.x0) * scale - 2, (box.y0 - region.y0) * scale - 2,
+                                (box.x1 - region.x0) * scale + 2, (box.y1 - region.y0) * scale + 2), fill=0)
+        count = mask.histogram()[255]
+        if count < 24 or count > mask.width * mask.height * .55:
+            return None
+        bbox = mask.getbbox()
+        if not bbox or (bbox[2] - bbox[0]) / scale < 12 or (bbox[3] - bbox[1]) / scale < 12:
+            return None
+        return (fitz.Rect(region.x0 + bbox[0] / scale, region.y0 + bbox[1] / scale,
+                          region.x0 + bbox[2] / scale, region.y0 + bbox[3] / scale)
+                + (-2, -2, 2, 2)) & region
+    except Exception:
+        return None

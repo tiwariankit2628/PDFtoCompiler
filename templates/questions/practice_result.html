@@ -9,6 +9,7 @@
 .insight-value{font-size:1.55rem;font-weight:750;color:#14264a;line-height:1.2}
 .insight-bar{height:.55rem;background:#edf1f8;border-radius:1rem;overflow:hidden}.insight-bar>span{display:block;height:100%;background:linear-gradient(90deg,#4166e9,#36b7a7);border-radius:1rem}
 .question-result{border-left:4px solid #d9e1ee}.question-result.correct{border-left-color:#17a874}.question-result.incorrect{border-left-color:#ef6262}.question-result.ungraded{border-left-color:#f4b53c}
+#estimate-pause[hidden]{display:none!important}
 </style>{% endblock %}
 {% block dashboard_content %}
 <div class="practice-result-hero mb-4">
@@ -31,6 +32,40 @@
  </div><p class="small text-muted mb-0 mt-3">{{ keyed_count }} questions have a confirmed key; {{ unkeyed_count }} do not. Percentage uses available keyed marks, not the full paper when keys are missing. Pass/fail requires a target and a complete key.</p></div></div>
  <div class="col-md-4"><div class="insight-card p-4 h-100"><h5 class="fw-bold mb-3">Time insights</h5><div class="d-flex justify-content-between small mb-2"><span class="text-muted">Elapsed time</span><strong>{{ attempt.time_taken_seconds }} sec</strong></div><div class="d-flex justify-content-between small mb-2"><span class="text-muted">Saved question time</span><strong>{{ time_logged_seconds }} sec</strong></div><p class="small text-muted mb-0">Question time is based on browser save events; reconnects or unsaved time may not be captured.</p></div></div>
 </div>
+{% if counts.ungraded %}
+<div class="insight-card p-4 mb-4" id="local-estimate-panel">
+  <div class="d-flex flex-wrap align-items-start justify-content-between gap-2">
+    <div><h5 class="fw-bold mb-1">Optional local AI comparison</h5>
+      <p class="small text-muted mb-2">An AI guess is <strong>not a verified answer or official score</strong> and can be wrong. Only your answered, ungraded questions are considered. The text-only model skips questions with diagrams or missing text; it does not receive the PDF, images or your selected answer.</p>
+    </div>
+    <span class="badge text-bg-warning">Unverified estimate</span>
+  </div>
+  {% if local_ai_job %}
+    <div class="bg-light rounded p-3 small mb-3">
+      <strong>{{ local_ai_summary.matches }} estimated correct</strong> / {{ local_ai_summary.matches|add:local_ai_summary.different }} AI-guessed, previously ungraded answers ·
+      {{ local_ai_summary.different }} different from the AI guess · {{ local_ai_summary.unknown }} skipped or uncertain ·
+      {{ local_ai_summary.processed }} / {{ local_ai_summary.total }} processed.
+      {% if local_ai_summary.total < counts.ungraded %} Some answered, ungraded questions exceed the configured limit and are not included.{% endif %}
+      <div class="text-muted mt-1">Model: {{ local_ai_job.model_id }}. These numbers do not change your confirmed-key result.</div>
+      {% if local_ai_job.last_error %}<div class="text-danger mt-1">{{ local_ai_job.last_error }}</div>{% endif %}
+    </div>
+  {% endif %}
+  {% if local_ai_configured %}
+    <form id="local-estimate-form" method="post" action="{% url 'questions:practice_estimate_start' attempt.attempt_uuid %}" data-step-url="{% url 'questions:practice_estimate_step' attempt.attempt_uuid %}">
+      {% csrf_token %}
+      <div class="form-check mb-2"><input class="form-check-input" type="checkbox" id="estimate-understand" name="understand" required><label class="form-check-label small" for="estimate-understand">I understand these are unreliable AI guesses, not a verified answer key.</label></div>
+      <button class="btn btn-outline-primary btn-sm" type="submit">{% if local_ai_job %}Resume local comparison{% else %}Start local comparison{% endif %}</button>
+      <button class="btn btn-outline-secondary btn-sm ms-1" type="button" id="estimate-pause" hidden>Pause after this question</button>
+      <span class="small text-muted ms-1">Runs on the application server and may be slow. A new comparison uses one AI allowance from your practice plan; resuming does not.</span>
+      <div class="small mt-2" id="estimate-progress" role="status" aria-live="polite"></div>
+      <noscript><p class="small text-muted mt-2">A JavaScript-enabled browser is required to process the comparison one question at a time.</p></noscript>
+    </form>
+  {% else %}
+    <p class="small text-muted mb-2">Local AI is not configured on this server. A downloaded local model and local-only Ollama server are optional; you can still provide a confirmed key for verified grading.</p>
+  {% endif %}
+  {% if local_ai_job %}<form method="post" action="{% url 'questions:practice_estimate_delete' attempt.attempt_uuid %}" class="mt-3">{% csrf_token %}<button type="submit" class="btn btn-link btn-sm px-0 text-danger">Clear this AI comparison</button></form>{% endif %}
+</div>
+{% endif %}
 <div class="row g-3 mb-4">
 {% for title, groups in breakdowns.items %}<div class="col-lg-4"><div class="insight-card p-4 h-100"><h5 class="fw-bold text-capitalize mb-3">{{ title }} performance</h5>{% for group in groups %}<div class="mb-3"><div class="d-flex justify-content-between gap-2 small"><strong>{{ group.name }}</strong><span>{% if group.accuracy != None %}{{ group.accuracy }}%{% else %}No graded answers{% endif %}</span></div><div class="insight-bar mt-2" role="img" aria-label="{{ group.name }} accuracy {% if group.accuracy != None %}{{ group.accuracy }} percent{% else %}unavailable{% endif %}"><span style="width:{{ group.accuracy|default_if_none:0 }}%"></span></div><div class="small text-muted mt-1">{{ group.correct }} correct · {{ group.incorrect }} incorrect · {{ group.unattempted }} unattempted · {{ group.ungraded }} ungraded</div></div>{% empty %}<p class="text-muted small">No responses available.</p>{% endfor %}</div></div>{% endfor %}
 </div>
@@ -42,7 +77,48 @@
  {% if row.question.private_image %}<img class="img-fluid border rounded my-2" style="max-height:280px" src="{% url 'questions:practice_bank_image' row.question.pk %}" alt="Question diagram">{% endif %}
  {% for figure in row.question.figures.all %}{% if not figure.option_id and figure.private_image %}<img class="img-fluid border rounded my-2" style="max-height:280px" src="{% url 'questions:practice_bank_figure' figure.pk %}" alt="Question figure">{% endif %}{% endfor %}
  <ul class="mt-3">{% for option in row.options %}<li class="mb-1"><strong>{{ option.option_key }}.</strong> {{ option.option_text }}{% if row.response.selected_option_id == option.pk %} <span class="badge text-bg-primary">Your answer</span>{% endif %}{% if row.correct and row.correct.pk == option.pk %} <span class="badge text-bg-success">Confirmed key</span>{% endif %}{% for figure in option.figures.all %}{% if figure.private_image %}<br><img class="img-fluid border rounded my-1" style="max-height:180px" src="{% url 'questions:practice_bank_figure' figure.pk %}" alt="Option {{ option.option_key }} figure">{% endif %}{% endfor %}</li>{% endfor %}</ul>
+ {% if row.local_estimate %}<div class="small border rounded p-3 mt-3 bg-light"><strong>Unverified local AI:</strong>
+ {% if row.local_estimate.state == 'suggested' %}suggests {{ row.local_estimate.key }} — {% if row.local_estimate.match %}matches your answer{% else %}differs from your answer{% endif %}.{% else %}no guess.{% endif %}
+ {% if row.local_estimate.reason %} {{ row.local_estimate.reason }}{% endif %}</div>{% endif %}
  <div class="small text-muted">{{ row.response.time_spent_seconds }} sec recorded{% if row.correct %} · {{ row.response.marks_awarded }} marks{% endif %} · {{ row.question.subject }}{% if row.question.topic %} / {{ row.question.topic }}{% endif %} · {{ row.question.get_difficulty_display }}</div>
  {% if row.explanation %}<div class="small bg-light rounded p-3 mt-3"><strong>Explanation:</strong> {{ row.explanation|linebreaksbr }}</div>{% endif %}
 </div></div>{% endfor %}
+<script>
+(() => {
+  const form = document.getElementById('local-estimate-form');
+  if (!form) return;
+  const progress = document.getElementById('estimate-progress');
+  const pause = document.getElementById('estimate-pause');
+  const submit = form.querySelector('button[type="submit"]');
+  let paused = false;
+  pause.addEventListener('click', () => { paused = true; pause.disabled = true; progress.textContent = 'Pausing after the current question…'; });
+  async function post(url, body) {
+    const response = await fetch(url, { method: 'POST', body, credentials: 'same-origin',
+      headers: { 'Accept': 'application/json', 'X-CSRFToken': form.querySelector('[name="csrfmiddlewaretoken"]').value } });
+    if (response.redirected) { window.location.assign(response.url); throw new Error('Redirecting…'); }
+    let data;
+    try { data = await response.json(); } catch (_) { throw new Error('Could not read the server response.'); }
+    if (!response.ok) throw new Error(data.error || 'The comparison could not continue.');
+    return data;
+  }
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!form.reportValidity()) return;
+    paused = false; pause.hidden = false; pause.disabled = false; submit.disabled = true;
+    progress.textContent = 'Checking local model settings…';
+    try {
+      let state = await post(form.action, new FormData(form));
+      while (!state.complete && !paused) {
+        progress.textContent = `Comparing question ${state.processed + 1} of ${state.total} locally…`;
+        state = await post(form.dataset.stepUrl, new FormData());
+      }
+      progress.textContent = state.complete ? 'Comparison complete. Loading your unverified results…' : 'Paused. Loading saved progress…';
+      window.location.reload();
+    } catch (error) {
+      progress.textContent = error.message;
+      submit.disabled = false; pause.hidden = true;
+    }
+  });
+})();
+</script>
 {% endblock %}
