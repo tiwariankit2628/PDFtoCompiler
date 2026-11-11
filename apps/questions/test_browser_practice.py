@@ -209,3 +209,96 @@ class BrowserLocalImprovementsTests(StaticLiveServerTestCase):
         self.assertTrue(PracticeLocalEstimate.objects.get(attempt=attempt).results[0]["match"])
         response.refresh_from_db(); question.refresh_from_db()
         self.assertIsNone(response.is_correct); self.assertFalse(question.key_verified)
+
+
+@skipUnless(os.environ.get("RUN_BROWSER_E2E") == "1", "Optional Chromium source-image test")
+class BrowserSourceSnapshotTests(StaticLiveServerTestCase):
+    """A locally extracted synthetic PDF reaches the mobile CBT as source crops."""
+    @classmethod
+    def setUpClass(cls):
+        cls.workspace = tempfile.TemporaryDirectory(prefix="source-browser-test-")
+        cls.addClassCleanup(cls.workspace.cleanup)
+        root = Path(cls.workspace.name)
+        cls.enterClassContext(override_settings(
+            PRIVATE_PRACTICE_ROOT=str(root / "private"), MEDIA_ROOT=str(root / "media"),
+            CELERY_TASK_ALWAYS_EAGER=True, PDF_CLOUD_ENABLED=False,
+            PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"],
+        ))
+        super().setUpClass()
+
+    def test_source_snapshots_render_after_extraction_and_resume(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from django.urls import reverse
+        from apps.accounts.models import User
+        from apps.exams.models import Category, ExamAttempt
+        from .extractor import PDFQuestionExtractor
+        from .models import QuestionPaperUpload
+        from .test_source_snapshots import math_pdf
+
+        if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):
+            self.fail("Set CHROMIUM_PATH and install Node and browser dependencies first.")
+        student = User.objects.create_user(username="source_browser_student", email="source-browser@example.test",
+            password="SourceBrowserPass987!", role=User.Roles.STUDENT)
+        category = Category.objects.create(name="Browser source", slug="browser-source")
+        doc = math_pdf(); content = doc.write(); doc.close()
+        paper = QuestionPaperUpload.objects.create(title="Browser source", category=category, uploaded_by=student,
+            is_student_private=True, subject="Math",
+            private_pdf_file=SimpleUploadedFile("source.pdf", content, content_type="application/pdf"))
+        self.assertEqual(PDFQuestionExtractor(paper).extract(), 2)
+        self.assertTrue(paper.extracted_questions.get(question_number=1).figures.filter(source="option-source").exists())
+        self.client.force_login(student)
+        self.assertEqual(self.client.post(reverse("questions:practice_settings", args=[paper.pk]),
+                         {"duration_minutes": 20, "acknowledge_review": "on"}).status_code, 302)
+        paper.refresh_from_db()
+        self.assertEqual(self.client.post(reverse("exams:exam_start", args=[paper.practice_exam.slug])).status_code, 302)
+        attempt = ExamAttempt.objects.get(exam=paper.practice_exam)
+        expires_at = attempt.expires_at
+        env = os.environ.copy()
+        env.update(SOURCE_TEST_URL=self.live_server_url,
+                   SOURCE_TEST_SESSION_PATH=reverse("exams:exam_session", args=[attempt.attempt_uuid]))
+        script = Path(settings.BASE_DIR) / "tests" / "browser" / "source-snapshot-smoke.cjs"
+        result = subprocess.run(["node", str(script)], env=env, text=True, capture_output=True, timeout=120)
+        self.assertEqual(result.returncode, 0, f"Source browser test failed:\n{result.stdout}\n{result.stderr}")
+        self.assertIn("SOURCE_SNAPSHOT_BROWSER_OK", result.stdout)
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.expires_at, expires_at)
+
+    def test_parallel_source_renders_and_original_choice_key_survives_reload(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from django.urls import reverse
+        from apps.accounts.models import User
+        from apps.exams.models import Category, ExamAttempt
+        from .extractor import PDFQuestionExtractor
+        from .models import QuestionPaperUpload
+        from .test_source_snapshots import parallel_pdf
+
+        if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):
+            self.fail("Set CHROMIUM_PATH and install Node and browser dependencies first.")
+        student = User.objects.create_user(username="source_browser_student", email="source-parallel@example.test",
+            password="SourceBrowserPass987!", role=User.Roles.STUDENT)
+        category = Category.objects.create(name="Browser parallel", slug="browser-parallel")
+        doc = parallel_pdf(); content = doc.write(); doc.close()
+        paper = QuestionPaperUpload.objects.create(title="Browser parallel", category=category, uploaded_by=student,
+            is_student_private=True, subject="Math",
+            private_pdf_file=SimpleUploadedFile("parallel.pdf", content, content_type="application/pdf"))
+        self.assertEqual(PDFQuestionExtractor(paper).extract(), 3)
+        self.assertTrue(paper.extracted_questions.get(question_number=1).figures.filter(source="parallel-source").exists())
+        self.client.force_login(student)
+        self.assertEqual(self.client.post(reverse("questions:practice_settings", args=[paper.pk]),
+                         {"duration_minutes": 20, "acknowledge_review": "on", "answer_key_text": "1: 2"}).status_code, 302)
+        paper.refresh_from_db()
+        self.assertEqual(self.client.post(reverse("exams:exam_start", args=[paper.practice_exam.slug])).status_code, 302)
+        attempt = ExamAttempt.objects.get(exam=paper.practice_exam)
+        expires_at = attempt.expires_at
+        env = os.environ.copy()
+        env.update(SOURCE_TEST_URL=self.live_server_url, SOURCE_TEST_PARALLEL="1",
+                   SOURCE_TEST_SESSION_PATH=reverse("exams:exam_session", args=[attempt.attempt_uuid]))
+        script = Path(settings.BASE_DIR) / "tests" / "browser" / "source-snapshot-smoke.cjs"
+        result = subprocess.run(["node", str(script)], env=env, text=True, capture_output=True, timeout=120)
+        self.assertEqual(result.returncode, 0, f"Parallel-source browser test failed:\n{result.stdout}\n{result.stderr}")
+        self.assertIn("SOURCE_SNAPSHOT_BROWSER_OK", result.stdout)
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.expires_at, expires_at)
+        response = attempt.responses.order_by("order").first()
+        self.assertEqual(response.selected_option.option_key, "B")
+        self.assertTrue(response.exam_question.question.key_verified)

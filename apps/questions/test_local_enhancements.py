@@ -14,6 +14,7 @@ from django.urls import reverse
 
 from apps.accounts.models import User
 from apps.exams.models import Category, ExamAttempt
+from .test_helpers import response_body
 from .extractor import PDFQuestionExtractor
 from .models import QuestionPaperUpload
 from .practice_forms import practice_question_error
@@ -201,7 +202,7 @@ class DisconnectedGraphicWorkflowTests(TestCase):
         self.assertIn(self.client.get(reverse("questions:practice_figure_file", args=[figures[0].pk])).status_code, (403, 404))
         self.client.force_login(self.owner)
         result = self.client.get(reverse("questions:practice_figure_file", args=[figures[0].pk]))
-        self.assertEqual(result.status_code, 200); result.close()
+        self.assertEqual(result.status_code, 200); self.assertTrue(response_body(result))
         result = self.client.post(reverse("questions:practice_settings", args=[paper.pk]),
                                   {"duration_minutes": 20, "acknowledge_review": "on"})
         self.assertEqual(result.status_code, 302)

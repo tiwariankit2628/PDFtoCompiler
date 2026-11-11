@@ -15,6 +15,7 @@ from django.utils import timezone
 from apps.accounts.models import User
 from apps.exams.models import Category
 from apps.payments.models import PracticePlan, PracticeUsage
+from .test_helpers import response_body
 from .cloud_extractor import CloudPDFQuestionExtractor, build_gemini_only_pages
 from .cloud_providers import CloudExtractionError, GeminiClient, gemini_only_is_configured
 from .forms import QuestionPaperUploadForm
@@ -292,6 +293,6 @@ class GeminiOnlyWorkflowTests(TestCase):
         url = reverse("questions:practice_figure_file", args=[figure.pk])
         owner = self.client.get(url)
         self.assertEqual(owner.status_code, 200)
-        owner.close()
+        self.assertTrue(response_body(owner))
         self.client.force_login(self.other)
         self.assertEqual(self.client.get(url).status_code, 404)

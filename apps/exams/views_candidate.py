@@ -440,12 +440,30 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
                         "image_urls": option_images,
                     }
                 )
+            # Original source snapshots are supplementary, not diagrams or
+            # answer keys. Keep them labelled in the CBT so extracted text is
+            # not mistaken for a reliable transcription of complex equations.
+            snapshot_kinds = {"stem-source", "option-source", "table-source", "parallel-source"}
+            question_figures = [f for f in q.figures.all() if f.option_id is None]
             if exam.is_private_practice:
-                question_images = ([reverse("questions:practice_bank_image", args=[q.pk])] if q.private_image else []) + [
-                    reverse("questions:practice_bank_figure", args=[f.pk]) for f in q.figures.all() if f.option_id is None and f.private_image
-                ]
+                question_images = ([reverse("questions:practice_bank_image", args=[q.pk])] if q.private_image else [])
+                url_for_figure = lambda f: reverse("questions:practice_bank_figure", args=[f.pk]) if f.private_image else None
             else:
-                question_images = ([q.image.url] if q.image else []) + [f.image.url for f in q.figures.all() if f.option_id is None and f.image]
+                question_images = [q.image.url] if q.image else []
+                url_for_figure = lambda f: f.image.url if f.image else None
+            source_figures = []
+            for figure in question_figures:
+                url = url_for_figure(figure)
+                if not url:
+                    continue
+                if figure.source in snapshot_kinds:
+                    source_figures.append((figure, url))
+                else:
+                    question_images.append(url)
+            snapshot_order = {"stem-source": 0, "table-source": 1, "parallel-source": 2, "option-source": 3}
+            source_figures.sort(key=lambda item: (snapshot_order[item[0].source],
+                                                   item[0].page_number, item[0].order, item[0].pk))
+            source_images = [{"url": url, "kind": figure.source} for figure, url in source_figures]
 
             section_name = eq.section or "General"
             sections_map[section_name] = sections_map.get(section_name, 0) + 1
@@ -460,6 +478,7 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
                     "tables": q.tables,
                     "image_url": question_images[0] if question_images else None,
                     "image_urls": question_images,
+                    "source_images": source_images,
                     "positive_marks": float(eq.positive_marks),
                     "negative_marks": float(eq.negative_marks),
                     "selected_option_id": resp.selected_option_id,

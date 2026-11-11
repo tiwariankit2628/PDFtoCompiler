@@ -538,7 +538,34 @@
                     image.style.maxHeight = '320px';
                     diagramBox.appendChild(image);
                 });
-                diagramBox.classList.toggle('d-none', !(q.image_urls || []).length);
+                // These are original PDF crops, not model-generated answers.
+                // They supplement uncertain text and retain printed ordering.
+                (q.source_images || []).forEach(source => {
+                    const block = document.createElement('div');
+                    block.className = 'border rounded bg-light p-2 my-2 text-start';
+                    const caption = document.createElement('div');
+                    caption.className = 'small fw-semibold text-secondary mb-1';
+                    caption.textContent = source.kind === 'option-source'
+                        ? 'Original answer choices — A, B, C… follow the printed order (1=A, 2=B, etc.).'
+                        : source.kind === 'table-source'
+                            ? 'Original table or question region — compare with the extracted text.'
+                            : source.kind === 'parallel-source'
+                                ? 'Other original-language region — verify the choices correspond to the printed labels (1=A, 2=B, etc.).'
+                                : 'Original question region — compare formulas and extracted text.';
+                    const link = document.createElement('a');
+                    link.href = source.url;
+                    link.target = '_blank';
+                    link.rel = 'noopener';
+                    const image = document.createElement('img');
+                    image.src = source.url;
+                    image.alt = caption.textContent;
+                    image.className = 'img-fluid rounded border';
+                    image.style.maxHeight = '320px';
+                    link.appendChild(image);
+                    block.append(caption, link);
+                    diagramBox.appendChild(block);
+                });
+                diagramBox.classList.toggle('d-none', !(q.image_urls || []).length && !(q.source_images || []).length);
 
                 // Render MCQ Options
                 optionsContainer.innerHTML = '';

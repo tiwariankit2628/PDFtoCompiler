@@ -13,6 +13,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 
 from apps.accounts.models import User
 from apps.exams.models import Category
+from .test_helpers import response_body
 from .extractor import PDFQuestionExtractor
 from .models import QuestionPaperUpload
 from .pdf_layout import DigitalQuestionLayout, OPTION_MARKER, _normalize_option, _ocr_line_text, parse_options
@@ -342,7 +343,8 @@ class LocalLayoutTests(SimpleTestCase):
         page.insert_text((60, 295), "(2) Square", fontsize=16)
         q = DigitalQuestionLayout(doc, lambda _: None).extract()[0]; doc.close()
         self.assertIsNotNone(q.image)
-        self.assertEqual(q.extra_figures, [])
+        self.assertEqual({f["source"] for f in q.extra_figures}, {"stem-source", "option-source"})
+        self.assertFalse(any(f["source"] == "scan" for f in q.extra_figures))
         self.assertTrue(any("vector diagram" in issue for issue in q.issues))
 
     def test_vector_figure_is_cropped_from_original_and_flagged(self):
@@ -645,7 +647,7 @@ class InstitutionalGraphicWorkflowTests(TestCase):
         self.client.force_login(self.other)
         self.assertIn(self.client.get(url).status_code, (403, 404))
         self.client.force_login(self.teacher)
-        response = self.client.get(url); self.assertEqual(response.status_code, 200); response.close()
+        response = self.client.get(url); self.assertEqual(response.status_code, 200); self.assertTrue(response_body(response))
         self.client.post(reverse("questions:extracted_approve", args=[item.pk]))
         item.refresh_from_db(); self.assertIsNone(item.approved_question)  # still flagged
         self.client.post(reverse("questions:extracted_toggle_flag", args=[item.pk]))
@@ -698,7 +700,7 @@ class PrivateGraphicWorkflowTests(TestCase):
         response = self.client.get(reverse("questions:practice_figure_file", args=[figures[0].pk]))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Cache-Control"], "private, no-store")
-        response.close()
+        self.assertTrue(response_body(response))
         self.client.force_login(self.other)
         self.assertIn(self.client.get(reverse("questions:practice_figure_file", args=[figures[0].pk])).status_code, (403, 404))
         self.client.force_login(self.owner)
@@ -717,7 +719,7 @@ class PrivateGraphicWorkflowTests(TestCase):
         self.assertEqual([option["key"] for option in payload], list("ABCD"))
         self.assertTrue(all(option["image_url"] for option in payload))
         shown_image = self.client.get(payload[0]["image_url"])
-        self.assertEqual(shown_image.status_code, 200); shown_image.close()
+        self.assertEqual(shown_image.status_code, 200); self.assertTrue(response_body(shown_image))
 
     @skipUnless(os.environ.get("LOCAL_OCR_TESSDATA"), "Optional local Tesseract language data not configured")
     def test_actual_scanned_diagram_is_saved_privately_with_source_region(self):
@@ -744,7 +746,7 @@ class PrivateGraphicWorkflowTests(TestCase):
         self.assertIn(self.client.get(url).status_code, (403, 404))
         self.client.force_login(self.owner)
         response = self.client.get(url)
-        self.assertEqual(response.status_code, 200); response.close()
+        self.assertEqual(response.status_code, 200); self.assertTrue(response_body(response))
 
     def test_unreferenced_vector_candidate_is_private_in_review_pool(self):
         from django.urls import reverse
@@ -763,4 +765,4 @@ class PrivateGraphicWorkflowTests(TestCase):
         self.assertIn(self.client.get(reverse("questions:practice_figure_file", args=[figure.pk])).status_code, (403, 404))
         self.client.force_login(self.owner)
         response = self.client.get(reverse("questions:practice_figure_file", args=[figure.pk]))
-        self.assertEqual(response.status_code, 200); response.close()
+        self.assertEqual(response.status_code, 200); self.assertTrue(response_body(response))

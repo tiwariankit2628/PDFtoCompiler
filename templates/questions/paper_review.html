@@ -67,7 +67,7 @@ document.addEventListener("DOMContentLoaded", function() {
 {% endif %}
 <div class="alert alert-info small" role="alert">
     <strong>Review against the original PDF before approval.</strong> Formulas, tables and diagrams can require correction,
-    and a question may continue on the next page. Flagged or incomplete questions are skipped during bulk approval.
+    and a question may continue on the next page. Source images may include printed answers or unrelated material; remove or recrop these before approval. Flagged or incomplete questions are skipped during bulk approval.
 </div>
 {% if paper.mathpix_document_id %}<p class="small text-muted">Mathpix document reference: <code>{{ paper.mathpix_document_id }}</code>. Check the extraction log for deletion status.</p>{% endif %}
 {% if extraction_warnings %}
@@ -196,7 +196,7 @@ document.addEventListener("DOMContentLoaded", function() {
             {% endif %}
 
             {% for figure in q.figures.all %}{% if not figure.option_key %}
-            <div class="mb-3"><img src="{% url 'questions:figure_file' figure.pk %}" alt="Question figure" class="img-thumbnail" style="max-height:180px; max-width:100%;"></div>
+            <div class="mb-3">{% if figure.source == 'option-source' %}<div class="small text-muted">Original choices in printed order (1=A, 2=B, etc.).</div>{% elif figure.source == 'parallel-source' %}<div class="small text-muted">Other original-language region — verify that choices match the printed labels (1=A, 2=B, etc.).</div>{% elif figure.source == 'stem-source' or figure.source == 'table-source' %}<div class="small text-muted">Original question or table region — compare with extracted text.</div>{% endif %}<a href="{% url 'questions:figure_file' figure.pk %}" target="_blank" rel="noopener"><img src="{% url 'questions:figure_file' figure.pk %}" alt="{% if figure.source == 'stem-source' or figure.source == 'table-source' or figure.source == 'option-source' or figure.source == 'parallel-source' %}Original question region{% else %}Question figure{% endif %}" class="img-thumbnail" style="max-height:180px; max-width:100%;"></a></div>
             {% endif %}{% endfor %}
 
             <!-- MCQ Options Grid -->

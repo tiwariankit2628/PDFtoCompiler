@@ -19,6 +19,7 @@ from django.utils import timezone
 from apps.accounts.models import User
 from apps.exams.models import Exam, ExamAttempt, ExamQuestion, ExamResponse
 from apps.exams.tasks import expire_private_practice_attempts
+from .test_helpers import response_body
 from .models import ExtractedFigure, ExtractedQuestion, Question, QuestionPaperUpload
 from .practice_forms import PracticeSettingsForm, practice_question_error
 from .private_storage import private_practice_storage
@@ -318,7 +319,7 @@ class StudentPracticeTests(TestCase):
         image_response = self.client.get(private_url)
         self.assertEqual(image_response.status_code, 200)
         self.assertIn("no-store", image_response["Cache-Control"])
-        image_response.close()
+        self.assertTrue(response_body(image_response))
         crop_url = reverse("questions:practice_figures", args=[question.pk])
         self.assertEqual(self.client.get(crop_url).status_code, 200)
         crop = self.client.post(crop_url, {"action": "crop", "page_number": question.page_number, "x0": "0.05", "y0": "0.05", "x1": "0.3", "y1": "0.3", "target": "A"})
@@ -328,7 +329,7 @@ class StudentPracticeTests(TestCase):
         self.assertFalse(figure.image)
         resp_fig = self.client.get(reverse("questions:practice_figure_file", args=[figure.pk]))
         self.assertEqual(resp_fig.status_code, 200)
-        resp_fig.close()
+        self.assertTrue(response_body(resp_fig))
         exam = self.create_exam(paper)
         attempt = self.start(exam)
         session = self.client.get(reverse("exams:exam_session", args=[attempt.attempt_uuid]))
@@ -338,7 +339,7 @@ class StudentPracticeTests(TestCase):
         self.assertContains(session, reverse("questions:practice_bank_figure", args=[bank_figure.pk]))
         resp_bf = self.client.get(reverse("questions:practice_bank_figure", args=[bank_figure.pk]))
         self.assertEqual(resp_bf.status_code, 200)
-        resp_bf.close()
+        self.assertTrue(response_body(resp_bf))
         self.assertEqual(self.client.get("/media/" + figure.private_image.name).status_code, 404)
 
     def test_owner_only_student_paper_exam_attempt_and_teacher_admin_endpoints(self):
@@ -554,7 +555,7 @@ class StudentPracticeTests(TestCase):
             response = self.client.get(url)
             self.assertEqual(response.status_code, 200)
             self.assertIn("no-store", response["Cache-Control"])
-            response.close()
+            self.assertTrue(response_body(response))
         self.client.force_login(self.other)
         for url in urls:
             self.assertEqual(self.client.get(url).status_code, 404)

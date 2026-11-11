@@ -56,7 +56,7 @@
                 </div>
                 {% endif %}
 
-                {% for figure in question.figures.all %}{% if not figure.option_id %}<div class="mb-3 text-center"><img src="{{ figure.image.url }}" alt="Question figure" class="img-fluid rounded border" style="max-height:280px;"></div>{% endif %}{% endfor %}
+                {% for figure in question.figures.all %}{% if not figure.option_id %}<div class="mb-3 text-center">{% if figure.source == 'option-source' %}<div class="small text-muted">Original choices in printed order (1=A, 2=B, etc.).</div>{% elif figure.source == 'parallel-source' %}<div class="small text-muted">Other original-language region — verify that choices match the printed labels (1=A, 2=B, etc.).</div>{% elif figure.source == 'stem-source' or figure.source == 'table-source' %}<div class="small text-muted">Original question or table region.</div>{% endif %}<img src="{{ figure.image.url }}" alt="Question figure" class="img-fluid rounded border" style="max-height:280px;"></div>{% endif %}{% endfor %}
 
                 <!-- Options -->
                 <h6 class="fw-bold text-muted small text-uppercase mb-3">Multiple Choice Options:</h6>

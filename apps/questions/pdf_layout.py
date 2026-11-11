@@ -19,14 +19,21 @@ import pymupdf as fitz
 from .pdf_tables import borderless_table_from_pdf, repair_simple_superscripts, source_box, table_from_pdf
 from .pdf_math import is_type3_font, reconstruct_option_fractions
 from .pdf_graphics import bounded_ink_candidate, scanned_graphic_candidates
-from .pdf_options import reorder_wrapped_options
+from .pdf_options import recover_column_major_grid, reorder_wrapped_options
 
 
 PREFIXED_QUESTION = re.compile(
-    r"^(?:(?:Q(?:uestion)?\.?\s*(\d+)[:.)]?)|(?:प्रश्न\s*(\d+)[:.)]?)|(?:प्र\.\s*(\d+)[:.)]?))(?=\s|$)",
+    r"^(?:(?:Q(?:uestion)?\.?\s*(?:No\.{1,2}\s*)?(\d+)[:.)]?)"
+    r"|(?:प्रश्न\s*(\d+)[:.)]?)|(?:प्र\.\s*(\d+)[:.)]?))(?=\s|$|\([A-Ea-e]\))",
     re.IGNORECASE,
 )
 NUMBERED_QUESTION = re.compile(r"^([1-9१-९]\d{0,3})[.)](?=\s|$)")
+# OCR can misread the initial Q of "Q. No. 2" as 0 or as the nearby
+# question number. Accept only the explicit No. label and flag the inference.
+OCR_DAMAGED_QNO = re.compile(
+    r"^(?:[0O][.)]|[\[(]?\d{1,4}[.)])\s*No\.{1,2}\s*(\d{1,4})[:.)]?(?=\s|$|\([A-Ea-e]\))",
+    re.IGNORECASE,
+)
 # Support common printed labels without treating decimal numbers or arbitrary
 # parenthesised references in prose as answers. Parsing still requires an
 # ordered sequence starting at A / 1.
@@ -38,11 +45,43 @@ OPTION_MARKER = re.compile(
 )
 OPTION_AT_START = re.compile(r"^\s*(?:\([A-Ea-e1-5कखगघङ१२३४५]\)|\[[A-Ea-e1-5कखगघङ१२३४५]\]|[A-Ea-e1-5१२३४५][.)](?=\s|$))")
 FIGURE_REFERENCE = re.compile(r"\b(?:figure|diagram|illustration|graph)\b|\bas shown\b|चित्र|आरेख|ग्राफ", re.IGNORECASE)
+# Avoid automatically placing a visibly labelled answer/solution inside a
+# source screenshot shown during a later test. Image-only keys can still be
+# missed, so every crop must be reviewed before publishing.
+ANSWER_OR_SOLUTION = re.compile(
+    r"(?:^|\s)(?:ans(?:wer)?\.?|correct\s+answer|solution|explanation|उत्तर|सही\s*उत्तर)"
+    r"\s*(?::|=|[-–—]|\s+is\s+(?:\([A-Ea-e1-5]\)|[A-Ea-e1-5](?=\s|[.,;:]|$))|\([A-Ea-e1-5]\))"
+    r"|(?:^|\n)\s*(?:solutions?|explanations?)\s*(?:\n|$)",
+    re.IGNORECASE,
+)
+MULTIPLE_CORRECT = re.compile(
+    r"\b(?:one\s+or\s+more(?:\s+than\s+one)?|more\s+than\s+one|multiple)\b.{0,100}\b(?:correct|right|true)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+SINGLE_CORRECT = re.compile(
+    r"\b(?:only|exactly)\s+one\b.{0,80}\b(?:correct|right|true)\b", re.IGNORECASE | re.DOTALL,
+)
+
 TABLE_REFERENCE = re.compile(
     r"\b(?:match\s+(?:the\s+)?(?:list|column)|(?:list|column)[-\s]*[i1]+|table)\b"
     r"|तालिका|सारणी",
     re.IGNORECASE,
 )
+
+
+def _find_geometric_tables(page, **kwargs):
+    """Use line/text geometry even if another library activated a layout model.
+
+    Recent PyMuPDF versions otherwise default to gating table detection on
+    process-global model classifications. Older supported versions do not have
+    this keyword, so retain their original behavior on that specific error.
+    """
+    try:
+        return page.find_tables(use_layout=False, **kwargs)
+    except TypeError as exc:
+        if not re.search(r"unexpected keyword argument [\"']use_layout[\"']", str(exc)):
+            raise
+        return page.find_tables(**kwargs)
 
 
 def _option_raw(match):
@@ -124,6 +163,8 @@ class LayoutQuestion:
     image: tuple = None  # (source page number, PNG bytes)
     issues: list = field(default_factory=list)
     tables: list = field(default_factory=list)
+    # Transient geometry for original table screenshots, not a database field.
+    table_regions: list = field(default_factory=list)
     source_regions: list = field(default_factory=list)
     extra_figures: list = field(default_factory=list)
     primary_image_region: dict = field(default_factory=dict)
@@ -222,7 +263,15 @@ class DigitalQuestionLayout:
         self._table_data_cache = {}
         self._drawings_by_page = {}
         self._vectors_by_page = {}
+        # The legacy document-wide signal remains a fallback for continuation
+        # pages. Per-page evidence prevents a multi-column page from slicing a
+        # later full-width page in half.
         self.two_columns = False
+        self.column_counts = {}
+        self.mixed_column_pages = set()
+        self.parallel_pages = set()
+        self.parallel_primary = 0
+        self._selected_anchors = []
         self._index_document()
 
     def _index_document(self):
@@ -245,10 +294,14 @@ class DigitalQuestionLayout:
                     rect = fitz.Rect(line["bbox"])
                     page_lines.append((text, rect, line["spans"]))
                     match = PREFIXED_QUESTION.match(text)
+                    inferred = False
+                    if not match and page_index in self.ocr_pages:
+                        match = OCR_DAMAGED_QNO.match(text)
+                        inferred = bool(match)
                     if match:
                         number = int(next(group for group in match.groups() if group))
                         if number > 0:
-                            self.prefixed.append(Anchor(number, page_index, rect, match.group(0), True))
+                            self.prefixed.append(Anchor(number, page_index, rect, match.group(0), True, inferred))
                     else:
                         match = NUMBERED_QUESTION.match(text)
                         if match:
@@ -275,6 +328,159 @@ class DigitalQuestionLayout:
         left = [a for a in self.prefixed if a.rect.x0 / self.doc[a.page_index].rect.width < 0.30]
         right = [a for a in self.prefixed if 0.45 <= a.rect.x0 / self.doc[a.page_index].rect.width < 0.75]
         self.two_columns = bool(left and right and len(left) + len(right) >= 3)
+        self._refresh_columns()
+
+    def _detect_parallel_pages(self):
+        """Detect two aligned versions of the same numbered items.
+
+        Repeated, vertically corresponding labels are different evidence from
+        newspaper-style columns with increasing numbers. Choose the more
+        readable text layer as the primary one and preserve the other original
+        language as a reviewable source crop. This is not a translation.
+        """
+        page_pairs = {}
+        for page_index, page in enumerate(self.doc):
+            anchors = [a for a in self.prefixed + self.numbered if a.page_index == page_index]
+            groups = []
+            for column in (0, 1):
+                possible = [a for a in anchors if column * .5 <= a.rect.x0 / page.rect.width < column * .5 + .30]
+                if not possible:
+                    groups = []
+                    break
+                margin = min(a.rect.x0 / page.rect.width - column * .5 for a in possible)
+                groups.append([a for a in possible if abs(a.rect.x0 / page.rect.width - column * .5 - margin) <= .025])
+            if len(groups) != 2:
+                continue
+            pairs = []
+            for left in groups[0]:
+                matches = [right for right in groups[1] if right.number == left.number]
+                if matches:
+                    right = min(matches, key=lambda item: abs(item.rect.y0 - left.rect.y0))
+                    if abs(right.rect.y0 - left.rect.y0) <= max(50, page.rect.height * .08):
+                        pairs.append((left, right))
+            unique = {left.number: (left, right) for left, right in pairs}
+            if unique:
+                page_pairs[page_index] = list(unique.values())
+        strong = {index for index, pairs in page_pairs.items()
+                  if len(pairs) >= 3 and max(left.rect.y0 for left, _ in pairs) -
+                  min(left.rect.y0 for left, _ in pairs) >= 70}
+        pages = set(strong)
+        # A page with only one or two long questions can inherit the pattern
+        # from a neighbouring, strongly evidenced bilingual page.
+        pages.update(index for index in page_pairs if any(abs(index - near) == 1 for near in strong))
+        for index in range(1, len(self.doc) - 1):
+            if index not in page_pairs and index - 1 in strong and index + 1 in strong:
+                if not any(a.page_index == index for a in self.prefixed + self.numbered):
+                    pages.add(index)
+        scores = [0, 0]
+        for index in pages:
+            width = self.doc[index].rect.width
+            for column in (0, 1):
+                text = " ".join(value for value, box, _ in self.lines[index]
+                                if column * .5 <= (box.x0 + box.x1) / (2 * width) < (column + 1) * .5)
+                common = len(re.findall(r"\b(?:the|which|following|with|for|from|are|and|is|of|to|be|this|that|what|one|correct)\b", text, re.I))
+                words = sum(len(word) for word in re.findall(r"\b[A-Za-z]{3,}\b", text))
+                devanagari = sum("\u0900" <= char <= "\u097f" for char in text)
+                broken = sum(text.count(char) for char in "{}$`~\\§")
+                scores[column] += common * 8 + words + devanagari - broken * 4
+        self.parallel_pages = pages
+        self.parallel_primary = 1 if scores[1] > scores[0] else 0
+
+    def _is_primary_anchor(self, anchor):
+        if anchor.page_index not in self.parallel_pages:
+            return True
+        width = self.doc[anchor.page_index].rect.width
+        return int(anchor.rect.x0 >= width / 2) == self.parallel_primary
+
+    def _reading_columns(self, page_index):
+        if page_index in self.parallel_pages:
+            return (self.parallel_primary,)
+        return range(self._columns_on(page_index))
+
+    def _refresh_columns(self):
+        """Infer one, two or three equal-width columns independently per page.
+
+        Separate, ascending question anchors at matching margins are evidence
+        for columns. Multiple long source lines spanning the midpoint, without
+        that anchor evidence, are evidence for a full-width page. A page with
+        conflicting evidence is still processed conservatively and flagged.
+        Ambiguous continuation pages use the document's dominant column count.
+        """
+        self._detect_parallel_pages()
+        signals = {}
+        spanning = {}
+        for page_index, page in enumerate(self.doc):
+            prefixed = [a for a in self.prefixed if a.page_index == page_index]
+            numbered = [a for a in self.numbered if a.page_index == page_index]
+            candidates = prefixed if prefixed else numbered
+            width = page.rect.width
+            first_y = min((a.rect.y0 for a in candidates), default=0)
+            spanning[page_index] = sum(
+                1 for value, box, _ in self.lines[page_index]
+                if box.y0 >= first_y - 2 and box.y0 < page.rect.height * .87
+                and box.x0 < width * .30 and box.x1 > width * .58
+                and not self.edge_counts[self._edge_key(page, value, box)] >= max(2, int(len(self.doc) * .15))
+            )
+            if page_index in self.parallel_pages:
+                signals[page_index] = 2
+                continue
+            for count in (3, 2):
+                groups = [[] for _ in range(count)]
+                for anchor in candidates:
+                    pos = anchor.rect.x0 / width
+                    column = min(count - 1, max(0, int(pos * count)))
+                    groups[column].append((pos - column / count, anchor))
+                if any(not group for group in groups):
+                    continue
+                # Cluster each column's outer margin, ignoring more-indented
+                # numeric choices which can otherwise look like questions.
+                clustered = []
+                for group in groups:
+                    margin = min(position for position, _ in group)
+                    clustered.append([(position, a) for position, a in group if abs(position - margin) <= .025])
+                margins = [median(position for position, _ in group) for group in clustered]
+                if max(margins) - min(margins) > .055:
+                    continue
+                if any(max(a.number for _, a in left) >= min(a.number for _, a in right)
+                       for left, right in zip(clustered, clustered[1:])):
+                    continue
+                # Two bare numeric labels can be a question and a side-by-side
+                # answer; require extra evidence unless labels are explicit Qs.
+                if not prefixed and sum(len(group) for group in clustered) < count + 1:
+                    continue
+                signals[page_index] = count
+                break
+        multi = Counter(count for count in signals.values() if count > 1)
+        if multi:
+            # Keep the historical two-column fallback on a tie, otherwise use
+            # the most frequently evidenced layout for continuation pages.
+            default = max(multi, key=lambda count: (multi[count], count == 2 and self.two_columns, count))
+        else:
+            default = 2 if self.two_columns else 1
+        self.column_counts = {}
+        self.mixed_column_pages = set()
+        for page_index in range(len(self.doc)):
+            if page_index in signals:
+                self.column_counts[page_index] = signals[page_index]
+                if spanning[page_index] and page_index not in self.parallel_pages:
+                    self.mixed_column_pages.add(page_index)
+            elif spanning[page_index] >= 2:
+                self.column_counts[page_index] = 1
+            else:
+                self.column_counts[page_index] = default
+
+    def _columns_on(self, page_index):
+        return self.column_counts.get(page_index, 2 if self.two_columns else 1)
+
+    def _column_of(self, anchor):
+        count = self._columns_on(anchor.page_index)
+        width = self.doc[anchor.page_index].rect.width
+        return min(count - 1, max(0, int(anchor.rect.x0 / width * count)))
+
+    def _column_bounds(self, page_index, column):
+        count = self._columns_on(page_index)
+        width = self.doc[page_index].rect.width
+        return width * column / count, width * (column + 1) / count
 
     @staticmethod
     def _edge_key(page, text, rect):
@@ -290,6 +496,8 @@ class DigitalQuestionLayout:
         candidates = []
         repeated_threshold = max(2, int(len(self.doc) * 0.15))
         for anchor in self.numbered:
+            if not self._is_primary_anchor(anchor):
+                continue
             page = self.doc[anchor.page_index]
             source_line = next((text for text, box, _ in self.lines[anchor.page_index]
                                 if box == anchor.rect), "")
@@ -316,9 +524,10 @@ class DigitalQuestionLayout:
                         and min(a.number for a in rgroup) > max(a.number for a in lgroup)):
                     self.two_columns = True
                     break
+        self._refresh_columns()
 
         def col(anchor):
-            return int(self.two_columns and anchor.rect.x0 >= self.doc[anchor.page_index].rect.width / 2)
+            return self._column_of(anchor)
 
         def order(anchor):
             return anchor.page_index, col(anchor), anchor.rect.y0
@@ -350,13 +559,12 @@ class DigitalQuestionLayout:
                 page = self.doc[page_index]
                 page_anchors = [a for a in candidates if a.page_index == page_index]
                 top, bottom = self._content_bounds(page_index, page_anchors)
-                for column in range(2 if self.two_columns else 1):
+                for column in self._reading_columns(page_index):
                     if page_index == start_page and column < start_col:
                         continue
                     if following and (page_index, column) > (following.page_index, col(following)):
                         break
-                    x0 = page.rect.width * column / 2 if self.two_columns else 0
-                    x1 = page.rect.width * (column + 1) / 2 if self.two_columns else page.rect.width
+                    x0, x1 = self._column_bounds(page_index, column)
                     y0 = max(top, anchor.rect.y0 - 5) if (page_index, column) == (start_page, start_col) else top
                     y1 = min(bottom, following.rect.y0 - 5) if following and (page_index, column) == (following.page_index, col(following)) else bottom
                     if y1 > y0:
@@ -369,7 +577,8 @@ class DigitalQuestionLayout:
         # Cluster margins instead of assuming the leftmost number in the PDF
         # is a question; a cover can have instructions at a different indent.
         groups = []
-        positioned = sorted(((a.rect.x0 / self.doc[a.page_index].rect.width - .5 * col(a), a)
+        positioned = sorted(((a.rect.x0 / self.doc[a.page_index].rect.width
+                              - col(a) / self._columns_on(a.page_index), a)
                              for a in candidates), key=lambda pair: pair[0])
         for position, anchor in positioned:
             if groups and abs(position - median(value for value, _ in groups[-1])) <= .015:
@@ -434,8 +643,9 @@ class DigitalQuestionLayout:
                     first = (not previous and following and anchor.number + 1 == following.number
                              and not any(a.number == anchor.number for a in aligned[index + 1:aligned.index(following)]))
                     line = next((text for text, box, _ in self.lines[anchor.page_index] if box == anchor.rect), "")
+                    body = line[len(anchor.label):].strip() if line.startswith(anchor.label) else line
                     last = (previous and not following and anchor.number == previous.number + 1
-                            and "?" in line)
+                            and ("?" in line or (len(confirmed) >= 3 and len(body) >= 12)))
                     if between or first or last:
                         anchor.inferred = True
                         selected.append(anchor)
@@ -457,35 +667,83 @@ class DigitalQuestionLayout:
         return best
 
     def _anchors(self):
-        if not self.prefixed:
+        prefixed = [anchor for anchor in self.prefixed if self._is_primary_anchor(anchor)]
+        plain = [anchor for anchor in self.numbered if self._is_primary_anchor(anchor)]
+        if not prefixed:
             return self._numbered_anchors()
         leaders = {}
-        for anchor in self.prefixed:
+        for anchor in prefixed:
             page = self.doc[anchor.page_index]
-            column = int(self.two_columns and anchor.rect.x0 >= page.rect.width / 2)
-            leaders.setdefault(column, []).append(anchor.rect.x0 / page.rect.width)
+            column = self._column_of(anchor)
+            offset = anchor.rect.x0 / page.rect.width - column / self._columns_on(anchor.page_index)
+            leaders.setdefault(column, []).append(offset)
+        all_leaders = [value for values in leaders.values() for value in values]
         leaders = {column: median(values) for column, values in leaders.items()}
 
         def column_of(anchor):
-            return int(self.two_columns and anchor.rect.x0 >= self.doc[anchor.page_index].rect.width / 2)
+            return self._column_of(anchor)
 
         def reading_order(anchor):
             return anchor.page_index, column_of(anchor), anchor.rect.y0
 
+        if prefixed and len(plain) >= max(6, len(prefixed) * 2):
+            # A few Q1/Q2 references, section headings or formula labels must
+            # not override a long, coherent plain-numbered paper. Require a
+            # strong sequence rather than merely counting all digit labels,
+            # since numeric answer choices can also look like question labels.
+            numbered = self._numbered_anchors()
+            longest = run = 0
+            previous_number = None
+            for anchor in numbered:
+                run = run + 1 if anchor.number == (previous_number or 0) + 1 else 1
+                longest = max(longest, run)
+                previous_number = anchor.number
+            if (len(numbered) >= max(6, len(prefixed) * 2)
+                    and longest >= 6):
+                numbers = {anchor.number for anchor in numbered}
+                combined = list(numbered)
+                ignored = 0
+                for candidate in sorted(prefixed, key=reading_order):
+                    if candidate.number in numbers:
+                        ignored += 1
+                        continue
+                    before = [item for item in combined if reading_order(item) < reading_order(candidate)]
+                    after = [item for item in combined if reading_order(item) > reading_order(candidate)]
+                    previous = max(before, key=reading_order) if before else None
+                    following = min(after, key=reading_order) if after else None
+                    sequential = ((previous and candidate.number == previous.number + 1)
+                                  or (following and candidate.number + 1 == following.number))
+                    neighbour = previous or following
+                    margin_ok = False
+                    if neighbour:
+                        def relative_margin(item):
+                            page_width = max(self.doc[item.page_index].rect.width, 1)
+                            count = self._columns_on(item.page_index)
+                            return item.rect.x0 / page_width - self._column_of(item) / count
+                        margin_ok = abs(relative_margin(candidate) - relative_margin(neighbour)) < 0.04
+                    if sequential and margin_ok:
+                        combined.append(candidate)
+                        numbers.add(candidate.number)
+                    else:
+                        ignored += 1
+                if ignored:
+                    self.log("Warning: Some isolated Q labels were treated as references rather than "
+                             "questions; review the question count and the original paper.")
+                return sorted(combined, key=reading_order)
+
         aligned = []
-        for anchor in self.numbered:
+        for anchor in plain:
             page = self.doc[anchor.page_index]
             column = column_of(anchor)
-            expected = leaders.get(column)
-            if expected is None and self.two_columns:
-                expected = leaders.get(1 - column, 0.05) + (0.5 if column else -0.5)
-            if expected is not None and abs(anchor.rect.x0 / page.rect.width - expected) <= 0.025:
+            expected = leaders.get(column, median(all_leaders) if all_leaders else None)
+            offset = anchor.rect.x0 / page.rect.width - column / self._columns_on(anchor.page_index)
+            if expected is not None and abs(offset - expected) <= 0.025:
                 aligned.append(anchor)
 
         # Numeric answer labels may align with an explicit Q label. Treat an
         # adjacent 1,2,... run following a question as choices, not new
         # question anchors. The prefixed anchors also bound the run.
-        ordered = sorted(self.prefixed + aligned, key=reading_order)
+        ordered = sorted(prefixed + aligned, key=reading_order)
         numeric_choices = set()
         for index, candidate in enumerate(ordered):
             if candidate.prefixed or candidate.number != 1 or index == 0:
@@ -507,8 +765,7 @@ class DigitalQuestionLayout:
                     break
                 page = self.doc[candidate.page_index]
                 column = column_of(candidate)
-                x0 = page.rect.width * column / 2 if self.two_columns else 0
-                x1 = page.rect.width * (column + 1) / 2 if self.two_columns else page.rect.width
+                x0, x1 = self._column_bounds(candidate.page_index, column)
                 between = self._text_in_rect(candidate.page_index, fitz.Rect(
                     x0, max(0, run[-1].rect.y0 - 5), x1, later.rect.y0 - 5))
                 between = re.sub(r"(?<!\w)" + re.escape(run[-1].label.strip()) + r"(?!\d)", "", between, count=1)
@@ -521,8 +778,8 @@ class DigitalQuestionLayout:
                    and not re.match(r"^\d+\.\s+\d+\s*$", next(
                        (text for text, box, _ in self.lines[anchor.page_index] if box == anchor.rect), ""))]
 
-        first_prefixed = min(self.prefixed, key=reading_order)
-        anchors = list(self.prefixed)
+        first_prefixed = min(prefixed, key=reading_order)
+        anchors = list(prefixed)
         for anchor in aligned:
             if reading_order(anchor) >= reading_order(first_prefixed):
                 anchors.append(anchor)
@@ -536,10 +793,9 @@ class DigitalQuestionLayout:
             # option list on this page; otherwise it is likely front matter.
             page = self.doc[anchor.page_index]
             column = column_of(anchor)
-            x0 = page.rect.width * column / 2 if self.two_columns else 0
-            x1 = page.rect.width * (column + 1) / 2 if self.two_columns else page.rect.width
+            x0, x1 = self._column_bounds(anchor.page_index, column)
             following = [
-                other.rect.y0 for other in aligned + self.prefixed
+                other.rect.y0 for other in aligned + prefixed
                 if other.page_index == anchor.page_index and column_of(other) == column
                 and other.rect.y0 > anchor.rect.y0 + 1
             ]
@@ -558,9 +814,13 @@ class DigitalQuestionLayout:
         sizes = [span["size"] for _, _, spans in self.lines[page_index] for span in spans if span["text"].strip()]
         typical_size = median(sizes) if sizes else 10
         first_y = min((anchor.rect.y0 for anchor in anchors), default=0)
-        middle = page.rect.width / 2
+        columns = self._columns_on(page_index)
         for text, rect, spans in self.lines[page_index]:
-            repeated = self.edge_counts[self._edge_key(page, text, rect)] >= threshold
+            # Repeated short choice labels at the very top/bottom of many
+            # pages are content, not headers or footers. Cropping them can
+            # silently remove a question stem or its first/last answer.
+            repeated = (self.edge_counts[self._edge_key(page, text, rect)] >= threshold
+                        and not OPTION_AT_START.match(text))
             if repeated and rect.y0 < page.rect.height * 0.09:
                 top = max(top, rect.y1 + 1)
             elif repeated and rect.y0 > page.rect.height * 0.87:
@@ -568,7 +828,8 @@ class DigitalQuestionLayout:
             # A large title spanning both columns is not a continuation of
             # the previous question when the right column is read.
             elif (
-                self.two_columns and rect.x0 < middle < rect.x1 and rect.y1 < first_y
+                columns > 1 and any(rect.x0 < page.rect.width * boundary / columns < rect.x1
+                                    for boundary in range(1, columns)) and rect.y1 < first_y
                 and rect.y1 < page.rect.height * 0.25
                 and max((span["size"] for span in spans), default=0) > typical_size * 1.3
             ):
@@ -633,8 +894,12 @@ class DigitalQuestionLayout:
                 spans.extend(span for span in line_spans if span["text"].strip())
                 if OPTION_AT_START.match(text):
                     first_option_y = min(first_option_y, line_rect.y0) if first_option_y is not None else line_rect.y0
-        sizes = [span["size"] for span in spans]
-        typical_size = median(sizes) if sizes else 0
+        sizes = sorted(span["size"] for span in spans)
+        # A run of fractions can contain more small numerator/denominator
+        # spans than body spans. A median then mistakes the small glyphs for
+        # normal text and silently misses the visual formatting. Use the upper
+        # quartile as a conservative body-size reference instead.
+        typical_size = sizes[min(len(sizes) - 1, len(sizes) * 3 // 4)] if sizes else 0
         complex_math = any(
             is_type3_font(span["font"])
             or (typical_size and span["size"] < typical_size * 0.80 and re.search(r"\w", span["text"]))
@@ -650,15 +915,62 @@ class DigitalQuestionLayout:
             first_option_y=first_option_y,
         )
 
+    def _explicit_essay_instructions(self):
+        # Only a strong paper-wide instruction is used; a mention of an essay
+        # in an ordinary multiple-choice statement is not enough evidence.
+        pattern = re.compile(r"\bessay\s+type\s+question\b.{0,100}\bshort\s+note\b.{0,100}\b(?:compulsory|required)\b", re.I)
+        for index in range(min(2, len(self.doc))):
+            try:
+                if index in self.ocr_pages:
+                    page, textpage = self.ocr_pages[index]
+                    text = page.get_text("text", textpage=textpage)
+                else:
+                    text = self.doc[index].get_text("text")
+                if pattern.search(_compact(text)):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _declared_question_counts(self):
+        """Find explicit paper-wide totals on opening pages, never section totals."""
+        patterns = (
+            re.compile(r"\btotal\s+(?:number\s+of\s+)?questions?\s*[:=–—-]?\s*(\d{1,4})\b", re.I),
+            re.compile(r"\b(?:question\s+paper|test\s+booklet|entire\s+paper|examination)\b"
+                       r"[^.]{0,120}?\b(?:contains|has|comprises|consists\s+of)\s+(\d{1,4})\s+"
+                       r"(?:multiple[-\s]+choice\s+)?questions?\b", re.I),
+        )
+        counts = set()
+        for index in range(min(2, len(self.doc))):
+            try:
+                if index in self.ocr_pages:
+                    page, textpage = self.ocr_pages[index]
+                    text = page.get_text("text", textpage=textpage)
+                else:
+                    text = self.doc[index].get_text("text")
+                text = _compact(text)
+                counts.update(int(match.group(1)) for pattern in patterns for match in pattern.finditer(text)
+                              if 0 < int(match.group(1)) <= 2000)
+            except Exception:
+                continue
+        return counts
+
     def extract(self):
         anchors = self._anchors()
         if not anchors:
             return None
+        self._selected_anchors = anchors
+        if self.parallel_pages:
+            self.log("Parallel numbered columns detected: one text layer was used and the other "
+                     "is preserved as source images when boundaries are reliable. Review both languages and the question count.")
         by_page = {}
         for anchor in anchors:
             by_page.setdefault(anchor.page_index, []).append(anchor)
+        modes = {self._columns_on(index) for index in range(len(self.doc))}
+        description = ({1: "single column", 2: "two columns", 3: "three columns"}.get(next(iter(modes)))
+                       if len(modes) == 1 else "mixed page columns")
         self.log(
-            f"{'OCR-assisted' if self.ocr_pages else 'Digital'} layout detected: {'two columns' if self.two_columns else 'single column'}; "
+            f"{'OCR-assisted' if self.ocr_pages else 'Digital'} layout detected: {description}; "
             "matching question labels and figures by their position."
         )
         questions = []
@@ -673,9 +985,8 @@ class DigitalQuestionLayout:
                 so_far = "\n".join(seg.text for seg in current.segments)
                 if len(parse_options(so_far)[1]) >= 4:
                     continue
-            for column in range(2 if self.two_columns else 1):
-                x0 = page.rect.width * column / 2 if self.two_columns else 0
-                x1 = page.rect.width * (column + 1) / 2 if self.two_columns else page.rect.width
+            for column in self._reading_columns(page_index):
+                x0, x1 = self._column_bounds(page_index, column)
                 column_anchors = sorted(
                     (a for a in page_anchors if x0 <= a.rect.x0 < x1), key=lambda a: a.rect.y0
                 )
@@ -692,8 +1003,58 @@ class DigitalQuestionLayout:
                 if current and bottom > start and (page_anchors or current.segments):
                     current.segments.append(self._segment(page_index, fitz.Rect(x0, start, x1, bottom)))
 
+        multi_section = False
+        essay_instructions = self._explicit_essay_instructions()
+        if essay_instructions:
+            self.log("Warning: The paper specifies essay and short-note answers. Single-choice CBT grading does not support these questions.")
         for question in questions:
             self._finalize(question)
+            source_text = " ".join(segment.text for segment in question.segments)
+            essay_parts = (len(question.options) < 3 or
+                           (re.search(r"\bmarks\s*[:.]\s*\d+", source_text, re.I) and
+                            re.search(r"^\s*OR\s*$", source_text, re.I | re.M)))
+            if essay_instructions and essay_parts:
+                # Subparts (a)/(b) and OR alternatives are not MCQ answers.
+                # Preserve the source text as-is, remove the misleading parsed
+                # options, and leave any option-assigned figures unassigned.
+                label = re.compile(r"(?<!\w)" + re.escape(question.label.strip()) + r"(?!\d)")
+                question.text = _compact(label.sub("", source_text, count=1))
+                question.options = []
+                question.tables = []
+                for figure in question.extra_figures:
+                    if figure.get("option_key"):
+                        figure["option_key"] = None
+                question.issues.insert(0, "Printed essay/short-note questions cannot be graded as single-choice answers; review or exclude this item.")
+            # The application scores one selected option only. Explicit
+            # multi-answer instructions apply until a later explicit
+            # single-answer instruction; never infer or verify an answer key.
+            multi = MULTIPLE_CORRECT.search(source_text)
+            single = SINGLE_CORRECT.search(source_text)
+            if single and (not multi or single.start() > multi.start()):
+                multi_section = False
+            elif multi:
+                multi_section = True
+            if multi_section:
+                question.issues.append("Printed instructions may allow multiple correct choices; this test supports single-choice grading only. Review or exclude this question.")
+            if len(question.options) < 2:
+                question.issues.append("A complete supported answer-choice list was not found; image-only, numerical or incomplete questions need manual review.")
+            elif len(question.options) < 5:
+                expected = {option["key"] for option in question.options}
+                possible = {_normalize_option(_option_raw(match))
+                            for option in question.options for match in OPTION_MARKER.finditer(option.get("text", ""))}
+                if any(key not in expected and key > max(expected) for key in possible):
+                    question.issues.append("Additional option labels may be embedded in an extracted choice; verify the choice boundaries.")
+        declared = self._declared_question_counts()
+        if len(declared) == 1:
+            expected = next(iter(declared))
+            if expected != len(questions):
+                self.log(f"Warning: The paper states {expected} questions, but {len(questions)} were detected. "
+                         "Check for missing or duplicated items; do not assume the printed total is correct.")
+        elif len(declared) > 1:
+            self.log("Warning: Conflicting paper-wide question totals were found; verify the question count manually.")
+        if questions and questions[0].number > 1:
+            self.log(f"Warning: The first detected question is {questions[0].number}; "
+                     "earlier questions may be missing or intentionally omitted.")
         counts = Counter(question.number for question in questions)
         duplicates = sorted(number for number, count in counts.items() if count > 1)
         if duplicates:
@@ -740,7 +1101,7 @@ class DigitalQuestionLayout:
                     # A raster scan has no usable vector rulings for this
                     # detector; OCR text alone cannot establish a cell grid.
                     self._tables_by_page[segment.page_index] = (
-                        [] if segment.page_index in self.ocr_pages else page.find_tables().tables[:100]
+                        [] if segment.page_index in self.ocr_pages else _find_geometric_tables(page).tables[:100]
                     )
                 except Exception:
                     self._tables_by_page[segment.page_index] = []
@@ -763,7 +1124,7 @@ class DigitalQuestionLayout:
                         clip.y1 = clip.y0  # Unknown answer boundary: do not guess.
                 if clip.height >= 25 and clip.width >= 35:
                     try:
-                        text_tables = page.find_tables(clip=clip, strategy="text").tables[:20]
+                        text_tables = _find_geometric_tables(page, clip=clip, strategy="text").tables[:20]
                         tables.extend((table, True) for table in text_tables)
                     except Exception:
                         self.log(f"Warning: Page {segment.page_index + 1}: borderless table detection failed; review the source.")
@@ -885,6 +1246,7 @@ class DigitalQuestionLayout:
                 else:
                     question.tables.append(data)
                     fragments.append(f"\n[[table:{len(question.tables)}]]\n")
+                question.table_regions.append((segment.page_index, fitz.Rect(box), fitz.Rect(segment.rect)))
                 cursor = box.y1
                 last_table_segment = index
                 last_table_geometry = (box.width, boundary)
@@ -1042,6 +1404,242 @@ class DigitalQuestionLayout:
             result[index].append((key, box))
         return result
 
+    def _parallel_source_regions(self, question):
+        regions = []
+        for segment in question.segments:
+            index = segment.page_index
+            if index not in self.parallel_pages:
+                continue
+            primary = sorted((a for a in self._selected_anchors if a.page_index == index),
+                             key=lambda a: a.rect.y0)
+            alternate = [a for a in self.prefixed + self.numbered
+                         if a.page_index == index and not self._is_primary_anchor(a)]
+            top, bottom = self._content_bounds(index, primary)
+            own = next((a for a in primary if a.number == question.number
+                        and segment.rect.y0 <= a.rect.y0 < segment.rect.y1), None)
+            following = next((a for a in primary if a.rect.y0 >= segment.rect.y1 - 1), None)
+            def counterpart(anchor):
+                if not anchor:
+                    return None
+                options = [a for a in alternate if a.number == anchor.number]
+                if not options:
+                    return None
+                result = min(options, key=lambda a: abs(a.rect.y0 - anchor.rect.y0))
+                limit = max(50, self.doc[index].rect.height * .08)
+                return result if abs(result.rect.y0 - anchor.rect.y0) <= limit else None
+            other = counterpart(own)
+            next_other = counterpart(following)
+            if (not own and not following) or (own and not other) or (following and not next_other):
+                question.issues.append("The parallel-language boundary could not be matched; inspect the original page.")
+                continue
+            y0 = max(top, other.rect.y0 - 5) if other else top
+            y1 = min(bottom, next_other.rect.y0 - 5) if next_other else bottom
+            if y1 <= y0 or (not own and segment.rect.y0 > top + 2):
+                question.issues.append("The parallel-language boundary could not be matched; inspect the original page.")
+                continue
+            x0, x1 = self._column_bounds(index, 1 - self.parallel_primary)
+            region = fitz.Rect(x0, y0, x1, y1)
+            if region.height < 22 and not self._text_in_rect(index, region).strip():
+                continue
+            regions.append((index, region))
+        return regions
+
+    def _save_source_snapshot(self, question, page_index, rect, source):
+        """Keep a bounded, original-PDF crop; never draw or infer content."""
+        page = self.doc[page_index]
+        rect = fitz.Rect(rect) & page.rect
+        if rect.is_empty or rect.width < 10 or rect.height < 8:
+            return False
+        if any(rect.intersects(line) and ANSWER_OR_SOLUTION.search(value)
+               for value, line, _ in self.lines[page_index]):
+            message = "A source image was omitted because a printed answer or solution may be visible; review the original."
+            if message not in question.issues:
+                question.issues.append(message)
+            return False
+        try:
+            # The limit applies to the rendered side, including on unusually
+            # large physical pages. Original coordinates remain available.
+            factor = min(2.0, 2200 / max(rect.width, rect.height))
+            pix = page.get_pixmap(matrix=fitz.Matrix(factor, factor), clip=rect, alpha=False)
+            question.extra_figures.append({
+                "page": page_index + 1, "box": source_box(page, rect),
+                "data": pix.tobytes("png"), "option_key": "", "source": source,
+            })
+            return True
+        except Exception:
+            question.issues.append("Could not save an original source image; compare the question with its PDF page.")
+            return False
+
+    def _has_positioned_fraction(self, segment, markers):
+        """Recognize source geometry of a short bar with glyphs above/below.
+
+        This is only a reason to preserve an image, never a transcription or an
+        answer. It also catches fractions whose glyph sizes are identical to
+        body text and would therefore evade the font-size heuristic.
+        """
+        if not markers or segment.page_index in self.ocr_pages:
+            return False
+        drawings = self._drawings_by_page.get(segment.page_index, [])
+        low = min(box.y0 for _, box in markers) - 15
+        high = max(box.y1 for _, box in markers) + 35
+        spans = [span for _, line, parts in self.lines[segment.page_index]
+                 if segment.rect.intersects(line) and low - 15 <= line.y0 <= high + 15
+                 for span in parts if span.get("text", "").strip()]
+        for drawing in drawings:
+            bar = fitz.Rect(drawing.get("rect", (0, 0, 0, 0)))
+            if not (4 <= bar.width <= 80 and bar.height <= 1.5 and low <= bar.y0 <= high
+                    and segment.rect.x0 <= bar.x0 < bar.x1 <= segment.rect.x1):
+                continue
+            above, below = False, False
+            for span in spans:
+                text = span.get("text", "").strip()
+                if len(text) > 8 or not re.search(r"\w", text):
+                    continue
+                box = fitz.Rect(span["bbox"])
+                center = (box.tl + box.br) / 2
+                if not bar.x0 - 3 <= center.x <= bar.x1 + 3:
+                    continue
+                above = above or -16 <= center.y - bar.y0 < -0.5
+                below = below or 0.5 < center.y - bar.y0 <= 16
+            if above and below:
+                return True
+        return False
+
+    def _bounded_incomplete_regions(self, question):
+        """Yield conservative source regions when no choice list was recovered.
+
+        A next question in the same column provides an end boundary. At a
+        page break, require a nearby sequential anchor at the start of the next
+        page and a short final region. Never infer options from these images.
+        """
+        for segment in question.segments:
+            index, box = segment.page_index, segment.rect
+            page = self.doc[index]
+            same_column = [a for a in self._selected_anchors if a.page_index == index
+                           and box.x0 <= a.rect.x0 < box.x1]
+            starts_here = any(a.number == question.number and abs(a.rect.y0 - box.y0 - 5) <= 1.5
+                              for a in same_column)
+            if not starts_here:
+                continue  # Do not save an unbounded continuation or a cover.
+            if any(abs(a.rect.y0 - box.y1 - 5) <= 1.5 for a in same_column):
+                yield index, box
+                continue
+            if index + 1 >= len(self.doc) or box.height > page.rect.height * .65:
+                continue
+            _, bottom = self._content_bounds(index, [a for a in self._selected_anchors if a.page_index == index])
+            if abs(box.y1 - bottom) > 1.5:
+                continue
+            next_page = [a for a in self._selected_anchors if a.page_index == index + 1]
+            if not next_page:
+                continue
+            next_width = self.doc[index + 1].rect.width
+            first = min(next_page, key=lambda a: (int(a.rect.x0 / next_width * self._columns_on(index + 1)), a.rect.y0))
+            if first.number == question.number + 1 and first.rect.y0 <= self.doc[index + 1].rect.height * .25:
+                yield index, box
+
+    def _preserve_source_snapshots(self, question, markers, first_option_segment):
+        """Supplement uncertain maths/scans and tables with source pixels.
+
+        These group images are not assigned to individual choices and do not
+        replace any parsed text. The display explains that source labels are in
+        their original order; users must review both crop and transcription.
+        """
+        all_markers = [(key, box) for index in range(len(question.segments))
+                       for key, box in markers.get(index, [])]
+        complete = (len(question.options) >= 2 and len(all_markers) == len(question.options)
+                    and [key for key, _ in all_markers] == [o["key"] for o in question.options])
+        fraction_segments = {index for index, segment in enumerate(question.segments)
+                             if self._has_positioned_fraction(segment, markers.get(index, []))}
+        if fraction_segments and not any("Mathematical formatting" in issue for issue in question.issues):
+            question.issues.append("Positioned fraction-like content may be inaccurate; compare with the source.")
+        saved_options = False
+        if complete and first_option_segment is not None:
+            for index in range(first_option_segment, len(question.segments)):
+                segment = question.segments[index]
+                choice_markers = markers.get(index, [])
+                # OCR and scan text can be wrong even when font metrics look
+                # ordinary; digital pages need a clear complex-math signal.
+                if not choice_markers or not (segment.has_complex_math or index in fraction_segments
+                                              or segment.page_index in self.ocr_pages
+                                              or segment.page_index in self.raster_pages):
+                    continue
+                box = fitz.Rect(segment.rect)
+                box.y0 = max(box.y0, min(marker.y0 for _, marker in choice_markers) - 12)
+                # Do not capture the rest of a page: it may contain unseen
+                # questions or an answer key if segmentation failed. This is a
+                # supplemental view, not a promise to include a tall diagram.
+                box.y1 = min(box.y1, max(marker.y1 for _, marker in choice_markers) + 35)
+                if self._save_source_snapshot(question, segment.page_index, box, "option-source"):
+                    saved_options = True
+        if saved_options:
+            question.issues.append("Original answer choices saved as a source image; check its boundaries, order and extracted text.")
+
+        saved_stem = False
+        # A referenced but unstructured table is already preserved as a
+        # statement-region table snapshot below; avoid saving identical crops.
+        needs_table_fallback = not question.table_regions and TABLE_REFERENCE.search(question.text)
+        if complete and first_option_segment is not None and not needs_table_fallback:
+            for index, segment in enumerate(question.segments):
+                if index > first_option_segment:
+                    break
+                if not (segment.has_complex_math or index in fraction_segments
+                        or segment.page_index in self.ocr_pages or segment.page_index in self.raster_pages):
+                    continue
+                box = fitz.Rect(segment.rect)
+                if index == first_option_segment:
+                    option_boxes = [marker for _, marker in markers.get(index, [])]
+                    if not option_boxes:
+                        continue
+                    box.y1 = min(box.y1, min(marker.y0 for marker in option_boxes) - 3)
+                if box.height >= 20 and self._save_source_snapshot(question, segment.page_index, box, "stem-source"):
+                    saved_stem = True
+        if saved_stem:
+            question.issues.append("Original question region saved as a source image; check formulas and extracted text.")
+
+        if len(question.options) < 2:
+            # A diagram-only or otherwise incomplete choice list cannot be
+            # made gradable safely. Preserve the bounded original pixels to
+            # help the reviewer reconstruct it, without inventing any labels.
+            saved_incomplete = False
+            for page_index, box in self._bounded_incomplete_regions(question):
+                saved_incomplete |= self._save_source_snapshot(question, page_index, box, "stem-source")
+            if saved_incomplete:
+                question.issues.append("Original question and possible choices saved as a source image; manually repair and verify this incomplete item.")
+
+        saved_table = False
+        for page_index, box, segment_box in question.table_regions:
+            crop = (box + (-3, -3, 3, 3)) & segment_box
+            if self._save_source_snapshot(question, page_index, crop, "table-source"):
+                saved_table = True
+        if needs_table_fallback and complete and first_option_segment is not None:
+            # For OCR, a damaged grid, or a rejected table structure, preserve
+            # the statement region above the confirmed first option. No cells
+            # or table semantics are invented from this screenshot.
+            for index, segment in enumerate(question.segments):
+                if first_option_segment is not None and index > first_option_segment:
+                    break
+                crop = fitz.Rect(segment.rect)
+                if index == first_option_segment:
+                    option_boxes = [box for _, box in markers.get(index, [])]
+                    if not option_boxes:
+                        continue
+                    crop.y1 = min(crop.y1, min(box.y0 for box in option_boxes) - 3)
+                if crop.height >= 30 and self._save_source_snapshot(question, segment.page_index, crop, "table-source"):
+                    saved_table = True
+        if saved_table:
+            question.issues.append("Original table or statement region saved as a source image; verify it and all extracted cells.")
+        parallel_regions = self._parallel_source_regions(question)
+        if parallel_regions:
+            question.issues.append("Parallel-language columns were separated; check the other original region and choice order before use.")
+            for page_index, box in parallel_regions:
+                question.source_regions.append({"page": page_index + 1, "box": source_box(self.doc[page_index], box)})
+                self._save_source_snapshot(question, page_index, box, "parallel-source")
+        ranks = {"stem-source": 0, "table-source": 1, "parallel-source": 2, "option-source": 3}
+        regular = [figure for figure in question.extra_figures if figure["source"] not in ranks]
+        snapshots = [figure for figure in question.extra_figures if figure["source"] in ranks]
+        snapshots.sort(key=lambda figure: (ranks[figure["source"]], figure["page"]))
+        question.extra_figures = regular + snapshots
+
     def _finalize(self, question):
         texts = [segment.text for segment in question.segments]
         # The source can place a mathematical accent before Q9 on the same
@@ -1073,11 +1671,32 @@ class DigitalQuestionLayout:
         texts = self._structured_table_text(question, texts)
         text = "\n".join(texts)
         question.text, question.options, first_option_offset, ambiguous = parse_options(text)
+        grid_markers = None
+        if first_option_offset is not None and [o["key"] for o in question.options] == ["A", "B"]:
+            offset = 0
+            first_index = None
+            for index, segment_text in enumerate(texts):
+                if first_option_offset < offset + len(segment_text) + 1:
+                    first_index = index
+                    break
+                offset += len(segment_text) + 1
+            if first_index is not None:
+                segment = question.segments[first_index]
+                initial = self._option_label_boxes(question, text, first_option_offset)
+                ocr = self.ocr_pages.get(segment.page_index)
+                page, textpage = ocr if ocr else (self.doc[segment.page_index], None)
+                recovered = recover_column_major_grid(page, segment, initial[first_index], question.options,
+                                                       OPTION_MARKER, _normalize_option, _option_style, textpage)
+                if recovered:
+                    question.options, grid = recovered
+                    grid_markers = {index: [] for index in range(len(question.segments))}
+                    grid_markers[first_index] = grid
+                    question.issues.append("Column-major option layout was reordered from source geometry; verify every choice.")
         # Only geometrically unambiguous ruled fractions are converted to
         # LaTeX. A human still needs to verify every complex-math question.
         reconstructed_by_segment = {}
         for segment_index, segment in enumerate(question.segments):
-            if segment.page_index in self.ocr_pages or not segment.has_complex_math or not question.options:
+            if grid_markers or segment.page_index in self.ocr_pages or not segment.has_complex_math or not question.options:
                 continue
             try:
                 if segment.page_index not in self._drawings_by_page:
@@ -1102,6 +1721,10 @@ class DigitalQuestionLayout:
             question.issues.append("Full-page raster with text layer detected; verify its text, formulas and diagrams against the original.")
         if any(segment.page_index in self.unreadable_pages for segment in question.segments):
             question.issues.append("A scanned page could not be read; the question may be incomplete.")
+        if any(ANSWER_OR_SOLUTION.search(segment.text) for segment in question.segments):
+            question.issues.append("A printed answer or solution may be included in this question; review before using it in a test.")
+        if any(segment.page_index in self.mixed_column_pages for segment in question.segments):
+            question.issues.append("Text spans a detected column boundary; this page may contain a mixed layout and needs source review.")
         if ambiguous:
             question.issues.append("Option boundaries may be ambiguous; compare with the source.")
         if any(segment.has_complex_math for segment in question.segments):
@@ -1124,11 +1747,11 @@ class DigitalQuestionLayout:
                     first_option_segment = index
                     break
                 offset += len(seg_text) + 1
-        markers = self._option_label_boxes(question, text, first_option_offset)
+        markers = grid_markers or self._option_label_boxes(question, text, first_option_offset)
         # Flat reading order can interleave wrapped answers printed side by
         # side. Repair only complete, non-mathematical runs contained in one
         # segment, and only when every source token remains accounted for.
-        if first_option_segment is not None and question.options:
+        if first_option_segment is not None and question.options and not grid_markers:
             segment = question.segments[first_option_segment]
             if not segment.has_complex_math and len(markers[first_option_segment]) == len(question.options):
                 ocr = self.ocr_pages.get(segment.page_index)
@@ -1342,3 +1965,4 @@ class DigitalQuestionLayout:
             question.issues.append("Multiple original diagrams detected; check their assignments against the source.")
         if FIGURE_REFERENCE.search(question.text) and not question.image and not any(f["option_key"] == "" for f in question.extra_figures):
             question.issues.append("A figure is referenced but no question diagram was detected.")
+        self._preserve_source_snapshots(question, markers, first_option_segment)
