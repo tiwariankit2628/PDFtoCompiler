@@ -47,6 +47,19 @@ def _approval_error(question):
     return ""
 
 
+def _bank_question_type(staged):
+    """Map a staged detected type to a supported bank question type.
+
+    Essay/subjective has no bank equivalent and stays single-correct; the
+    reviewer must convert it manually before it is useful.
+    """
+    mapping = {
+        ExtractedQuestion.DetectedType.MULTIPLE: Question.QuestionType.MCQ_MULTIPLE,
+        ExtractedQuestion.DetectedType.NUMERICAL: Question.QuestionType.NUMERICAL,
+    }
+    return mapping.get(staged.detected_type, Question.QuestionType.MCQ_SINGLE)
+
+
 def _infer_language(staged):
     """Conservative metadata hint; the teacher can change it in the bank."""
     text = " ".join([staged.question_text] + [o.get("text", "") for o in staged.options])
@@ -66,6 +79,7 @@ def _equivalent_bank_question(question):
               for o in question.options]
     for existing in Question.objects.filter(is_private_practice=False, category=question.paper.category, question_text__iexact=question.question_text.strip()):
         if (existing.image or existing.figures.exists()
+                or existing.question_type != _bank_question_type(question)
                 or existing.explanation != question.explanation
                 or existing.positive_marks != question.positive_marks
                 or existing.negative_marks != question.negative_marks
@@ -169,9 +183,9 @@ class QuestionPaperUploadView(TeacherRequiredMixin, CreateView):
         paper.uploaded_by = self.request.user
         paper.file_size_bytes = form.cleaned_data["pdf_file"].size
         paper.total_pages = getattr(form, "pdf_page_count", 0)
-        paper.extraction_mode = form.cleaned_data["extraction_mode"]
-        if paper.extraction_mode in (QuestionPaperUpload.ExtractionMode.CLOUD, QuestionPaperUpload.ExtractionMode.GEMINI):
-            paper.cloud_consent_at = timezone.now()
+        # Upload is local-only (enforced by the form). Cloud/MinerU provider code
+        # and migrations are preserved for future use but are not offered here.
+        paper.extraction_mode = QuestionPaperUpload.ExtractionMode.LOCAL
         paper.save()
 
         log_audit(
@@ -181,30 +195,12 @@ class QuestionPaperUploadView(TeacherRequiredMixin, CreateView):
             request=self.request,
         )
 
-        if paper.extraction_mode in (QuestionPaperUpload.ExtractionMode.CLOUD, QuestionPaperUpload.ExtractionMode.GEMINI):
-            from .tasks import extract_cloud_paper
-
-            # Enqueue after commit so a worker never sees an uncommitted upload.
-            def enqueue():
-                try:
-                    extract_cloud_paper.delay(paper.pk)
-                except Exception:
-                    QuestionPaperUpload.objects.filter(pk=paper.pk).update(
-                        status=QuestionPaperUpload.ProcessingStatus.FAILED,
-                        extraction_log="Could not queue cloud extraction. Check the worker/broker configuration; no local fallback was run.",
-                    )
-            transaction.on_commit(enqueue)
-            if settings.CELERY_TASK_ALWAYS_EAGER:
-                messages.info(self.request, "Cloud extraction is running in the request in development mode. Review the result and diagnostics below.")
-            else:
-                messages.info(self.request, "Cloud extraction was queued. Refresh this page to see its status; review all results before approval.")
+        extractor = PDFQuestionExtractor(paper)
+        questions_count = extractor.extract()
+        if questions_count > 0:
+            messages.success(self.request, f"Paper '{paper.title}' processed: {questions_count} questions are ready for review.")
         else:
-            extractor = PDFQuestionExtractor(paper)
-            questions_count = extractor.extract()
-            if questions_count > 0:
-                messages.success(self.request, f"Paper '{paper.title}' processed: {questions_count} questions are ready for review.")
-            else:
-                messages.warning(self.request, "No structured questions could be identified. Review the extraction log or add questions manually.")
+            messages.warning(self.request, "No structured questions could be identified. Review the extraction log or add questions manually.")
 
         return redirect("questions:paper_review", pk=paper.pk)
 
@@ -435,6 +431,7 @@ class ExtractedQuestionApproveView(TeacherRequiredMixin, View):
                 topic=paper.target_exam or "",
                 question_text=q.question_text, tables=q.tables, source_regions=q.source_regions, primary_image_region=q.primary_image_region,
                 language=_infer_language(q),
+                question_type=_bank_question_type(q),
                 answer_status=AnswerStatus.MANUALLY_VERIFIED if q.correct_option else AnswerStatus.NEEDS_REVIEW,
                 explanation=q.explanation,
                 positive_marks=q.positive_marks,
@@ -515,6 +512,7 @@ class QuestionPaperBulkApproveView(TeacherRequiredMixin, View):
                     topic=paper.target_exam or "",
                     question_text=q.question_text, tables=q.tables, source_regions=q.source_regions, primary_image_region=q.primary_image_region,
                     language=_infer_language(q),
+                    question_type=_bank_question_type(q),
                     answer_status=AnswerStatus.MANUALLY_VERIFIED if q.correct_option else AnswerStatus.NEEDS_REVIEW,
                     explanation=q.explanation,
                     positive_marks=q.positive_marks,

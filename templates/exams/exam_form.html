@@ -153,6 +153,26 @@
                                 <div class="form-text small">Permutes options independently for every attempt.</div>
                             </div>
                         </div>
+
+                        <div class="col-md-6">
+                            <div class="form-check form-switch">
+                                {{ form.image_first_mode }}
+                                <label class="form-check-label small fw-bold" for="{{ form.image_first_mode.id_for_label }}">
+                                    Image-first display (original PDF crop + A/B/C/D)
+                                </label>
+                                <div class="form-text small">Shows each question as the original-PDF image with answer buttons; options are not shuffled for these questions.</div>
+                            </div>
+                        </div>
+
+                        <div class="col-md-6">
+                            <div class="form-check form-switch">
+                                {{ form.strict_exam_mode }}
+                                <label class="form-check-label small fw-bold" for="{{ form.strict_exam_mode.id_for_label }}">
+                                    Strict Exam Mode (3-warning page-switch rule)
+                                </label>
+                                <div class="form-text small">Disclosed to candidates. Counts distinct page switches; the 4th ends the attempt for your review. Applies only to this test. A browser cannot reliably tell a tab switch from a phone call or screen lock.</div>
+                            </div>
+                        </div>
                     </div>
 
                     <hr class="my-4">
@@ -238,7 +258,7 @@
             <!-- Submit Button Card -->
             <div class="card border shadow-sm">
                 <div class="card-body">
-                    <button type="submit" class="btn btn-primary w-100 py-2 fw-semibold mb-2">
+                    <button type="submit" class="btn btn-cbt-primary w-100 py-2 fw-semibold mb-2">
                         <i class="bi bi-check-lg me-1"></i> {% if form.instance.pk %}Update Examination{% else %}Save & Build Questions &rarr;{% endif %}
                     </button>
                     <a href="{% url 'exams:exam_list' %}" class="btn btn-outline-secondary w-100">

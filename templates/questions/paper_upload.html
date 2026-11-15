@@ -6,7 +6,7 @@
 <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom">
     <div>
         <h2 class="fw-bold mb-1">Upload Question Paper PDF</h2>
-        <p class="text-muted mb-0">Choose local extraction or an optional cloud method. All results require review against the original PDF.</p>
+        <p class="text-muted mb-0">Local extraction only. All results require review against the original PDF.</p>
     </div>
     <div class="mt-3 mt-md-0">
         <a href="{% url 'questions:paper_list' %}" class="btn btn-sm btn-cbt-outline">
@@ -76,44 +76,33 @@
                     {% endif %}
                 </div>
 
-                <h5 class="fw-bold mb-3 border-bottom pb-2">Extraction &amp; consent</h5>
+                <h5 class="fw-bold mb-3 border-bottom pb-2">Extraction</h5>
                 <div class="mb-3">
                     <label for="{{ form.extraction_mode.id_for_label }}" class="form-label fw-semibold">Extraction method</label>
                     {{ form.extraction_mode }}
                     {% if form.extraction_mode.errors %}<div class="text-danger small">{{ form.extraction_mode.errors.0 }}</div>{% endif %}
-                </div>
-                <div class="alert alert-warning small">
-                    <p class="mb-2"><strong>Gemini only (lower-cost cloud):</strong> locally extracted text and page images are sent to Google Gemini; Mathpix is not used. Gemini charges depend on the configured model and token usage, so this is not a fixed-price option. Scanned or vector diagrams may need manual cropping.</p>
-                    <p class="mb-2"><strong>Mathpix + Gemini:</strong> the full PDF is sent to Mathpix; OCR text and page images go to Google Gemini. Both may charge. The app requests Mathpix deletion, but provider retention, caching and billing metadata may still apply.</p>
-                    <p class="mb-0">Cloud methods require configuration and your consent. Google’s unpaid and paid tiers can have different data-use terms; do not send sensitive information to an unpaid service. Never upload confidential papers without permission. Local mode does not send the PDF to these services.
-                    <a href="https://mathpix.com/pricing/api" target="_blank" rel="noopener">Mathpix pricing</a> ·
-                    <a href="https://docs.mathpix.com/concepts/data-retention" target="_blank" rel="noopener">Mathpix retention</a> ·
-                    <a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank" rel="noopener">Gemini pricing</a> ·
-                    <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener">Gemini terms</a>.</p>
+                    <small class="text-muted d-block mt-1">Extraction runs locally on this server — your PDF is not sent to any external service. Always review results against the original PDF.</small>
                 </div>
                 <div class="form-check mb-4">
-                    {{ form.cloud_consent }}
-                    <label class="form-check-label" for="{{ form.cloud_consent.id_for_label }}">{{ form.cloud_consent.label }}</label>
-                    {% if form.cloud_consent.errors %}<div class="text-danger small">{{ form.cloud_consent.errors.0 }}</div>{% endif %}
+                    {{ form.image_first }}
+                    <label class="form-check-label fw-semibold" for="{{ form.image_first.id_for_label }}">{{ form.image_first.label }}</label>
+                    <small class="text-muted d-block">{{ form.image_first.help_text }}</small>
+                    {% if form.image_first.errors %}<div class="text-danger small">{{ form.image_first.errors.0 }}</div>{% endif %}
                 </div>
 
                 <div class="d-flex justify-content-end gap-2 pt-2 border-top">
                     <a href="{% url 'questions:paper_list' %}" class="btn btn-outline-secondary">Cancel</a>
-                    <button type="submit" class="btn btn-primary fw-bold px-4">
+                    <button type="submit" class="btn btn-cbt-primary fw-bold px-4">
                         <i class="bi bi-cpu-fill me-1"></i> Upload & Start Extraction
                     </button>
                 </div>
             </form>
         </div>
 
-        <!-- Extraction Features Notice -->
-        <div class="card border-0 bg-primary bg-opacity-10 p-3 rounded-3 small">
-            <h6 class="fw-bold text-primary mb-2"><i class="bi bi-info-circle-fill me-1"></i> Extraction Pipeline Highlights:</h6>
-            <ul class="mb-0 ps-3 text-muted">
-                <li>Local mode uses PDF layout and optionally Tesseract; formulas, scanned text and diagrams can be missed or misread.</li>
-                <li>Gemini-only uses local text and Gemini page images without Mathpix. Mathpix + Gemini adds paid OCR. Verify all results and original-PDF crops.</li>
-                <li>Never assumes 100% extraction accuracy — every question is presented in an editable review workspace prior to publishing.</li>
-            </ul>
+        <div class="card border-0 p-3 rounded-3 small text-muted" style="background: var(--ivory-2);">
+            <i class="bi bi-info-circle me-1"></i>
+            Extraction is local and never 100% accurate. Every question opens in an editable review workspace — with the
+            original-PDF image — before anything is published.
         </div>
     </div>
 </div>

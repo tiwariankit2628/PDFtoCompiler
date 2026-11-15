@@ -635,7 +635,7 @@ class InstitutionalGraphicWorkflowTests(TestCase):
                               stream=image_bytes(("red", "green", "blue", "yellow")[index]))
         data = doc.write(); doc.close()
         paper = QuestionPaperUpload.objects.create(
-            title="Teacher figures", uploaded_by=self.teacher, category=self.category, subject="Science",
+            title="Teacher figures", uploaded_by=self.teacher, category=self.category, subject="Science", image_first=False,
             pdf_file=SimpleUploadedFile("teacher.pdf", data, content_type="application/pdf"))
         self.assertEqual(PDFQuestionExtractor(paper).extract(), 1)
         item = paper.extracted_questions.get()
@@ -672,11 +672,12 @@ class PrivateGraphicWorkflowTests(TestCase):
         self.other = User.objects.create_user(username="image-other", email="image-other@example.test", password="x", role=User.Roles.STUDENT)
         self.category = Category.objects.create(name="Image choices", slug="image-choices")
 
-    def paper(self, doc):
+    def paper(self, doc, image_first=False):
         data = doc.write(); doc.close()
         return QuestionPaperUpload.objects.create(
             title="Private graphics", uploaded_by=self.owner, category=self.category, subject="Science",
-            is_student_private=True, private_pdf_file=SimpleUploadedFile("private.pdf", data, content_type="application/pdf"))
+            is_student_private=True, image_first=image_first,
+            private_pdf_file=SimpleUploadedFile("private.pdf", data, content_type="application/pdf"))
 
     def test_option_images_remain_private_and_survive_practice_creation(self):
         from django.urls import reverse

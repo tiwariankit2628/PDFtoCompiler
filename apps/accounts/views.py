@@ -12,7 +12,7 @@ from django.urls import reverse_lazy
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import View
 
-from .forms import StudentRegistrationForm, UserLoginForm, UserProfileForm
+from .forms import PublicRegistrationForm, StudentRegistrationForm, UserLoginForm, UserProfileForm
 from .models import User
 
 
@@ -26,19 +26,28 @@ class UserRegisterView(View):
     def get(self, request):
         if request.user.is_authenticated:
             return redirect("core:dashboard_router")
-        form = StudentRegistrationForm()
+        form = PublicRegistrationForm()
         return render(request, self.template_name, {"form": form})
 
     def post(self, request):
         if request.user.is_authenticated:
             return redirect("core:dashboard_router")
-        form = StudentRegistrationForm(request.POST)
+        form = PublicRegistrationForm(request.POST)
         if form.is_valid():
             user = form.save()
-            messages.success(
-                request,
-                f"Welcome to the platform, {user.first_name or user.username}! Your student account has been created successfully.",
-            )
+            if user.is_teacher:
+                messages.success(
+                    request,
+                    f"Welcome, {user.first_name or user.username}! Your teacher account is ready. "
+                    "An administrator still needs to assign you subject categories before you can "
+                    "publish papers — your dashboard explains the next steps.",
+                )
+            else:
+                messages.success(
+                    request,
+                    f"Welcome to the platform, {user.first_name or user.username}! "
+                    "Your student account has been created successfully.",
+                )
             login(request, user)
             return redirect("core:dashboard_router")
         return render(request, self.template_name, {"form": form})

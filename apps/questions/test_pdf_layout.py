@@ -253,9 +253,12 @@ class ExtractionAndApprovalSafetyTests(TestCase):
             username="layout_teacher", password="Password123!", role=User.Roles.TEACHER, is_staff=True
         )
 
-    def paper(self, content, title="Example"):
+    def paper(self, content, title="Example", image_first=False):
+        # These suites exercise text/figure extraction, not image-first crops;
+        # keep crops off here so figure counts stay focused. Image-first crop
+        # behaviour is covered in test_image_first.py.
         return QuestionPaperUpload.objects.create(
-            title=title, category=self.category, subject="Science", uploaded_by=self.teacher,
+            title=title, category=self.category, subject="Science", uploaded_by=self.teacher, image_first=image_first,
             pdf_file=SimpleUploadedFile("paper.pdf", content, content_type="application/pdf"),
         )
 
@@ -327,11 +330,11 @@ class ExtractionAndApprovalSafetyTests(TestCase):
         original_save = extractor._save_item
         calls = []
 
-        def fail_on_second(item):
+        def fail_on_second(item, doc=None):
             calls.append(item)
             if len(calls) == 2:
                 raise RuntimeError("simulated save failure")
-            return original_save(item)
+            return original_save(item, doc)
 
         with patch.object(extractor, "_save_item", side_effect=fail_on_second):
             self.assertEqual(extractor.extract(), 0)

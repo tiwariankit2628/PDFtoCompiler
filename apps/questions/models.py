@@ -24,9 +24,17 @@ class QuestionPaperUpload(models.Model):
 
     class ExtractionMode(models.TextChoices):
         LOCAL = "local", "Local PyMuPDF / Tesseract"
+        LOCAL_MINERU = "local_mineru", "Local MinerU (best math/figures/tables, slower)"
         GEMINI = "gemini", "Gemini only (lower-cost cloud)"
         CLOUD = "cloud", "Mathpix + Gemini"
 
+    # Image-first papers present each question as a high-resolution crop of the
+    # original PDF in the CBT, so students never retype statements, options,
+    # formulas, tables or diagrams. OCR text stays optional for search/editing.
+    image_first = models.BooleanField(
+        "Image-first practice", default=True,
+        help_text="Show the original PDF question image in the test, with A/B/C/D buttons below.",
+    )
     # Private student material is stored separately from the teacher media tree.
     is_student_private = models.BooleanField(default=False, db_index=True)
     practice_exam = models.OneToOneField(
@@ -114,6 +122,9 @@ class Question(models.Model):
         NUMERICAL = "numerical", "Numerical / Integer Value"
 
     is_private_practice = models.BooleanField(default=False, db_index=True)
+    # When set, the CBT shows this question's original-PDF crop(s) as the primary
+    # content; option text is optional because the printed choices are in the image.
+    is_image_first = models.BooleanField(default=False)
     # Student bank edits use copy-on-write. Archived versions remain attached to
     # existing exams and preserve the text, options and answers of past attempts.
     is_bank_archived = models.BooleanField(default=False, db_index=True)
@@ -242,6 +253,15 @@ class ExtractedQuestion(models.Model):
         APPROVED = "approved", "Approved to Question Bank"
         REJECTED = "rejected", "Rejected / Discarded"
 
+    class DetectedType(models.TextChoices):
+        # Values match question_types.py and Question.QuestionType so a detected
+        # type maps straight through on approval. Detection is heuristic and
+        # advisory; the reviewer confirms or corrects it.
+        SINGLE = "mcq_single", "Single-correct MCQ"
+        MULTIPLE = "mcq_multiple", "Multiple-correct MCQ"
+        NUMERICAL = "numerical", "Numerical / Integer value"
+        SUBJECTIVE = "subjective", "Subjective / Essay (unsupported)"
+
     paper = models.ForeignKey(
         QuestionPaperUpload,
         on_delete=models.CASCADE,
@@ -252,8 +272,24 @@ class ExtractedQuestion(models.Model):
     tables = models.JSONField(default=list, blank=True, help_text="Structured tables referenced by [[table:1]], [[table:2]], etc.")
     source_regions = models.JSONField(default=list, blank=True, help_text="Original PDF page and normalized question-region coordinates.")
     primary_image_region = models.JSONField(default=dict, blank=True, help_text="Source page and coordinates for the primary original-PDF image.")
+    # True when the plain text cannot be trusted alone (stacked maths, complex
+    # layout); the review UI should surface the original source excerpt.
+    needs_source = models.BooleanField(default=False)
+    # Staged image-first flag (copied from the paper). When set, the question's
+    # full-question crop(s) are the authoritative content for the CBT.
+    is_image_first = models.BooleanField(default=False)
+    # Best-effort heuristic flag: a crop may contain a printed answer/solution or
+    # part of another question. Advisory only; never claimed to catch every case.
+    crop_warning = models.CharField(max_length=255, blank=True)
     # Structured options: list of dicts: [{"key": "A", "text": "Option text"}, ...]
     options = models.JSONField("MCQ Options", default=list)
+    detected_type = models.CharField(
+        "Detected Question Type",
+        max_length=20,
+        choices=DetectedType.choices,
+        default=DetectedType.SINGLE,
+        help_text="Heuristically detected during extraction. Verify before approval; never used for grading.",
+    )
     answer_status = models.CharField(max_length=24, choices=AnswerStatus.choices, default=AnswerStatus.NEEDS_REVIEW)
     correct_option = models.CharField(
         "Answer Key",

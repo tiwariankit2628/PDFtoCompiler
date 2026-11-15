@@ -9,23 +9,23 @@
     <div class="container position-relative" style="z-index: 2;">
         <div class="row align-items-center g-4 g-lg-5">
             <div class="col-lg-7 text-center text-lg-start">
-                <div class="d-inline-flex align-items-center gap-2 px-3 py-1 rounded-pill bg-white bg-opacity-10 text-white mb-3 border border-white border-opacity-25 small">
+                <div class="d-inline-flex align-items-center gap-2 px-3 py-1 rounded-pill hero-chip text-white mb-3 small">
                     <span class="badge bg-primary">NEW</span>
-                    <span>High-Stakes Online CBT Engine & PDF Question Compiler</span>
+                    <span>High-Stakes Online CBT Engine &amp; PDF Question Compiler</span>
                 </div>
                 <h1 class="display-4 fw-extrabold text-white mb-3 lh-sm">
-                    The Modern Standard for <span class="text-info">Computer-Based Testing</span>
+                    The Modern Standard for <span class="hero-highlight">Computer-Based Testing</span>
                 </h1>
                 <p class="lead text-light text-opacity-75 mb-4">
                     Host competitive, university, entrance, coding, and government examinations with millisecond-grade timer accuracy, zero client-side answer leakage, and an automated PDF-to-exam compiler.
                 </p>
                 <div class="d-flex flex-column flex-sm-row gap-3 justify-content-center justify-content-lg-start">
                     {% if user.is_authenticated %}
-                        <a href="{% url 'core:dashboard_router' %}" class="btn btn-primary btn-lg px-4 py-3 fw-bold shadow">
+                        <a href="{% url 'core:dashboard_router' %}" class="btn btn-cbt-primary btn-lg px-4 py-3 fw-bold">
                             <i class="bi bi-speedometer2 me-2"></i> Go to Dashboard
                         </a>
                     {% else %}
-                        <a href="{% url 'accounts:register' %}" class="btn btn-primary btn-lg px-4 py-3 fw-bold shadow">
+                        <a href="{% url 'accounts:register' %}" class="btn btn-cbt-primary btn-lg px-4 py-3 fw-bold">
                             <i class="bi bi-play-circle-fill me-2"></i> Take Free Trial Exam
                         </a>
                         <a href="{% url 'accounts:login' %}" class="btn btn-outline-light btn-lg px-4 py-3">
@@ -35,9 +35,9 @@
                 </div>
                 
                 <div class="mt-4 pt-3 border-top border-white border-opacity-10 d-flex flex-wrap gap-4 text-white text-opacity-75 small">
-                    <div><i class="bi bi-check-circle-fill text-success me-1"></i> No Credit Card Required</div>
-                    <div><i class="bi bi-check-circle-fill text-success me-1"></i> 1st Exam 100% Free</div>
-                    <div><i class="bi bi-check-circle-fill text-success me-1"></i> Anti-Tamper Secured</div>
+                    <div><i class="bi bi-check-circle-fill me-1" style="color: #ffb37a;"></i> No Credit Card Required</div>
+                    <div><i class="bi bi-check-circle-fill me-1" style="color: #ffb37a;"></i> 1st Exam 100% Free</div>
+                    <div><i class="bi bi-check-circle-fill me-1" style="color: #ffb37a;"></i> Anti-Tamper Secured</div>
                 </div>
             </div>
 
@@ -90,12 +90,12 @@
 </section>
 
 <!-- Stats Metrics Bar -->
-<section class="py-4 bg-white border-bottom shadow-sm">
+<section class="py-4 border-bottom" style="background-color: var(--ivory-2, #efe7db);">
     <div class="container">
         <div class="row g-4 text-center">
             {% for stat in stats %}
             <div class="col-6 col-md-3">
-                <div class="p-2">
+                <div class="p-3 rounded-3 surface-card">
                     <h3 class="fw-bolder text-primary mb-1">{{ stat.value }}</h3>
                     <p class="text-muted mb-0 small fw-medium">{{ stat.label }}</p>
                 </div>
@@ -149,8 +149,8 @@
 
                 <div class="d-flex flex-column gap-3">
                     <div class="d-flex gap-3">
-                        <div class="icon-box-primary flex-shrink-0" style="width: 42px; height: 42px;">
-                            <i class="bi bi-shield-x text-danger"></i>
+                        <div class="icon-box ink flex-shrink-0" style="width: 42px; height: 42px;">
+                            <i class="bi bi-shield-lock-fill"></i>
                         </div>
                         <div>
                             <h6 class="fw-bold mb-1">Zero Client-Side Answer Leakage</h6>
@@ -159,28 +159,28 @@
                     </div>
 
                     <div class="d-flex gap-3">
-                        <div class="icon-box-primary flex-shrink-0" style="width: 42px; height: 42px;">
-                            <i class="bi bi-clock-history text-primary"></i>
+                        <div class="icon-box amber flex-shrink-0" style="width: 42px; height: 42px;">
+                            <i class="bi bi-clock-history"></i>
                         </div>
                         <div>
-                            <h6 class="fw-bold mb-1">Server-Synced Countdown & Automatic Submission</h6>
+                            <h6 class="fw-bold mb-1">Server-Synced Countdown &amp; Automatic Submission</h6>
                             <p class="text-muted small mb-0">Exam time is verified continuously against server timestamps. When time expires, answers are automatically committed without student intervention.</p>
                         </div>
                     </div>
 
                     <div class="d-flex gap-3">
-                        <div class="icon-box-primary flex-shrink-0" style="width: 42px; height: 42px;">
-                            <i class="bi bi-wifi-off text-warning"></i>
+                        <div class="icon-box teal flex-shrink-0" style="width: 42px; height: 42px;">
+                            <i class="bi bi-wifi-off"></i>
                         </div>
                         <div>
-                            <h6 class="fw-bold mb-1">Network Interruption & Power Failure Resilience</h6>
+                            <h6 class="fw-bold mb-1">Network Interruption &amp; Power Failure Resilience</h6>
                             <p class="text-muted small mb-0">Every choice is committed instantly to session state. If internet drops or the machine reboots, the student can resume from the exact state with remaining time intact.</p>
                         </div>
                     </div>
 
                     <div class="d-flex gap-3">
-                        <div class="icon-box-primary flex-shrink-0" style="width: 42px; height: 42px;">
-                            <i class="bi bi-file-earmark-pdf text-info"></i>
+                        <div class="icon-box plum flex-shrink-0" style="width: 42px; height: 42px;">
+                            <i class="bi bi-file-earmark-pdf"></i>
                         </div>
                         <div>
                             <h6 class="fw-bold mb-1">Advanced PDF Question Paper Compiler</h6>
@@ -243,8 +243,8 @@
             Join thousands of students and educators taking competitive tests, university mock examinations, and assessments today.
         </p>
         <div class="d-flex gap-3 justify-content-center">
-            <a href="{% url 'accounts:register' %}" class="btn btn-primary btn-lg px-4 fw-bold">
-                Create Free Student Account
+            <a href="{% url 'accounts:register' %}" class="btn btn-cbt-primary btn-lg px-4 fw-bold">
+                Create Free Account
             </a>
             <a href="{% url 'core:contact' %}" class="btn btn-outline-light btn-lg px-4">
                 Institutional Inquiry

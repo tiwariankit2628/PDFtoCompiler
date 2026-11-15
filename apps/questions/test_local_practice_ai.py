@@ -311,3 +311,74 @@ class LocalPracticeEstimateTests(TestCase):
         self.attempt.delete()
         self.assertFalse(PracticeLocalEstimate.objects.exists())
         self.assertTrue(Question.objects.filter(pk=self.question.pk).exists())
+
+
+@override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"],
+                   LOCAL_PRACTICE_AI_ENABLED=True, LOCAL_PRACTICE_AI_MODEL="test-local:latest",
+                   LOCAL_PRACTICE_AI_TIMEOUT="5", LOCAL_PRACTICE_AI_MAX_QUESTIONS="300")
+class VisionEstimateTests(TestCase):
+    """The optional local VISION model handles image / image-first questions. The
+    student's selected answer is never sent; comparison happens locally."""
+
+    def setUp(self):
+        import os, tempfile
+        root = tempfile.TemporaryDirectory(); self.addCleanup(root.cleanup)
+        media = override_settings(MEDIA_ROOT=os.path.join(root.name, "public"))
+        media.enable(); self.addCleanup(media.disable)
+        self.stub = LocalStub()
+        self.addCleanup(self.stub.close)
+        port = override_settings(LOCAL_PRACTICE_AI_PORT=str(self.stub.port))
+        port.enable(); self.addCleanup(port.disable)
+        self.owner = User.objects.create_user(username="vis-owner", email="vis-owner@example.test", role=User.Roles.STUDENT)
+        self.category = Category.objects.create(name="Vision", slug="vision")
+        self.exam = Exam.objects.create(title="Vision practice", slug="vision-practice", category=self.category,
+                                        creator=self.owner, is_private_practice=True)
+        self.attempt = ExamAttempt.objects.create(exam=self.exam, student=self.owner,
+                                                  status=ExamAttempt.AttemptStatus.SUBMITTED)
+
+    def _image_question(self):
+        import io
+        from django.core.files.base import ContentFile
+        from PIL import Image
+        from .models import QuestionFigure
+        q = Question.objects.create(category=self.category, creator=self.owner, is_private_practice=True,
+                                    subject="Science", question_text="", is_image_first=True)
+        options = [QuestionOption.objects.create(question=q, option_key=chr(65 + i), option_text="", order=i)
+                   for i in range(4)]
+        buf = io.BytesIO(); Image.new("RGB", (60, 40), "red").save(buf, "PNG")
+        QuestionFigure.objects.create(question=q, image=ContentFile(buf.getvalue(), "crop.png"), source="question_crop", order=0)
+        eq = ExamQuestion.objects.create(exam=self.exam, question=q, order=1)
+        resp = ExamResponse.objects.create(attempt=self.attempt, exam_question=eq, selected_option=options[1], order=1)
+        return resp
+
+    def test_vision_estimate_sends_image_not_student_answer(self):
+        from .local_practice_ai import config, estimate_response
+        resp = self._image_question()
+        with override_settings(LOCAL_PRACTICE_AI_VISION_MODEL="test-local:latest"):
+            cfg = config()
+            self.assertEqual(cfg["vision_model"], "test-local:latest")
+            self.stub.answer = "C"
+            result = estimate_response(resp, cfg)
+        self.assertEqual(result["state"], "suggested")
+        self.assertEqual(result["key"], "C")
+        post = [c for c in self.stub.calls if c[0] == "POST"][0]
+        payload = post[2]
+        self.assertIn("images", payload)
+        self.assertEqual(len(payload["images"]), 1)
+        self.assertEqual(payload["model"], "test-local:latest")
+        # The prompt must not reveal the student's choice: all option keys are
+        # listed equally, with no "selected"/"chosen" marker singling one out.
+        lowered = payload["prompt"].lower()
+        self.assertNotIn("selected", lowered)
+        self.assertNotIn("chosen", lowered)
+        self.assertNotIn("student", lowered)
+
+    def test_image_question_without_vision_model_is_unavailable_not_sent(self):
+        from .local_practice_ai import config, estimate_response
+        resp = self._image_question()
+        cfg = config()  # no vision model configured
+        self.assertEqual(cfg["vision_model"], "")
+        result = estimate_response(resp, cfg)
+        self.assertEqual(result["state"], "skipped")
+        self.assertIn("vision model", result["reason"])
+        self.assertEqual(self.stub.calls, [])  # nothing sent

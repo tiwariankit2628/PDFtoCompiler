@@ -1,105 +1,133 @@
 {% extends 'base.html' %}
+{% load static %}
 
-{% block title %}Create Free Account | {{ PLATFORM_NAME }}{% endblock %}
+{% block title %}Create Account | {{ PLATFORM_NAME }}{% endblock %}
 
 {% block content %}
-<div class="auth-wrapper py-5">
-    <div class="auth-card" style="max-width: 540px;">
-        <div class="text-center mb-4">
-            <div class="d-inline-flex align-items-center justify-content-center bg-success bg-opacity-10 text-success p-3 rounded-circle mb-3">
-                <i class="bi bi-person-check-fill fs-3"></i>
+<div class="auth-wrapper">
+    <div class="auth-shell">
+        <!-- Brand / value panel -->
+        <aside class="auth-aside">
+            <div>
+                <a href="{% url 'core:home' %}" class="d-inline-flex align-items-center gap-2 text-decoration-none text-white mb-4">
+                    <span class="brand-mark"><i class="bi bi-fire"></i></span>
+                    <span class="fw-bold fs-5">{{ PLATFORM_NAME }}</span>
+                </a>
+                <h2 class="fw-bold mb-3">Start in minutes.<br>Practice like it's exam day.</h2>
+                <p class="point mb-4">Join as a student to build a private practice workspace, or as a teacher to compile papers and author question banks.</p>
             </div>
-            <h3 class="fw-bold mb-1">Create Student Account</h3>
-            <p class="text-muted small">Register to unlock your first full-length CBT examination free</p>
-        </div>
+            <ul class="list-unstyled d-flex flex-column gap-3 mb-0 small">
+                <li class="point"><i class="bi bi-check-circle-fill me-2"></i> First full-length CBT mock is free</li>
+                <li class="point"><i class="bi bi-file-earmark-pdf-fill me-2"></i> Turn PDFs into practice automatically</li>
+                <li class="point"><i class="bi bi-shield-lock-fill me-2"></i> Secure, server-side grading</li>
+            </ul>
+        </aside>
 
-        {% if form.non_field_errors %}
-        <div class="alert alert-danger py-2 small">
-            {% for error in form.non_field_errors %}
-                <div><i class="bi bi-exclamation-circle me-1"></i> {{ error }}</div>
-            {% endfor %}
-        </div>
-        {% endif %}
+        <!-- Form -->
+        <div class="auth-body">
+            <div class="mb-4">
+                <h3 class="fw-bold mb-1">Create your account</h3>
+                <p class="text-muted small mb-0">Choose your role to get the right workspace.</p>
+            </div>
 
-        <form method="post" action="{% url 'accounts:register' %}">
-            {% csrf_token %}
-            <div class="row g-3 mb-3">
-                <div class="col-sm-6">
-                    <label class="form-label fw-semibold small" for="{{ form.first_name.id_for_label }}">First Name</label>
-                    {{ form.first_name }}
-                    {% if form.first_name.errors %}
-                    <div class="text-danger small mt-1">{{ form.first_name.errors.0 }}</div>
-                    {% endif %}
+            {% if form.non_field_errors %}
+            <div class="alert alert-danger py-2 small">
+                {% for error in form.non_field_errors %}
+                    <div><i class="bi bi-exclamation-circle me-1"></i> {{ error }}</div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <form method="post" action="{% url 'accounts:register' %}" novalidate>
+                {% csrf_token %}
+
+                <!-- Role selector -->
+                <fieldset class="mb-3">
+                    <legend class="form-label fw-semibold small mb-2">I am registering as</legend>
+                    <div class="row g-2" role="radiogroup" aria-label="Account role">
+                        <div class="col-6">
+                            <label class="role-option d-block">
+                                <input type="radio" name="role" value="STUDENT" {% if form.role.value == 'TEACHER' %}{% else %}checked{% endif %}>
+                                <div class="role-card text-center">
+                                    <div class="icon-box plum sm mx-auto mb-2"><i class="bi bi-mortarboard-fill"></i></div>
+                                    <span class="fw-bold d-block">Student</span>
+                                    <span class="text-muted" style="font-size:.78rem;">Practice & take exams</span>
+                                </div>
+                            </label>
+                        </div>
+                        <div class="col-6">
+                            <label class="role-option d-block">
+                                <input type="radio" name="role" value="TEACHER" {% if form.role.value == 'TEACHER' %}checked{% endif %}>
+                                <div class="role-card text-center">
+                                    <div class="icon-box teal sm mx-auto mb-2"><i class="bi bi-person-workspace"></i></div>
+                                    <span class="fw-bold d-block">Teacher</span>
+                                    <span class="text-muted" style="font-size:.78rem;">Compile papers & banks</span>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+                    {% if form.role.errors %}<div class="text-danger small mt-1">{{ form.role.errors.0 }}</div>{% endif %}
+                </fieldset>
+
+                <div class="row g-3 mb-3">
+                    <div class="col-sm-6">
+                        <label class="form-label fw-semibold small" for="{{ form.first_name.id_for_label }}">First Name</label>
+                        {{ form.first_name }}
+                        {% if form.first_name.errors %}<div class="text-danger small mt-1">{{ form.first_name.errors.0 }}</div>{% endif %}
+                    </div>
+                    <div class="col-sm-6">
+                        <label class="form-label fw-semibold small" for="{{ form.last_name.id_for_label }}">Last Name</label>
+                        {{ form.last_name }}
+                        {% if form.last_name.errors %}<div class="text-danger small mt-1">{{ form.last_name.errors.0 }}</div>{% endif %}
+                    </div>
                 </div>
-                <div class="col-sm-6">
-                    <label class="form-label fw-semibold small" for="{{ form.last_name.id_for_label }}">Last Name</label>
-                    {{ form.last_name }}
-                    {% if form.last_name.errors %}
-                    <div class="text-danger small mt-1">{{ form.last_name.errors.0 }}</div>
-                    {% endif %}
+
+                <div class="mb-3">
+                    <label class="form-label fw-semibold small" for="{{ form.username.id_for_label }}">Username</label>
+                    {{ form.username }}
+                    {% if form.username.errors %}<div class="text-danger small mt-1">{{ form.username.errors.0 }}</div>{% endif %}
                 </div>
-            </div>
 
-            <div class="mb-3">
-                <label class="form-label fw-semibold small" for="{{ form.username.id_for_label }}">Username</label>
-                {{ form.username }}
-                {% if form.username.errors %}
-                <div class="text-danger small mt-1">{{ form.username.errors.0 }}</div>
-                {% endif %}
-            </div>
-
-            <div class="mb-3">
-                <label class="form-label fw-semibold small" for="{{ form.email.id_for_label }}">Email Address</label>
-                {{ form.email }}
-                {% if form.email.errors %}
-                <div class="text-danger small mt-1">{{ form.email.errors.0 }}</div>
-                {% endif %}
-            </div>
-
-            <div class="mb-3">
-                <label class="form-label fw-semibold small" for="{{ form.target_exam.id_for_label }}">Target Exam (Optional)</label>
-                {{ form.target_exam }}
-                {% if form.target_exam.errors %}
-                <div class="text-danger small mt-1">{{ form.target_exam.errors.0 }}</div>
-                {% endif %}
-            </div>
-
-            <div class="row g-3 mb-3">
-                <div class="col-sm-6">
-                    <label class="form-label fw-semibold small" for="{{ form.password.id_for_label }}">Password</label>
-                    {{ form.password }}
-                    {% if form.password.errors %}
-                    <div class="text-danger small mt-1">{{ form.password.errors.0 }}</div>
-                    {% endif %}
+                <div class="mb-3">
+                    <label class="form-label fw-semibold small" for="{{ form.email.id_for_label }}">Email Address</label>
+                    {{ form.email }}
+                    {% if form.email.errors %}<div class="text-danger small mt-1">{{ form.email.errors.0 }}</div>{% endif %}
                 </div>
-                <div class="col-sm-6">
-                    <label class="form-label fw-semibold small" for="{{ form.confirm_password.id_for_label }}">Confirm Password</label>
-                    {{ form.confirm_password }}
-                    {% if form.confirm_password.errors %}
-                    <div class="text-danger small mt-1">{{ form.confirm_password.errors.0 }}</div>
-                    {% endif %}
+
+                <div class="mb-3">
+                    <label class="form-label fw-semibold small" for="{{ form.target_exam.id_for_label }}">Target Exam / Subject (Optional)</label>
+                    {{ form.target_exam }}
+                    {% if form.target_exam.errors %}<div class="text-danger small mt-1">{{ form.target_exam.errors.0 }}</div>{% endif %}
                 </div>
+
+                <div class="row g-3 mb-3">
+                    <div class="col-sm-6">
+                        <label class="form-label fw-semibold small" for="{{ form.password.id_for_label }}">Password</label>
+                        {{ form.password }}
+                        {% if form.password.errors %}<div class="text-danger small mt-1">{{ form.password.errors.0 }}</div>{% endif %}
+                    </div>
+                    <div class="col-sm-6">
+                        <label class="form-label fw-semibold small" for="{{ form.confirm_password.id_for_label }}">Confirm Password</label>
+                        {{ form.confirm_password }}
+                        {% if form.confirm_password.errors %}<div class="text-danger small mt-1">{{ form.confirm_password.errors.0 }}</div>{% endif %}
+                    </div>
+                </div>
+
+                <div class="form-check mb-3 small text-muted">
+                    <input class="form-check-input" type="checkbox" id="termsCheck" required checked>
+                    <label class="form-check-label" for="termsCheck">I agree to the Examination Terms &amp; Anti-Cheating Honor Code.</label>
+                </div>
+
+                <button type="submit" class="btn btn-cbt-primary w-100 py-2 fw-bold">
+                    <i class="bi bi-person-plus-fill me-1"></i> Create Account
+                </button>
+            </form>
+
+            <div class="text-center mt-4 pt-3 border-top small text-muted">
+                Already have an account?
+                <a href="{% url 'accounts:login' %}" class="fw-semibold text-decoration-none">Sign In &rarr;</a>
             </div>
-
-            <div class="form-check mb-3 small text-muted">
-                <input class="form-check-input" type="checkbox" id="termsCheck" required checked>
-                <label class="form-check-label" for="termsCheck">
-                    I agree to the Examination Terms & Anti-Cheating Honor Code.
-                </label>
-            </div>
-
-            <button type="submit" class="btn btn-primary w-100 py-2 fw-bold shadow-sm">
-                <i class="bi bi-person-plus-fill me-1"></i> Register Free Account
-            </button>
-        </form>
-
-        <div class="text-center mt-4 pt-3 border-top small text-muted">
-            Already have an account? 
-            <a href="{% url 'accounts:login' %}" class="fw-semibold text-primary text-decoration-none">
-                Sign In &rarr;
-            </a>
         </div>
     </div>
 </div>
 {% endblock %}
-

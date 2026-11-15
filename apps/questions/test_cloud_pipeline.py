@@ -244,35 +244,52 @@ class CloudWorkflowTests(TestCase):
         paper.refresh_from_db()
         return paper, mathpix, gemini, count
 
-    def test_upload_requires_consent_configuration_and_page_limit(self):
-        base = {"title": "Cloud", "category": self.category.pk, "extraction_mode": "cloud"}
-        def form(data):
-            return QuestionPaperUploadForm(data=data, files={"pdf_file": SimpleUploadedFile("file.pdf", synthetic_pdf(), content_type="application/pdf")}, user=self.teacher)
-        missing_consent = form(base)
-        self.assertFalse(missing_consent.is_valid())
-        self.assertIn("cloud_consent", missing_consent.errors)
-        with override_settings(PDF_CLOUD_ENABLED=False):
-            not_enabled = form({**base, "cloud_consent": "on"})
-            self.assertFalse(not_enabled.is_valid())
-            self.assertIn("extraction_mode", not_enabled.errors)
-        with override_settings(PDF_CLOUD_MAX_PAGES=1):
-            too_long = form({**base, "cloud_consent": "on"})
-            self.assertFalse(too_long.is_valid())
-            self.assertIn("pdf_file", too_long.errors)
-        self.assertTrue(form({**base, "cloud_consent": "on"}).is_valid())
+    def test_upload_form_is_local_only_and_rejects_altered_cloud_mode(self):
+        """Section 4: the selection screen offers local only; crafted non-local
+        values are rejected server-side rather than silently downgraded or run."""
+        def fresh_files():
+            return {"pdf_file": SimpleUploadedFile("file.pdf", synthetic_pdf(), content_type="application/pdf")}
+        base = {"title": "Local", "category": self.category.pk}
+        # An omitted method defaults to local and validates.
+        default_form = QuestionPaperUploadForm(data=base, files=fresh_files(), user=self.teacher)
+        self.assertTrue(default_form.is_valid(), default_form.errors)
+        self.assertEqual(default_form.cleaned_data["extraction_mode"], QuestionPaperUpload.ExtractionMode.LOCAL)
+        # Explicit local validates.
+        local_form = QuestionPaperUploadForm(data={**base, "extraction_mode": "local"}, files=fresh_files(), user=self.teacher)
+        self.assertTrue(local_form.is_valid(), local_form.errors)
+        # Any other (now-disabled) method is rejected with a clear field error.
+        for mode in ("cloud", "gemini", "local_mineru", "__more__", "bogus"):
+            altered = QuestionPaperUploadForm(data={**base, "extraction_mode": mode}, files=fresh_files(), user=self.teacher)
+            self.assertFalse(altered.is_valid(), f"mode {mode} should be rejected")
+            self.assertIn("extraction_mode", altered.errors)
+        # The rendered screen shows only local + a disabled placeholder, no cloud copy.
+        screen = self.client.get(reverse("questions:paper_upload"))
+        self.assertContains(screen, "Local PyMuPDF / Tesseract")
+        self.assertContains(screen, "More methods")
+        self.assertNotContains(screen, "Mathpix")
+        self.assertNotContains(screen, "Gemini")
 
     @override_settings(CELERY_TASK_ALWAYS_EAGER=False)
-    def test_cloud_upload_records_consent_and_queues_only_after_commit(self):
-        with patch("apps.questions.tasks.extract_cloud_paper.delay") as delay, self.captureOnCommitCallbacks(execute=True):
-            result = self.client.post(reverse("questions:paper_upload"), {
-                "title": "Cloud", "category": self.category.pk, "extraction_mode": "cloud", "cloud_consent": "on",
+    def test_teacher_upload_is_forced_local_and_never_queues_cloud(self):
+        """A crafted cloud request must not create a paper or start any provider task."""
+        with patch("apps.questions.tasks.extract_cloud_paper.delay") as cloud_delay, \
+             patch("apps.questions.tasks.extract_mineru_paper.delay") as mineru_delay:
+            rejected = self.client.post(reverse("questions:paper_upload"), {
+                "title": "Crafted cloud", "category": self.category.pk, "extraction_mode": "cloud", "cloud_consent": "on",
                 "pdf_file": SimpleUploadedFile("file.pdf", synthetic_pdf(), content_type="application/pdf"),
             })
-        self.assertEqual(result.status_code, 302)
-        paper = QuestionPaperUpload.objects.get(title="Cloud")
-        self.assertIsNotNone(paper.cloud_consent_at)
-        self.assertEqual(paper.total_pages, 2)
-        delay.assert_called_once_with(paper.pk)
+            self.assertEqual(rejected.status_code, 200)  # re-rendered with error, not a redirect
+            self.assertFalse(QuestionPaperUpload.objects.filter(title="Crafted cloud").exists())
+            # A normal local upload succeeds and runs local extraction (no queue).
+            ok = self.client.post(reverse("questions:paper_upload"), {
+                "title": "Local ok", "category": self.category.pk,
+                "pdf_file": SimpleUploadedFile("file.pdf", synthetic_pdf(), content_type="application/pdf"),
+            })
+        self.assertEqual(ok.status_code, 302)
+        paper = QuestionPaperUpload.objects.get(title="Local ok")
+        self.assertEqual(paper.extraction_mode, QuestionPaperUpload.ExtractionMode.LOCAL)
+        cloud_delay.assert_not_called()
+        mineru_delay.assert_not_called()
 
     def test_full_pipeline_uses_provider_protocols_with_mocked_http(self):
         paper = self.paper()
@@ -325,19 +342,6 @@ class CloudWorkflowTests(TestCase):
         self.assertEqual(paper.status, QuestionPaperUpload.ProcessingStatus.FAILED)
         self.assertNotIn("fake-mathpix-key", paper.extraction_log)
         self.assertIn("deletion", paper.extraction_log)
-
-    @override_settings(CELERY_TASK_ALWAYS_EAGER=False)
-    def test_queue_failure_is_visible_and_does_not_trigger_fallback(self):
-        with patch("apps.questions.tasks.extract_cloud_paper.delay", side_effect=RuntimeError("broker secret")), self.captureOnCommitCallbacks(execute=True):
-            self.client.post(reverse("questions:paper_upload"), {
-                "title": "Queue failure", "category": self.category.pk, "extraction_mode": "cloud", "cloud_consent": "on",
-                "pdf_file": SimpleUploadedFile("file.pdf", synthetic_pdf(), content_type="application/pdf"),
-            })
-        paper = QuestionPaperUpload.objects.get(title="Queue failure")
-        self.assertEqual(paper.status, QuestionPaperUpload.ProcessingStatus.FAILED)
-        self.assertIn("Could not queue", paper.extraction_log)
-        self.assertNotIn("broker secret", paper.extraction_log)
-        self.assertFalse(paper.extracted_questions.exists())
 
     def test_no_consent_existing_work_or_duplicate_task_never_calls_provider(self):
         paper = self.paper(cloud_consent_at=None)

@@ -5,6 +5,7 @@ Ambiguous geometry is left unchanged and remains flagged for review: this is
 not a general mathematical OCR engine.
 """
 from collections import defaultdict
+from statistics import median
 import re
 
 import pymupdf as fitz
@@ -13,6 +14,296 @@ import pymupdf as fitz
 def is_type3_font(name):
     """Recognize PyMuPDF's current and legacy names for anonymous Type3 fonts."""
     return name.startswith("Type3") or name == "Unnamed-T3"
+
+
+_SIGNS = {"-", "−", "–", "+", "±"}
+_LINE_TOLERANCE = 3  # same tolerance PyMuPDF uses to keep words on one text line
+
+
+def _fraction_bars(rect, drawings):
+    """Return (x0, x1, y) for standalone thin horizontal rules inside ``rect``.
+
+    Only a drawing that *is* a short rule qualifies. A horizontal edge that is
+    merely part of a larger path (a letter outline in a watermark, a diagram, a
+    table border) is never a fraction bar.
+    """
+    bars = []
+    for drawing in drawings or []:
+        items = drawing.get("items", [])
+        box = drawing.get("rect")
+        if box is None or not 1 <= len(items) <= 2:
+            continue
+        if any(item[0] not in ("l", "re") for item in items):
+            continue
+        box = fitz.Rect(box)
+        if box.height > 1.6 or not 3 <= box.width <= 120:
+            continue
+        y = (box.y0 + box.y1) / 2
+        if rect.x0 - 1 <= box.x0 and box.x1 <= rect.x1 + 1 and rect.y0 <= y <= rect.y1:
+            bars.append((box.x0, box.x1, y))
+    return bars
+
+
+def _wrap_fraction_part(text):
+    """Parenthesise a multi-term numerator/denominator so a/b stays unambiguous."""
+    return text if re.fullmatch(r"[\w.°%√]+", text, flags=re.UNICODE) else f"({text})"
+
+
+def _find_fractions(words, bars, unit):
+    """Match each rule with a numerator directly above and a denominator directly
+    below it. Every condition must hold, otherwise the rule is left alone:
+
+    * both parts lie horizontally *inside* the rule and hug it vertically;
+    * some other word on the same text row has the rule at its mid-height (the
+      label, an operator, a unit…). A radical overbar or an underline sits at the
+      top/bottom edge of its row, never at mid-height;
+    * the numerator rises above that row and the denominator hangs below it.
+    """
+    used, fractions = set(), []
+    for x0, x1, y in sorted(bars, key=lambda bar: (bar[2], bar[0])):
+        inside = [w for w in words if id(w) not in used
+                  and w["box"].x0 >= x0 - 3 and w["box"].x1 <= x1 + 3]
+        above = [w for w in inside if w["box"].y1 <= y + 1 and y - w["box"].y1 <= 0.6 * unit]
+        below = [w for w in inside if w["box"].y0 >= y - 1 and w["box"].y0 - y <= 0.6 * unit]
+        if not above or not below:
+            continue
+        # Keep exponents/indices that visibly belong to an accepted part.
+        for group, pool in ((above, [w for w in inside if w["box"].y1 <= y + 1]),
+                            (below, [w for w in inside if w["box"].y0 >= y - 1])):
+            grown = True
+            while grown:
+                grown = False
+                for word in pool:
+                    if word in group:
+                        continue
+                    if any(min(word["box"].y1, part["box"].y1) - max(word["box"].y0, part["box"].y0)
+                           > 0.3 * min(word["box"].height, part["box"].height) for part in group):
+                        group.append(word)
+                        grown = True
+        parts = {id(w) for w in above + below}
+        hosts = [w for w in words if id(w) not in parts and id(w) not in used
+                 and (w["box"].x1 <= x0 + 1 or w["box"].x0 >= x1 - 1)
+                 and w["box"].y0 + 0.3 * w["box"].height <= y <= w["box"].y1 - 0.2 * w["box"].height]
+        if not hosts:
+            continue
+        host = min(hosts, key=lambda w: min(abs(w["box"].x1 - x0), abs(w["box"].x0 - x1)))
+        if (min(w["box"].y0 for w in above) > host["box"].y0 - 0.15 * unit
+                or max(w["box"].y1 for w in below) < host["box"].y1 + 0.15 * unit):
+            continue
+        numerator = "".join(w["text"] for w in sorted(above, key=lambda w: w["box"].x0)).strip()
+        denominator = "".join(w["text"] for w in sorted(below, key=lambda w: w["box"].x0)).strip()
+        if not numerator or not denominator or len(numerator) > 24 or len(denominator) > 24:
+            continue
+        used.update(parts)
+        fractions.append({
+            "box": fitz.Rect(x0, host["box"].y0, x1, host["box"].y1), "fraction": True,
+            "text": f"{_wrap_fraction_part(numerator)}/{_wrap_fraction_part(denominator)}",
+        })
+    return used, fractions
+
+
+def radical_overbars(drawings, unit, max_stroke_height=1.7):
+    """Overbars of *drawn* radical signs: a thin rule whose left end meets the
+    top of a tall rising stroke. ``max_stroke_height`` is in text-height units."""
+    rules, strokes = [], []
+    for drawing in drawings or []:
+        items = drawing.get("items", [])
+        box = drawing.get("rect")
+        if box is None or not 1 <= len(items) <= 3 or any(item[0] != "l" for item in items):
+            continue
+        box = fitz.Rect(box)
+        if len(items) == 1 and box.height <= 1.6 and 3 <= box.width <= 160:
+            rules.append(box)
+        elif box.width <= 0.9 * unit and 0.6 * unit <= box.height <= max_stroke_height * unit:
+            # The rising stroke, alone or joined with its short lead-in strokes.
+            strokes.append(box)
+    return [rule for rule in rules
+            if any(abs(stroke.x1 - rule.x0) <= 1.5 and abs(stroke.y0 - (rule.y0 + rule.y1) / 2) <= 1.5
+                   for stroke in strokes)]
+
+
+def _mark_radicals(words, rect, drawings, unit):
+    """Prefix a radicand with ``√`` where a radical sign is *drawn* over it.
+
+    Equation editors draw the radical as strokes rather than a text glyph, so
+    ``2√13`` extracts as ``2 13``. Only the exact overbar-meets-rising-stroke
+    shape is accepted, and only single-row radicands are marked.
+    """
+    marked = False
+    for rule in radical_overbars(drawings, unit):
+        y = (rule.y0 + rule.y1) / 2
+        if not (rect.x0 - 1 <= rule.x0 and rule.x1 <= rect.x1 + 1 and rect.y0 <= y <= rect.y1):
+            continue
+        under = sorted((w for w in words
+                        if rule.x0 - 2.5 <= w["box"].x0 < rule.x1 and abs(w["box"].y0 - y) <= 0.4 * unit),
+                       key=lambda w: w["box"].x0)
+        if not under or under[0]["text"].startswith("√"):
+            continue
+        if len(under) == 1:
+            under[0]["text"] = "√" + under[0]["text"]
+        else:
+            under[0]["text"] = "√(" + under[0]["text"]
+            under[-1]["text"] += ")"
+        marked = True
+    return marked
+
+
+def _group_rows(items):
+    """Group words into text rows exactly as PyMuPDF does for sorted text."""
+    items.sort(key=lambda w: (w["box"].y1, w["box"].x0))
+    rows, row, row_box = [], [items[0]], fitz.Rect(items[0]["box"])
+    for item in items[1:]:
+        box = item["box"]
+        if (abs(box.y0 - row_box.y0) <= _LINE_TOLERANCE
+                or abs(box.y1 - row_box.y1) <= _LINE_TOLERANCE):
+            row.append(item)
+            row_box |= box
+        else:
+            rows.append({"box": row_box, "items": row})
+            row, row_box = [item], fitz.Rect(box)
+    rows.append({"box": row_box, "items": row})
+    return rows
+
+
+def _is_fragment_row(row):
+    """A row made only of short glyph groups (exponents, indices, lone symbols)."""
+    return (len(row["items"]) <= 8
+            and all(not item.get("fraction") and len(item["text"]) <= 4 for item in row["items"])
+            and not any(re.search(r"[^\W\d_]{3,}", item["text"]) for item in row["items"]))
+
+
+def _merge_fragment_rows(rows, unit):
+    """Fold raised/lowered fragment rows back into the text row they overlap.
+
+    Equation editors raise exponents and lower indices by more than a line
+    tolerance, so they are emitted as separate lines *before or after* their
+    row (``10− J`` … ``18``). Two ordinary text lines never overlap vertically;
+    a fragment row that overlaps a full row by at least 40% of its own height
+    is part of that row and is re-inserted at its horizontal position.
+    """
+    merged = False
+    mains = [row for row in rows if not _is_fragment_row(row)]
+    for row in [row for row in rows if _is_fragment_row(row)]:
+        box = row["box"]
+        best, best_overlap = None, 0.0
+        for main in mains:
+            overlap = min(box.y1, main["box"].y1) - max(box.y0, main["box"].y0)
+            if (overlap > best_overlap and box.x0 <= main["box"].x1 + 2 * unit
+                    and box.x1 >= main["box"].x0 - 2 * unit):
+                best, best_overlap = main, overlap
+        if best is not None and box.height > 0 and best_overlap >= 0.4 * box.height:
+            for item in row["items"]:
+                item["raised"] = True
+            best["items"].extend(row["items"])
+            rows.remove(row)
+            merged = True
+    return merged
+
+
+def _row_text(row, unit):
+    items = sorted(row["items"], key=lambda w: w["box"].x0)
+    text = ""
+    for index, item in enumerate(items):
+        if not index:
+            text = item["text"]
+            continue
+        previous = items[index - 1]
+        gap = item["box"].x0 - previous["box"].x1
+        # A lone sign printed directly before a fraction is that fraction's sign;
+        # a re-inserted exponent/index touches the glyph it belongs to.
+        offset = max(abs(item["box"].y0 - previous["box"].y0), abs(item["box"].y1 - previous["box"].y1))
+        glued = ((item.get("fraction") and previous["text"] in _SIGNS and gap <= unit)
+                 or (gap < 0.15 * unit and (item.get("raised") or previous.get("raised") or offset > 1.5)))
+        if glued:
+            text += item["text"]
+        else:
+            # Translate the horizontal gap into spaces, as PyMuPDF's sorted text
+            # does, so widely separated side-by-side choices stay visibly apart
+            # (the option parser relies on that spacing).
+            width = item["box"].width / max(len(item["text"]), 1)
+            spaces = int(round(gap / width)) if width > 0 else 1
+            text += " " * max(1, min(12, spaces)) + item["text"]
+    return text
+
+
+def _visual_rows(page, rect, drawings, exclude=()):
+    """Words of a region as visual rows, with drawn math made explicit.
+
+    Returns ``(rows, unit)``; ``rows`` is empty when the region has no words.
+    Words centred inside an ``exclude`` box (a structured table) are skipped.
+    """
+    words = []
+    for word in page.get_text("words", clip=rect):
+        if len(word) >= 5 and isinstance(word[4], str) and word[4].strip():
+            box = fitz.Rect(word[:4])
+            if box.height > 0 and not any(area.contains((box.tl + box.br) / 2) for area in exclude):
+                words.append({"box": box, "text": word[4]})
+    if not words:
+        return [], 10.0
+    unit = median(w["box"].height for w in words)
+    _mark_radicals(words, rect, drawings, unit)
+    bars = _fraction_bars(rect, drawings)
+    used, fractions = _find_fractions(words, bars, unit) if bars else (set(), [])
+    rows = _group_rows([w for w in words if id(w) not in used] + fractions)
+    _merge_fragment_rows(rows, unit)
+    rows.sort(key=lambda row: row["box"].y1)
+    return rows, unit
+
+
+def inline_stacked_fractions(page, rect, drawings):
+    """Rebuild region text so two-dimensional math reads in visual order.
+
+    PyMuPDF's flat reading order breaks two common layouts:
+
+    * a stacked fraction's numerator and denominator land on separate lines,
+      scrambling nearby options and leaking the numerator into the preceding
+      statement (``R/8 inside the cone`` reads ``R`` / ``inside the cone`` / ``8``);
+    * exponents and indices raised beyond the line tolerance are emitted as
+      their own line, detached from the expression they belong to.
+
+    * a row holding an exponent is cut in two at that exponent, and the halves
+      are emitted in the wrong order;
+    * a radical drawn as strokes leaves no trace in the text at all.
+
+    Words are grouped into rows with the same top/bottom tolerance PyMuPDF uses,
+    so ordinary prose reads exactly as it does natively. A confirmed fraction's
+    parts become one ``num/den`` token on its row, fragment rows are folded back
+    into the row they overlap, and a drawn radical sign prefixes its radicand
+    with ``√``. No word of the source is dropped, and nothing is added except
+    the ``/`` and ``√`` that the page itself draws.
+
+    Returns the rebuilt text, or ``None`` when the region has no words.
+    """
+    rows, unit = _visual_rows(page, rect, drawings)
+    if not rows:
+        return None
+    return "\n".join(_row_text(row, unit) for row in rows)
+
+
+def math_residue(page, rect, drawings, exclude=()):
+    """Count two-dimensional math in a region that text could not linearise.
+
+    Ordinary text rows never overlap vertically. Rows that still overlap after
+    fractions, radicals and exponents were resolved are stacked expressions the
+    rebuild did not understand (nested fractions, limits, multi-row brackets);
+    a radical sign taller than one text row likewise spans a stacked radicand.
+    A non-zero result means the extracted text for this region should not be
+    trusted on its own and the original rendering should be shown with it.
+    """
+    rows, unit = _visual_rows(page, rect, drawings, exclude)
+    stacked = 0
+    for index, row in enumerate(rows):
+        for other in rows[index + 1:]:
+            a, b = row["box"], other["box"]
+            overlap = min(a.y1, b.y1) - max(a.y0, b.y0)
+            if (overlap >= 0.2 * min(a.height, b.height)
+                    and min(a.x1, b.x1) - max(a.x0, b.x0) > 0):
+                stacked += 1
+    simple = {tuple(rule) for rule in radical_overbars(drawings, unit)}
+    tall = sum(1 for rule in radical_overbars(drawings, unit, 4.0)
+               if tuple(rule) not in simple and rect.contains((rule.tl + rule.br) / 2)
+               and not any(area.contains((rule.tl + rule.br) / 2) for area in exclude))
+    return stacked + tall
 
 
 def latex_chars(chars):

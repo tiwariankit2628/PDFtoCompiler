@@ -580,73 +580,55 @@ class StudentPracticeTests(TestCase):
         self.assertTrue(bank.options.get(option_key="E").figures.exists())
 
 
-    def test_optional_cloud_requires_explicit_consent_configuration_and_page_limits(self):
-        from .test_cloud_pipeline import CLOUD_SETTINGS, synthetic_pdf
-        def post(data):
-            return self.client.post(reverse("questions:practice_upload"), {
-                "title": "Cloud request", "pdf_file": SimpleUploadedFile("cloud.pdf", synthetic_pdf(), content_type="application/pdf"),
-                "extraction_mode": "cloud", **data,
-            })
-        with override_settings(**CLOUD_SETTINGS), patch("apps.questions.practice_views.extract_cloud_paper") as task:
-            response = post({})
-            self.assertEqual(response.status_code, 200)
-            self.assertContains(response, "Explicit consent is required")
-            task.assert_not_called()
-            self.assertFalse(QuestionPaperUpload.objects.exists())
-        with override_settings(PDF_CLOUD_ENABLED=False):
-            response = post({"cloud_consent": "on"})
-            self.assertContains(response, "Cloud extraction is not configured")
-        limits = {**CLOUD_SETTINGS, "PDF_CLOUD_MAX_PAGES": 1}
-        with override_settings(**limits):
-            response = post({"cloud_consent": "on"})
-            self.assertContains(response, "limited to 1 pages")
-        self.assertFalse(QuestionPaperUpload.objects.exists())
-
-    def test_consented_mock_cloud_private_files_image_pool_and_cbt(self):
-        from unittest.mock import Mock
-        from .cloud_extractor import CloudPDFQuestionExtractor
-        from .test_cloud_pipeline import CLOUD_SETTINGS, synthetic_pdf, mathpix_result, gemini_questions
-        mathpix = Mock(pdf_id="mock-private-id")
-        mathpix.read_pdf.return_value = mathpix_result()
-        mathpix.delete.return_value = True
-        gemini = Mock()
-        gemini.interpret.return_value = gemini_questions()
-        def mocked_task(paper_id):
-            return CloudPDFQuestionExtractor(QuestionPaperUpload.objects.get(pk=paper_id), mathpix, gemini).extract()
-        with override_settings(**CLOUD_SETTINGS), patch("apps.questions.practice_views.extract_cloud_paper", side_effect=mocked_task):
+    def test_practice_upload_rejects_crafted_cloud_mode(self):
+        """Section 4/5: student practice extraction is local-only. A crafted cloud
+        request is rejected server-side; no paper, usage or provider task results."""
+        with patch("apps.questions.practice_views.extract_cloud_paper") as cloud_task, \
+             patch("apps.questions.practice_views.extract_private_practice_paper") as local_task:
             response = self.client.post(reverse("questions:practice_upload"), {
-                "title": "Private cloud test", "extraction_mode": "cloud", "cloud_consent": "on",
-                "pdf_file": SimpleUploadedFile("cloud.pdf", synthetic_pdf(), content_type="application/pdf"),
+                "title": "Cloud request", "extraction_mode": "cloud", "cloud_consent": "on",
+                "pdf_file": SimpleUploadedFile("cloud.pdf", make_two_column_pdf(), content_type="application/pdf"),
             })
-        self.assertEqual(response.status_code, 302)
-        paper = QuestionPaperUpload.objects.get(title="Private cloud test")
-        self.assertEqual(paper.status, QuestionPaperUpload.ProcessingStatus.EXTRACTED, paper.extraction_log)
-        self.assertIsNotNone(paper.cloud_consent_at)
-        mathpix.read_pdf.assert_called_once()
-        mathpix.delete.assert_called_once()
-        gemini.interpret.assert_called_once()
-        self.assertEqual(paper.figures.count(), 5)
-        self.assertTrue(all(f.private_image and not f.image for f in paper.figures.all()))
-        self.assertFalse(os.path.exists(os.path.join(self.root.name, "public")))
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(QuestionPaperUpload.objects.exists())
+        cloud_task.assert_not_called()
+        local_task.assert_not_called()
+
+    def test_local_private_files_image_pool_and_cbt(self):
+        """Private figure candidates stay private through the pool, test creation
+        and the CBT session, and are inaccessible to other students."""
+        buf = io.BytesIO()
+        Image.new("RGB", (40, 30), "red").save(buf, format="PNG")
+        png_bytes = buf.getvalue()
+        paper = self.upload()  # local extraction, is_student_private
+        question = paper.extracted_questions.order_by("question_number").first()
+        # An unassigned image candidate, stored only in private storage.
+        unassigned = ExtractedFigure.objects.create(
+            paper=paper, question=None, page_number=1, source="vector",
+            bounding_box=[0.1, 0.1, 0.3, 0.3],
+            private_image=SimpleUploadedFile("pool.png", png_bytes, content_type="image/png"),
+        )
+        self.assertTrue(unassigned.private_image and not unassigned.image)
+        self.assertFalse(os.path.exists(os.path.join(self.root.name, "public", unassigned.private_image.name)))
         pool_url = reverse("questions:practice_figure_pool", args=[paper.pk])
         self.assertEqual(self.client.get(pool_url).status_code, 200)
-        unassigned = paper.figures.get(question__isnull=True)
-        question = paper.extracted_questions.get(question_number=2)
-        response = self.client.post(reverse("questions:practice_settings", args=[paper.pk]), {"duration_minutes": "60", "acknowledge_review": "on"})
+        # Settings refuses while an unassigned candidate is unacknowledged.
+        response = self.client.post(reverse("questions:practice_settings", args=[paper.pk]),
+                                    {"duration_minutes": "60", "acknowledge_review": "on"})
         self.assertContains(response, "Review or acknowledge unassigned images")
+        # Assign it to a question option, then settings succeeds.
         self.client.post(pool_url, {"action": "assign", "figure_id": unassigned.pk, "question_id": question.pk, "target": "A"})
         unassigned.refresh_from_db()
-        self.assertEqual(unassigned.question_id, question.pk)
-        self.assertEqual(unassigned.option_key, "A")
-        response = self.client.post(reverse("questions:practice_settings", args=[paper.pk]), {"duration_minutes": "60", "acknowledge_review": "on"})
-        self.assertEqual(response.status_code, 302)
-        paper.refresh_from_db()
-        attempt = self.start(paper.practice_exam)
+        self.assertEqual((unassigned.question_id, unassigned.option_key), (question.pk, "A"))
+        exam = self.create_exam(paper)
+        attempt = self.start(exam)
         session = self.client.get(reverse("exams:exam_session", args=[attempt.attempt_uuid]))
         self.assertEqual(session.status_code, 200)
-        self.assertEqual(paper.practice_exam.questions.filter(figures__private_image__isnull=False).distinct().count(), 2)
+        # Private images are never exposed through a public /media/ URL.
         for figure in paper.figures.all():
-            self.assertNotContains(session, "/media/" + figure.private_image.name)
+            if figure.private_image:
+                self.assertNotContains(session, "/media/" + figure.private_image.name)
+        # Another student cannot fetch the private file.
         self.client.force_login(self.other)
         self.assertEqual(self.client.get(reverse("questions:practice_figure_file", args=[unassigned.pk])).status_code, 404)
 

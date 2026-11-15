@@ -1,6 +1,15 @@
 {% extends 'base.html' %}
+{% load sidebar_nav %}
 
 {% block content %}
+<style>
+/* Sidebar states: hover and keyboard focus are visibly distinct from the
+   persistent active (current-page) highlight. */
+.dashboard-sidebar .nav-link { border-radius: .5rem; transition: background-color .12s ease, color .12s ease; }
+.dashboard-sidebar .nav-link:not(.active):hover { background-color: var(--coral-soft, rgba(226,75,35,.08)); }
+.dashboard-sidebar .nav-link:focus-visible { outline: 2px solid var(--coral, #e24b23); outline-offset: 2px; }
+.dashboard-sidebar .nav-link.active:focus-visible { outline-color: #fff; }
+</style>
 <div class="container-fluid py-3 px-lg-4">
     <div class="row g-4">
         <!-- Sidebar Navigation -->
@@ -13,6 +22,7 @@
             <div class="collapse d-lg-block" id="dashboardSidebar">
             <div class="card border shadow-sm sticky-lg-top dashboard-sidebar mt-2 mt-lg-0">
                 <div class="card-body p-3">
+                {% with active_key=request.resolver_match|sidebar_key %}
                     <div class="d-flex align-items-center gap-2 pb-3 mb-3 border-bottom">
                         <div class="icon-box-primary mb-0" style="width: 38px; height: 38px; font-size: 1.1rem;">
                             {% if user.is_super_admin %}
@@ -36,7 +46,7 @@
                     <div class="small fw-bold text-uppercase text-muted mb-2 ps-2" style="font-size: 0.68rem; letter-spacing: 0.5px;">Navigation</div>
                     <ul class="nav nav-pills flex-column gap-1 small mb-3">
                         <li class="nav-item">
-                            <a class="nav-link text-dark {% if request.resolver_match.url_name in 'dashboard_router,super_admin_dashboard,admin_dashboard,teacher_dashboard,student_dashboard' %}active bg-primary text-white fw-semibold{% endif %}" href="{% url 'core:dashboard_router' %}">
+                            <a class="nav-link text-dark {% if active_key == 'dashboard' %}active bg-primary text-white fw-semibold{% endif %}"{% if active_key == 'dashboard' %} aria-current="page"{% endif %} href="{% url 'core:dashboard_router' %}">
                                 <i class="bi bi-speedometer2 me-2"></i> Dashboard
                             </a>
                         </li>
@@ -52,17 +62,17 @@
                         {% if user.is_admin_role %}
                         <li class="nav-item">
                             <a class="nav-link text-dark {% if 'teacher_' in request.resolver_match.url_name %}active bg-primary text-white fw-semibold{% endif %}" href="{% url 'accounts:teacher_list' %}">
-                                <i class="bi bi-person-video3 me-2 text-success"></i> Teachers
+                                <i class="bi bi-person-video3 me-2" style="color: var(--teal);"></i> Teachers
                             </a>
                         </li>
                         <li class="nav-item">
                             <a class="nav-link text-dark {% if 'student_' in request.resolver_match.url_name %}active bg-primary text-white fw-semibold{% endif %}" href="{% url 'accounts:student_list' %}">
-                                <i class="bi bi-people me-2 text-info"></i> Students
+                                <i class="bi bi-people me-2" style="color: var(--plum);"></i> Students
                             </a>
                         </li>
                         <li class="nav-item">
                             <a class="nav-link text-dark {% if 'category_' in request.resolver_match.url_name %}active bg-primary text-white fw-semibold{% endif %}" href="{% url 'exams:category_list' %}">
-                                <i class="bi bi-grid-fill me-2 text-warning"></i> Categories
+                                <i class="bi bi-grid-fill me-2" style="color: var(--amber);"></i> Categories
                             </a>
                         </li>
                         {% endif %}
@@ -77,6 +87,11 @@
 
                         {% if user.is_admin_role or user.is_teacher %}
                         <li class="nav-item">
+                            <a class="nav-link text-dark {% if active_key == 'classroom' %}active bg-primary text-white fw-semibold{% endif %}"{% if active_key == 'classroom' %} aria-current="page"{% endif %} href="{% url 'exams:classroom_hub' %}">
+                                <i class="bi bi-easel2-fill me-2 {% if active_key == 'classroom' %}text-white{% endif %}" {% if active_key != 'classroom' %}style="color: var(--teal);"{% endif %}></i> Classroom Tests
+                            </a>
+                        </li>
+                        <li class="nav-item">
                             <a class="nav-link text-dark {% if 'exam_' in request.resolver_match.url_name %}active bg-primary text-white fw-semibold{% endif %}" href="{% url 'exams:exam_list' %}">
                                 <i class="bi bi-card-checklist me-2 text-primary"></i> Examinations
                             </a>
@@ -88,7 +103,7 @@
                         </li>
                         <li class="nav-item">
                             <a class="nav-link text-dark {% if 'question_' in request.resolver_match.url_name %}active bg-primary text-white fw-semibold{% endif %}" href="{% url 'questions:question_bank' %}">
-                                <i class="bi bi-journal-check me-2 text-success"></i> Question Bank
+                                <i class="bi bi-journal-check me-2" style="color: var(--teal);"></i> Question Bank
                             </a>
                         </li>
                         {% endif %}
@@ -96,23 +111,40 @@
                         {% if user.is_teacher %}
                         <li class="nav-item">
                             <a class="nav-link text-dark" href="{% url 'core:teacher_dashboard' %}#categories">
-                                <i class="bi bi-check2-circle me-2 text-success"></i> My Categories
+                                <i class="bi bi-check2-circle me-2" style="color: var(--teal);"></i> My Categories
                             </a>
                         </li>
                         {% endif %}
 
                         {% if user.is_student %}
                         <li class="nav-item">
-                            <a class="nav-link text-dark {% if 'practice_' in request.resolver_match.url_name %}active bg-primary text-white fw-semibold{% endif %}" href="{% url 'questions:practice_list' %}">
-                                <i class="bi bi-file-earmark-pdf me-2 text-danger"></i> My PDF Practice
+                            <a class="nav-link text-dark {% if active_key == 'join' %}active bg-primary text-white fw-semibold{% endif %}"{% if active_key == 'join' %} aria-current="page"{% endif %} href="{% url 'exams:classroom_join' %}">
+                                <i class="bi bi-qr-code-scan me-2 {% if active_key == 'join' %}text-white{% endif %}" {% if active_key != 'join' %}style="color: var(--teal);"{% endif %}></i> Join Test with Code
                             </a>
                         </li>
-                        <li class="nav-item"><a class="nav-link text-dark" href="{% url 'questions:practice_bank' %}"><i class="bi bi-collection me-2 text-success"></i> My Question Bank</a></li>
-                        <li class="nav-item"><a class="nav-link text-dark" href="{% url 'questions:practice_history' %}"><i class="bi bi-clock-history me-2 text-primary"></i> Practice History</a></li>
-                        <li class="nav-item"><a class="nav-link text-dark" href="{% url 'payments:plans' %}"><i class="bi bi-credit-card me-2 text-primary"></i> Plans & Usage</a></li>
                         <li class="nav-item">
-                            <a class="nav-link text-dark {% if request.resolver_match.url_name == 'exam_catalog' %}active bg-primary text-white fw-semibold{% endif %}" href="{% url 'exams:exam_catalog' %}">
-                                <i class="bi bi-journal-bookmark me-2 text-primary"></i> Available Exams
+                            <a class="nav-link text-dark {% if active_key == 'pdf_practice' %}active bg-primary text-white fw-semibold{% endif %}"{% if active_key == 'pdf_practice' %} aria-current="page"{% endif %} href="{% url 'questions:practice_list' %}">
+                                <i class="bi bi-file-earmark-pdf me-2 {% if active_key == 'pdf_practice' %}text-white{% else %}text-danger{% endif %}"></i> My PDF Practice
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link text-dark {% if active_key == 'question_bank' %}active bg-primary text-white fw-semibold{% endif %}"{% if active_key == 'question_bank' %} aria-current="page"{% endif %} href="{% url 'questions:practice_bank' %}">
+                                <i class="bi bi-collection me-2 {% if active_key == 'question_bank' %}text-white{% endif %}" {% if active_key != 'question_bank' %}style="color: var(--teal);"{% endif %}></i> My Question Bank
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link text-dark {% if active_key == 'practice_history' %}active bg-primary text-white fw-semibold{% endif %}"{% if active_key == 'practice_history' %} aria-current="page"{% endif %} href="{% url 'questions:practice_history' %}">
+                                <i class="bi bi-clock-history me-2 {% if active_key == 'practice_history' %}text-white{% else %}text-primary{% endif %}"></i> Practice History
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link text-dark {% if active_key == 'plans' %}active bg-primary text-white fw-semibold{% endif %}"{% if active_key == 'plans' %} aria-current="page"{% endif %} href="{% url 'payments:plans' %}">
+                                <i class="bi bi-credit-card me-2 {% if active_key == 'plans' %}text-white{% else %}text-primary{% endif %}"></i> Plans & Usage
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link text-dark {% if active_key == 'exams' %}active bg-primary text-white fw-semibold{% endif %}"{% if active_key == 'exams' %} aria-current="page"{% endif %} href="{% url 'exams:exam_catalog' %}">
+                                <i class="bi bi-journal-bookmark me-2 {% if active_key == 'exams' %}text-white{% else %}text-primary{% endif %}"></i> Available Exams
                             </a>
                         </li>
                         {% endif %}
@@ -138,6 +170,7 @@
                             </a>
                         </li>
                     </ul>
+                {% endwith %}
                 </div>
             </div>
             </div>

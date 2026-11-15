@@ -98,6 +98,18 @@ class StudentResultDetailView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
             .order_by("-started_at")
         )
 
+        # Security review (authorized teacher/admin only): reported signals, not
+        # proof of cheating, and shown without changing the score or the timer.
+        is_reviewer = bool(user.is_admin_role or (user.is_teacher and (
+            exam.creator_id == user.pk or user.assigned_categories.filter(pk=exam.category_id).exists())))
+        context["is_security_reviewer"] = is_reviewer
+        if is_reviewer:
+            context["security_logs"] = attempt.security_logs.all()[:200]
+            context["security_tab_switches"] = attempt.tab_switch_warnings
+            context["security_mixed_count"] = attempt.anti_cheat_warnings
+            context["security_locked"] = attempt.is_security_locked
+            context["strict_mode"] = exam.strict_exam_mode
+
         return context
 
 

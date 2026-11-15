@@ -186,7 +186,7 @@ class DisconnectedGraphicWorkflowTests(TestCase):
     def paper(self, *, private):
         doc = disconnected_fixture(); data = doc.write(); doc.close()
         kwargs = {"private_pdf_file" if private else "pdf_file": SimpleUploadedFile("synthetic.pdf", data, content_type="application/pdf")}
-        return QuestionPaperUpload.objects.create(title="Fragments", category=self.category,
+        return QuestionPaperUpload.objects.create(title="Fragments", category=self.category, image_first=False,
                     uploaded_by=self.owner if private else self.teacher, is_student_private=private, subject="Physics", **kwargs)
 
     def test_private_option_fragments_are_owner_only_and_reach_cbt(self):

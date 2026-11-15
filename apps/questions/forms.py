@@ -25,6 +25,54 @@ class BootstrapFormMixin:
                 field.widget.attrs["class"] = f"form-control {existing}".strip()
 
 
+# --- Local-only extraction selector -----------------------------------------
+# The upload screens expose only local PyMuPDF/Tesseract extraction plus a
+# disabled "coming later" placeholder. Provider code, configuration, migrations
+# and historical records for cloud/MinerU modes are intentionally preserved for
+# future use; they are simply not offered or accepted here.
+EXTRACTION_PLACEHOLDER = "__more__"
+LOCAL_EXTRACTION_CHOICES = [
+    (QuestionPaperUpload.ExtractionMode.LOCAL, "Local PyMuPDF / Tesseract"),
+    (EXTRACTION_PLACEHOLDER, "More methods — coming later"),
+]
+
+
+class LocalOnlyExtractionSelect(forms.Select):
+    """Renders the "coming later" option as visibly disabled and unselectable."""
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex, attrs)
+        if str(value) == EXTRACTION_PLACEHOLDER:
+            option["attrs"]["disabled"] = True
+        return option
+
+
+def local_extraction_field():
+    """A ChoiceField offering only local extraction (plus a disabled hint)."""
+    return forms.ChoiceField(
+        choices=LOCAL_EXTRACTION_CHOICES,
+        initial=QuestionPaperUpload.ExtractionMode.LOCAL,
+        required=False,
+        label="Extraction method",
+        widget=LocalOnlyExtractionSelect(),
+    )
+
+
+def clean_local_extraction_mode(value):
+    """Server-side guard: omitted/local -> local; anything else is rejected.
+
+    An altered request must never be able to start a disabled method, and an
+    unsupported value is reported clearly rather than silently downgraded.
+    """
+    value = (value or "").strip()
+    if value in ("", QuestionPaperUpload.ExtractionMode.LOCAL):
+        return QuestionPaperUpload.ExtractionMode.LOCAL
+    raise ValidationError(
+        "Only local PyMuPDF / Tesseract extraction is available right now. "
+        "More methods are coming later."
+    )
+
+
 class QuestionPaperUploadForm(BootstrapFormMixin, forms.ModelForm):
     """
     Form for uploading official PDF question papers with file size,
@@ -32,16 +80,7 @@ class QuestionPaperUploadForm(BootstrapFormMixin, forms.ModelForm):
     """
 
     MAX_FILE_SIZE_MB = 25
-    extraction_mode = forms.ChoiceField(
-        choices=QuestionPaperUpload.ExtractionMode.choices,
-        initial=QuestionPaperUpload.ExtractionMode.LOCAL,
-        required=False,
-        label="Extraction method",
-    )
-    cloud_consent = forms.BooleanField(
-        required=False,
-        label="I consent to sending this paper's content to the provider(s) of my selected cloud method, and accept their terms and possible charges.",
-    )
+    extraction_mode = local_extraction_field()
 
     class Meta:
         model = QuestionPaperUpload
@@ -51,6 +90,7 @@ class QuestionPaperUploadForm(BootstrapFormMixin, forms.ModelForm):
             "subject",
             "target_exam",
             "pdf_file",
+            "image_first",
         ]
         widgets = {
             "title": forms.TextInput(attrs={"placeholder": "e.g. JEE Advanced 2024 Paper 1 (Physics)"}),
@@ -61,6 +101,12 @@ class QuestionPaperUploadForm(BootstrapFormMixin, forms.ModelForm):
     def __init__(self, *args, **kwargs):
         user = kwargs.pop("user", None)
         super().__init__(*args, **kwargs)
+
+        self.fields["image_first"].label = "Image-first (students take the test on the original PDF image)"
+        self.fields["image_first"].help_text = (
+            "Recommended. Each question is shown as a high-resolution crop of the original PDF "
+            "(statement, printed options, formulas, tables and diagrams) with A/B/C/D buttons below."
+        )
 
         # If user is a teacher, restrict category choices to their permitted categories
         if user and user.is_teacher and not user.is_admin_role:
@@ -98,20 +144,8 @@ class QuestionPaperUploadForm(BootstrapFormMixin, forms.ModelForm):
 
         return uploaded_file
 
-    def clean(self):
-        cleaned = super().clean()
-        mode = cleaned.get("extraction_mode") or QuestionPaperUpload.ExtractionMode.LOCAL
-        cleaned["extraction_mode"] = mode
-        if mode in (QuestionPaperUpload.ExtractionMode.CLOUD, QuestionPaperUpload.ExtractionMode.GEMINI):
-            if not cleaned.get("cloud_consent"):
-                self.add_error("cloud_consent", "Explicit consent is required for cloud extraction.")
-            from .cloud_providers import cloud_is_configured, gemini_only_is_configured
-            configured = gemini_only_is_configured() if mode == QuestionPaperUpload.ExtractionMode.GEMINI else cloud_is_configured()
-            if not configured:
-                self.add_error("extraction_mode", "This cloud method is not configured on this server. Choose local or ask an administrator to configure it.")
-            if getattr(self, "pdf_page_count", 0) > settings.PDF_CLOUD_MAX_PAGES:
-                self.add_error("pdf_file", f"Cloud extraction is limited to {settings.PDF_CLOUD_MAX_PAGES} pages per upload.")
-        return cleaned
+    def clean_extraction_mode(self):
+        return clean_local_extraction_mode(self.cleaned_data.get("extraction_mode"))
 
 
 class ExtractedQuestionEditForm(BootstrapFormMixin, forms.ModelForm):
@@ -124,6 +158,7 @@ class ExtractedQuestionEditForm(BootstrapFormMixin, forms.ModelForm):
         fields = [
             "question_number",
             "question_text",
+            "detected_type",
             "correct_option",
             "positive_marks",
             "negative_marks",
@@ -140,7 +175,14 @@ class ExtractedQuestionEditForm(BootstrapFormMixin, forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Advisory field: keep the detected value when the reviewer does not
+        # change it, so editing other fields never clears the type.
+        self.fields["detected_type"].required = False
         add_tables_editor(self, self.instance)
+
+    def clean_detected_type(self):
+        value = self.cleaned_data.get("detected_type")
+        return value or getattr(self.instance, "detected_type", None) or ExtractedQuestion.DetectedType.SINGLE
 
     def clean(self):
         return clean_tables_editor(self, super().clean())

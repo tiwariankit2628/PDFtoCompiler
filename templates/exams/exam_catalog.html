@@ -1,9 +1,9 @@
-{% extends 'base.html' %}
+{% extends 'dashboard_base.html' %}
 
 {% block title %}Examinations Catalog | {{ PLATFORM_NAME }}{% endblock %}
 
-{% block content %}
-<div class="container py-4">
+{% block dashboard_content %}
+<div class="py-1">
     <!-- Breadcrumb & Header -->
     <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4 gap-3">
         <div>
@@ -46,7 +46,7 @@
                 </select>
             </div>
             <div class="col-md-2 d-flex gap-2">
-                <button type="submit" class="btn btn-primary w-100 fw-bold">Filter</button>
+                <button type="submit" class="btn btn-cbt-primary w-100 fw-bold">Filter</button>
                 {% if search_query or selected_category or selected_type %}
                 <a href="{% url 'exams:exam_catalog' %}" class="btn btn-outline-secondary" title="Reset Filters">
                     <i class="bi bi-x-lg"></i>
@@ -61,7 +61,7 @@
     <div class="row g-4">
         {% for exam in exams %}
         <div class="col-md-6 col-lg-4">
-            <div class="card h-100 border-0 shadow-sm rounded-4 p-4 d-flex flex-column card-hover-effect">
+            <div class="card h-100 border-0 rounded-4 p-4 d-flex flex-column card-hover-effect">
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <span class="badge bg-light text-dark border px-2 py-1">
                         <i class="bi bi-tag me-1"></i> {{ exam.category.name }}
@@ -73,19 +73,19 @@
                     {% endif %}
                 </div>
 
-                <h5 class="fw-bold text-dark mb-2">{{ exam.title }}</h5>
-                <p class="text-secondary small mb-3 flex-grow-1">
+                <h5 class="fw-bold mb-2" style="color: var(--ink);">{{ exam.title }}</h5>
+                <p class="text-muted small mb-3 flex-grow-1">
                     {{ exam.description|default:"Comprehensive Computer-Based Examination simulation."|truncatechars:110 }}
                 </p>
 
                 <!-- Exam Metrics -->
-                <div class="bg-light p-2.5 rounded-3 mb-3 d-flex justify-content-between small text-muted border">
+                <div class="rounded-3 mb-3 d-flex justify-content-between small text-muted p-2 border" style="background: var(--ivory-2);">
                     <span><i class="bi bi-clock me-1 text-primary"></i> {{ exam.duration_minutes }} Mins</span>
                     <span><i class="bi bi-question-circle me-1 text-primary"></i> {{ exam.total_questions_count }} Qs</span>
                     <span><i class="bi bi-award me-1 text-primary"></i> {{ exam.total_marks }} Marks</span>
                 </div>
 
-                <a href="{% url 'exams:exam_instructions' exam.slug %}" class="btn btn-primary w-100 fw-bold py-2 rounded-3">
+                <a href="{% url 'exams:exam_instructions' exam.slug %}" class="btn btn-cbt-primary w-100 fw-bold py-2">
                     <i class="bi bi-play-circle me-1"></i> View Instructions & Start
                 </a>
             </div>
@@ -100,7 +100,7 @@
             <ul class="pagination">
                 {% if page_obj.has_previous %}
                 <li class="page-item">
-                    <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if search_query %}&q={{ search_query }}{% endif %}{% if selected_category %}&category={{ selected_category }}{% endif %}">Previous</a>
+                    <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if search_query %}&q={{ search_query }}{% endif %}{% if selected_category %}&category={{ selected_category }}{% endif %}{% if selected_type %}&type={{ selected_type }}{% endif %}">Previous</a>
                 </li>
                 {% endif %}
                 <li class="page-item active">
@@ -108,7 +108,7 @@
                 </li>
                 {% if page_obj.has_next %}
                 <li class="page-item">
-                    <a class="page-link" href="?page={{ page_obj.next_page_number }}{% if search_query %}&q={{ search_query }}{% endif %}{% if selected_category %}&category={{ selected_category }}{% endif %}">Next</a>
+                    <a class="page-link" href="?page={{ page_obj.next_page_number }}{% if search_query %}&q={{ search_query }}{% endif %}{% if selected_category %}&category={{ selected_category }}{% endif %}{% if selected_type %}&type={{ selected_type }}{% endif %}">Next</a>
                 </li>
                 {% endif %}
             </ul>

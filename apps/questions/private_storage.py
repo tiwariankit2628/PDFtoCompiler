@@ -26,7 +26,13 @@ class PrivatePracticeStorage(FileSystemStorage):
         for public in (settings.MEDIA_ROOT, settings.STATIC_ROOT):
             if public:
                 public_root = os.path.realpath(public)
-                common = os.path.commonpath([root, public_root])
+                try:
+                    common = os.path.commonpath([root, public_root])
+                except ValueError:
+                    # Different drives/mounts (e.g. A:\ vs C:\ on Windows) have
+                    # no common path, so neither tree can contain the other and
+                    # they are safely separate.
+                    continue
                 if common in (root, public_root):
                     raise ImproperlyConfigured("PRIVATE_PRACTICE_ROOT must be separate from MEDIA_ROOT and STATIC_ROOT")
         return root

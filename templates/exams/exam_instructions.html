@@ -151,6 +151,20 @@
                         <strong>Examination Proctoring Warning:</strong> This examination environment requests full-screen mode.
                         Tab switching, minimizing the browser, copy-paste keystrokes, and right-click context menu actions are strictly monitored and logged into your examination audit profile. Repeated violations may be flagged for faculty review.
                     </div>{% endif %}
+
+                    {% if exam.strict_exam_mode %}
+                    <h6 class="fw-bold text-dark mt-3 mb-2">5. Strict Exam Mode — three-warning page-switch rule:</h6>
+                    <div class="alert alert-danger border-danger p-3 rounded-3 small mb-0">
+                        <i class="bi bi-exclamation-octagon-fill me-2"></i>
+                        This test uses <strong>Strict Exam Mode</strong>. Each time you switch away from this page (another tab/app, or the page becomes hidden), a warning is recorded on the server:
+                        <ul class="mb-2 mt-2">
+                            <li><strong>Warnings 1, 2 and 3 of 3</strong> are shown on screen.</li>
+                            <li>The <strong>4th</strong> page switch automatically <strong>ends your attempt for review</strong>. Your saved answers are kept and scored; this is a reported signal, not a proof of cheating, and your teacher can review it.</li>
+                        </ul>
+                        The count is stored on the server, so refreshing or reconnecting will <strong>not</strong> reset it.
+                        A browser <strong>cannot reliably tell a tab switch from a phone call, a screen lock, or another interruption</strong>, so avoid leaving this page for any reason. Window focus changes, full-screen exit, copying and zooming are logged separately and are <em>not</em> counted as page switches.
+                    </div>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -193,7 +207,7 @@
                             </label>
                         </div>
 
-                        <button type="submit" class="btn btn-primary btn-lg w-100 py-3 fw-bold rounded-3 shadow-sm d-flex align-items-center justify-content-center gap-2" id="start-btn">
+                        <button type="submit" class="btn btn-cbt-primary btn-lg w-100 py-3 fw-bold d-flex align-items-center justify-content-center gap-2" id="start-btn">
                             <i class="bi bi-play-circle fs-5"></i>
                             {% if active_attempt %}Resume Examination{% else %}I am Ready to Begin{% endif %}
                         </button>

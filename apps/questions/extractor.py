@@ -19,6 +19,7 @@ except ImportError:
 
 from .models import ExtractedQuestion, QuestionPaperUpload
 from .pdf_layout import DigitalQuestionLayout, FIGURE_REFERENCE, _normalize_option
+from .question_types import classify_question
 
 
 class ReviewWorkPreserved(Exception):
@@ -208,7 +209,7 @@ class PDFQuestionExtractor:
                         if locked.extracted_questions.exists() or locked.figures.exists():
                             raise ReviewWorkPreserved("Existing review work was preserved; upload a new copy to re-extract.")
                         for item in items:
-                            self._save_item(item)
+                            self._save_item(item, doc)
                             saved_count += 1
                     self.paper.questions_found = saved_count
                     self.paper.status = QuestionPaperUpload.ProcessingStatus.EXTRACTED
@@ -231,16 +232,29 @@ class PDFQuestionExtractor:
         self.paper.save()
         return saved_count
 
-    def _save_item(self, item):
+    def _save_item(self, item, doc=None):
         text = item.text.strip()
         options = item.options
         issues = list(item.issues)
         if not text:
             issues.insert(0, "Missing question statement.")
-        if len(options) < 2:
-            issues.insert(0, f"Only {len(options)} option(s) detected. Minimum 2 required for MCQ.")
-        elif any(not option.get("text", "").strip() for option in options):
-            issues.insert(0, "One or more options are empty; check the source.")
+
+        # Detect non-single-correct question types locally so a numerical or
+        # subjective item is not reported as a *broken* MCQ, and a
+        # multiple-correct item is not silently accepted as single-correct.
+        detected_type, type_reason = classify_question(text, options)
+        if detected_type in (ExtractedQuestion.DetectedType.NUMERICAL,
+                             ExtractedQuestion.DetectedType.SUBJECTIVE):
+            # These legitimately have no MCQ options; preserve content and flag
+            # the type instead of demanding two options.
+            issues.insert(0, type_reason)
+        else:
+            if len(options) < 2:
+                issues.insert(0, f"Only {len(options)} option(s) detected. Minimum 2 required for MCQ.")
+            elif any(not option.get("text", "").strip() for option in options):
+                issues.insert(0, "One or more options are empty; check the source.")
+            if detected_type == ExtractedQuestion.DetectedType.MULTIPLE:
+                issues.append(type_reason)
         if len({option.get("key") for option in options}) != len(options):
             issues.append("Duplicate option labels detected; compare with the source.")
 
@@ -249,9 +263,12 @@ class PDFQuestionExtractor:
             question_number=item.number,
             question_text=text,
             options=options,
+            detected_type=detected_type,
             tables=getattr(item, "tables", []),
             source_regions=getattr(item, "source_regions", []),
             primary_image_region=getattr(item, "primary_image_region", {}),
+            needs_source=getattr(item, "needs_source", False),
+            is_image_first=bool(getattr(self.paper, "image_first", False)),
             page_number=item.page_number,
             source_pages=sorted({item.page_number}
                 | ({item.image[0]} if item.image else set())
@@ -283,6 +300,46 @@ class PDFQuestionExtractor:
             )
             target = figure.private_image if self.paper.is_student_private else figure.image
             target.save(f"paper_{self.paper.pk}_q{item.number}_extra_{index}.png", ContentFile(candidate["data"]), save=False)
+            if self.paper.is_student_private:
+                self._private_files_written.append(target.name)
+            figure.save()
+
+        # Image-first: render high-resolution crop(s) of the original question so
+        # the student can take the test on the printed page itself. Crop failures
+        # are non-fatal and leave the question on its (optional) extracted text.
+        if getattr(self.paper, "image_first", False) and doc is not None:
+            self._save_question_crops(extracted, doc)
+
+    def _save_question_crops(self, extracted, doc):
+        from .image_first import (
+            detect_crop_answer_warning,
+            question_crop_regions,
+            render_question_crops,
+        )
+        from .models import ExtractedFigure
+
+        regions = question_crop_regions(extracted)
+        if not regions:
+            self._log(f"Q{extracted.question_number}: no crop region available; it will use extracted text.")
+            return
+        crops = render_question_crops(doc, regions)
+        if not crops:
+            return
+        warning = detect_crop_answer_warning(doc, regions)
+        if warning:
+            extracted.crop_warning = warning[:255]
+            if not extracted.is_flagged:
+                extracted.is_flagged = True
+                extracted.flag_reason = (extracted.flag_reason or warning)[:255]
+            extracted.save(update_fields=["crop_warning", "is_flagged", "flag_reason"])
+        for order, (page_number, box, data) in enumerate(crops):
+            figure = ExtractedFigure(
+                paper=self.paper, question=extracted, option_key="",
+                page_number=page_number, bounding_box=box,
+                source="question_crop", order=1000 + order,
+            )
+            target = figure.private_image if self.paper.is_student_private else figure.image
+            target.save(f"paper_{self.paper.pk}_q{extracted.question_number}_crop_{order}.png", ContentFile(data), save=False)
             if self.paper.is_student_private:
                 self._private_files_written.append(target.name)
             figure.save()

@@ -91,6 +91,8 @@ class ExamForm(BootstrapFormMixin, forms.ModelForm):
             "is_free",
             "shuffle_questions",
             "shuffle_options",
+            "image_first_mode",
+            "strict_exam_mode",
             "max_attempts",
             "show_result_immediately",
             "allow_review_answers",
