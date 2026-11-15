@@ -264,6 +264,190 @@ class BrowserSourceSnapshotTests(StaticLiveServerTestCase):
         attempt.refresh_from_db()
         self.assertEqual(attempt.expires_at, expires_at)
 
+    def test_teacher_exam_keeps_image_first_answers_and_submission(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from django.urls import reverse
+        from apps.accounts.models import User
+        from apps.exams.models import Category, Exam, ExamAttempt, ExamQuestion
+        from .models import AnswerStatus, Question, QuestionFigure, QuestionOption
+        from .test_image_first import png
+
+        if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):
+            self.fail("Set CHROMIUM_PATH and install Node and browser dependencies first.")
+        student = User.objects.create_user(username="source_browser_student", email="source-public@example.test",
+            password="SourceBrowserPass987!", role=User.Roles.STUDENT)
+        teacher = User.objects.create_user(username="source_browser_teacher", email="source-teacher@example.test",
+            role=User.Roles.TEACHER)
+        category = Category.objects.create(name="Browser public image", slug="browser-public-image")
+        question = Question.objects.create(category=category, creator=teacher, subject="Math",
+            question_text="Select the correct answer.", is_image_first=True, key_verified=True,
+            answer_status=AnswerStatus.MANUALLY_VERIFIED)
+        for order, key in enumerate("ABCD"):
+            QuestionOption.objects.create(question=question, option_key=key, option_text=f"Choice {key}",
+                                          is_correct=(key == "C"), order=order)
+        for order, kind in enumerate(("question_crop", "stem-source", "option-source")):
+            QuestionFigure.objects.create(question=question, source=kind, order=order,
+                image=SimpleUploadedFile(f"{kind}.png", png(), content_type="image/png"))
+        exam = Exam.objects.create(title="Public image-first browser test", slug="browser-public-image",
+            category=category, creator=teacher, status=Exam.ExamStatus.PUBLISHED, is_free=True,
+            image_first_mode=True, shuffle_options=True, shuffle_questions=False)
+        ExamQuestion.objects.create(exam=exam, question=question, order=1, positive_marks=4, negative_marks=1)
+        self.client.force_login(student)
+        self.assertEqual(self.client.post(reverse("exams:exam_start", args=[exam.slug])).status_code, 302)
+        attempt = ExamAttempt.objects.get(exam=exam, student=student)
+        expiry = attempt.expires_at
+        env = os.environ.copy()
+        env.update(SOURCE_TEST_URL=self.live_server_url, SOURCE_TEST_PUBLIC="1",
+                   SOURCE_TEST_SESSION_PATH=reverse("exams:exam_session", args=[attempt.attempt_uuid]))
+        script = Path(settings.BASE_DIR) / "tests" / "browser" / "source-snapshot-smoke.cjs"
+        result = subprocess.run(["node", str(script)], env=env, text=True, capture_output=True, timeout=120)
+        self.assertEqual(result.returncode, 0, f"Public exam browser test failed:\n{result.stdout}\n{result.stderr}")
+        self.assertIn("SOURCE_SNAPSHOT_BROWSER_OK", result.stdout)
+        attempt.refresh_from_db()
+        response = attempt.responses.get()
+        self.assertEqual(attempt.expires_at, expiry)
+        self.assertEqual(attempt.status, ExamAttempt.AttemptStatus.SUBMITTED)
+        self.assertEqual(response.selected_option.option_key, "C")
+        self.assertTrue(response.is_correct)
+        self.assertEqual(attempt.score_obtained, 4)
+        self.assertEqual(question.figures.filter(source__in=["stem-source", "option-source"]).count(), 2)
+
+    def test_multi_page_crops_and_partial_crop_fallback(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from django.urls import reverse
+        from apps.accounts.models import User
+        from apps.exams.models import Category, ExamAttempt
+        from .extractor import PDFQuestionExtractor
+        from .models import QuestionPaperUpload
+        from .test_source_snapshots import math_pdf
+
+        if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):
+            self.fail("Set CHROMIUM_PATH and install Node and browser dependencies first.")
+        student = User.objects.create_user(username="source_browser_student", email="source-continuation@example.test",
+            password="SourceBrowserPass987!", role=User.Roles.STUDENT)
+        category = Category.objects.create(name="Browser continuation", slug="browser-continuation")
+        doc = math_pdf(continuation=True); content = doc.write(); doc.close()
+        paper = QuestionPaperUpload.objects.create(title="Browser continuation", category=category, uploaded_by=student,
+            is_student_private=True, subject="Math", image_first=True,
+            private_pdf_file=SimpleUploadedFile("continuation.pdf", content, content_type="application/pdf"))
+        self.assertEqual(PDFQuestionExtractor(paper).extract(), 2)
+        first = paper.extracted_questions.get(question_number=1)
+        self.assertEqual(list(first.figures.filter(source="question_crop").values_list("page_number", flat=True)), [1, 2])
+        self.assertEqual(list(first.figures.filter(source="option-source").values_list("page_number", flat=True)), [1, 2])
+        self.client.force_login(student)
+        self.assertEqual(self.client.post(reverse("questions:practice_settings", args=[paper.pk]),
+                         {"duration_minutes": 20, "acknowledge_review": "on"}).status_code, 302)
+        paper.refresh_from_db()
+        self.assertEqual(self.client.post(reverse("exams:exam_start", args=[paper.practice_exam.slug])).status_code, 302)
+        attempt = ExamAttempt.objects.get(exam=paper.practice_exam)
+        expiry = attempt.expires_at
+        bank = attempt.responses.order_by("order").first().exam_question.question
+        self.assertEqual(list(bank.figures.filter(source="question_crop").values_list("page_number", flat=True)), [1, 2])
+        self.assertEqual(list(bank.figures.filter(source="option-source").values_list("page_number", flat=True)), [1, 2])
+        env = os.environ.copy()
+        env.update(SOURCE_TEST_URL=self.live_server_url, SOURCE_TEST_CONTINUATION="1",
+                   SOURCE_TEST_SESSION_PATH=reverse("exams:exam_session", args=[attempt.attempt_uuid]))
+        script = Path(settings.BASE_DIR) / "tests" / "browser" / "source-snapshot-smoke.cjs"
+        result = subprocess.run(["node", str(script)], env=env, text=True, capture_output=True, timeout=120)
+        self.assertEqual(result.returncode, 0, f"Multi-page browser test failed:\n{result.stdout}\n{result.stderr}")
+        self.assertIn("SOURCE_SNAPSHOT_BROWSER_OK", result.stdout)
+
+        # Simulate a crop that was saved only for the first of two pages. The
+        # second page's saved source remains available without re-extraction.
+        bank.figures.filter(source="question_crop", page_number=2).delete()
+        env.pop("SOURCE_TEST_CONTINUATION")
+        env["SOURCE_TEST_PARTIAL"] = "1"
+        result = subprocess.run(["node", str(script)], env=env, text=True, capture_output=True, timeout=120)
+        self.assertEqual(result.returncode, 0, f"Partial-crop browser test failed:\n{result.stdout}\n{result.stderr}")
+        self.assertIn("SOURCE_SNAPSHOT_BROWSER_OK", result.stdout)
+        self.assertEqual(list(bank.figures.filter(source="option-source").values_list("page_number", flat=True)), [1, 2])
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.expires_at, expiry)
+
+    def test_missing_primary_crop_shows_saved_sources_instead(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from django.urls import reverse
+        from apps.accounts.models import User
+        from apps.exams.models import Category, ExamAttempt
+        from .extractor import PDFQuestionExtractor
+        from .models import QuestionPaperUpload
+        from .test_source_snapshots import math_pdf
+
+        if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):
+            self.fail("Set CHROMIUM_PATH and install Node and browser dependencies first.")
+        student = User.objects.create_user(username="source_browser_student", email="source-missing@example.test",
+            password="SourceBrowserPass987!", role=User.Roles.STUDENT)
+        category = Category.objects.create(name="Browser missing crop", slug="browser-missing-crop")
+        doc = math_pdf(); content = doc.write(); doc.close()
+        paper = QuestionPaperUpload.objects.create(title="Browser missing crop", category=category, uploaded_by=student,
+            is_student_private=True, subject="Math", image_first=True,
+            private_pdf_file=SimpleUploadedFile("missing.pdf", content, content_type="application/pdf"))
+        self.assertEqual(PDFQuestionExtractor(paper).extract(), 2)
+        self.client.force_login(student)
+        self.assertEqual(self.client.post(reverse("questions:practice_settings", args=[paper.pk]),
+                         {"duration_minutes": 20, "acknowledge_review": "on"}).status_code, 302)
+        paper.refresh_from_db()
+        self.assertEqual(self.client.post(reverse("exams:exam_start", args=[paper.practice_exam.slug])).status_code, 302)
+        attempt = ExamAttempt.objects.get(exam=paper.practice_exam)
+        first_question = attempt.responses.order_by("order").first().exam_question.question
+        self.assertTrue(first_question.figures.filter(source="question_crop").exists())
+        self.assertTrue(first_question.figures.filter(source="option-source").exists())
+        # Simulate an older or incomplete item whose main crop was never saved.
+        first_question.figures.filter(source="question_crop").delete()
+        env = os.environ.copy()
+        env.update(SOURCE_TEST_URL=self.live_server_url, SOURCE_TEST_NO_CROP="1",
+                   SOURCE_TEST_SESSION_PATH=reverse("exams:exam_session", args=[attempt.attempt_uuid]))
+        script = Path(settings.BASE_DIR) / "tests" / "browser" / "source-snapshot-smoke.cjs"
+        result = subprocess.run(["node", str(script)], env=env, text=True, capture_output=True, timeout=120)
+        self.assertEqual(result.returncode, 0, f"Missing-crop browser test failed:\n{result.stdout}\n{result.stderr}")
+        self.assertIn("SOURCE_SNAPSHOT_BROWSER_OK", result.stdout)
+        self.assertTrue(first_question.figures.filter(source="option-source").exists())
+
+    def test_parallel_source_remains_available_in_image_first_mode(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from django.urls import reverse
+        from apps.accounts.models import User
+        from apps.exams.models import Category, ExamAttempt
+        from .extractor import PDFQuestionExtractor
+        from .models import QuestionPaperUpload
+        from .test_source_snapshots import parallel_pdf
+
+        if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):
+            self.fail("Set CHROMIUM_PATH and install Node and browser dependencies first.")
+        student = User.objects.create_user(username="source_browser_student", email="source-parallel-image@example.test",
+            password="SourceBrowserPass987!", role=User.Roles.STUDENT)
+        category = Category.objects.create(name="Browser parallel image", slug="browser-parallel-image")
+        doc = parallel_pdf(); content = doc.write(); doc.close()
+        paper = QuestionPaperUpload.objects.create(title="Browser parallel image", category=category, uploaded_by=student,
+            is_student_private=True, subject="Math", image_first=True,
+            private_pdf_file=SimpleUploadedFile("parallel-image.pdf", content, content_type="application/pdf"))
+        self.assertEqual(PDFQuestionExtractor(paper).extract(), 3)
+        self.assertTrue(paper.extracted_questions.get(question_number=1).figures.filter(source="parallel-source").exists())
+        self.client.force_login(student)
+        self.assertEqual(self.client.post(reverse("questions:practice_settings", args=[paper.pk]),
+                         {"duration_minutes": 20, "acknowledge_review": "on", "answer_key_text": "1: 2"}).status_code, 302)
+        paper.refresh_from_db()
+        paper.practice_exam.shuffle_options = True
+        paper.practice_exam.save(update_fields=["shuffle_options"])
+        self.assertEqual(self.client.post(reverse("exams:exam_start", args=[paper.practice_exam.slug])).status_code, 302)
+        attempt = ExamAttempt.objects.get(exam=paper.practice_exam)
+        expiry = attempt.expires_at
+        env = os.environ.copy()
+        env.update(SOURCE_TEST_URL=self.live_server_url, SOURCE_TEST_PARALLEL_IMAGE="1",
+                   SOURCE_TEST_SESSION_PATH=reverse("exams:exam_session", args=[attempt.attempt_uuid]))
+        script = Path(settings.BASE_DIR) / "tests" / "browser" / "source-snapshot-smoke.cjs"
+        result = subprocess.run(["node", str(script)], env=env, text=True, capture_output=True, timeout=120)
+        self.assertEqual(result.returncode, 0, f"Image-first parallel browser test failed:\n{result.stdout}\n{result.stderr}")
+        self.assertIn("SOURCE_SNAPSHOT_BROWSER_OK", result.stdout)
+        response = attempt.responses.order_by("order").first()
+        self.assertEqual(response.selected_option.option_key, "B")
+        self.assertTrue(response.exam_question.question.key_verified)
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.expires_at, expiry)
+        attempt.submit_attempt()
+        response.refresh_from_db()
+        self.assertTrue(response.is_correct)
+
     def test_parallel_source_renders_and_original_choice_key_survives_reload(self):
         from django.core.files.uploadedfile import SimpleUploadedFile
         from django.urls import reverse
@@ -279,8 +463,10 @@ class BrowserSourceSnapshotTests(StaticLiveServerTestCase):
             password="SourceBrowserPass987!", role=User.Roles.STUDENT)
         category = Category.objects.create(name="Browser parallel", slug="browser-parallel")
         doc = parallel_pdf(); content = doc.write(); doc.close()
+        # Keep this fixture in text mode to verify its source-region fallback
+        # and shuffled choice mapping still work without a primary question crop.
         paper = QuestionPaperUpload.objects.create(title="Browser parallel", category=category, uploaded_by=student,
-            is_student_private=True, subject="Math",
+            is_student_private=True, subject="Math", image_first=False,
             private_pdf_file=SimpleUploadedFile("parallel.pdf", content, content_type="application/pdf"))
         self.assertEqual(PDFQuestionExtractor(paper).extract(), 3)
         self.assertTrue(paper.extracted_questions.get(question_number=1).figures.filter(source="parallel-source").exists())

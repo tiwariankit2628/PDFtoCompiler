@@ -333,8 +333,10 @@
                     <!-- Crop image(s) inserted by the CBT renderer. -->
                 </div>
                 <div class="small text-muted mb-3 d-none" id="image-first-hint">
-                    <i class="bi bi-zoom-in me-1"></i>Tap the image to zoom. Choose your answer below.
+                    <i class="bi bi-zoom-in me-1" aria-hidden="true"></i><span id="crop-instruction" role="status">Tap the image to zoom. Choose your answer below.</span>
                     <a href="#" id="toggle-ocr-text" class="ms-2">Show extracted text</a>
+                    <button type="button" id="toggle-source-regions" class="btn btn-link p-0 ms-2 align-baseline small d-none"
+                            aria-controls="question-diagram-box" aria-expanded="false">Missing part? View original regions</button>
                 </div>
 
                 <!-- Question Statement Container -->
@@ -571,7 +573,11 @@
             const optionsContainer = document.getElementById('options-container');
             const cropBox = document.getElementById('question-crop-box');
             const imageFirstHint = document.getElementById('image-first-hint');
+            const cropInstruction = document.getElementById('crop-instruction');
+            const ocrTextToggle = document.getElementById('toggle-ocr-text');
+            const sourceToggle = document.getElementById('toggle-source-regions');
             let ocrTextForced = false;  // per-session: reveal OCR text under image-first
+            let questionRenderVersion = 0;
 
             // Full-screen crop zoom (image-first). Mobile-friendly: pan by scroll.
             const zoomOverlay = document.getElementById('crop-zoom-overlay');
@@ -593,11 +599,16 @@
             zoomOverlay.addEventListener('click', closeCropZoom);
             document.getElementById('crop-zoom-close').addEventListener('click', (e) => { e.stopPropagation(); closeCropZoom(); });
             document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeCropZoom(); });
-            document.getElementById('toggle-ocr-text').addEventListener('click', (e) => {
+            ocrTextToggle.addEventListener('click', (e) => {
                 e.preventDefault();
-                ocrTextForced = !ocrTextForced;
+                // The text may also have been revealed by an image-load fallback.
+                ocrTextForced = statementBox.classList.contains('d-none');
                 statementBox.classList.toggle('d-none', !ocrTextForced);
-                e.target.textContent = ocrTextForced ? 'Hide extracted text' : 'Show extracted text';
+                ocrTextToggle.textContent = ocrTextForced ? 'Hide extracted text' : 'Show extracted text';
+            });
+            sourceToggle.addEventListener('click', () => {
+                const show = sourceToggle.getAttribute('aria-expanded') !== 'true';
+                setSourceVisibility(questions[currentIndex], show);
             });
             const paletteGrid = document.getElementById('palette-grid');
             const activeSectionBadge = document.getElementById('active-section-badge');
@@ -638,11 +649,47 @@
                 });
             }
 
+            // Keep source snapshots available as a fallback without displaying
+            // duplicates beside a successfully loaded original question crop.
+            function setSourceVisibility(q, show) {
+                diagramBox.replaceChildren();
+                if (show) {
+                    (q.source_images || []).forEach(source => {
+                        const label = ({'stem-source': 'Original question region', 'table-source': 'Original table region', 'parallel-source': 'Other original-language region', 'option-source': 'Original answer choices'})[source.kind] || 'Original question region';
+                        const figure = document.createElement('figure');
+                        figure.className = 'd-inline-block align-top m-1';
+                        const image = document.createElement('img');
+                        image.src = source.url;
+                        image.alt = label;
+                        image.className = 'img-fluid rounded border shadow-sm d-block';
+                        image.style.maxHeight = '320px';
+                        const caption = document.createElement('figcaption');
+                        caption.className = 'small text-muted mt-1';
+                        caption.textContent = label + (source.kind === 'parallel-source' || source.kind === 'option-source' ? ' — printed order (1=A, 2=B, etc.)' : '');
+                        figure.append(image, caption);
+                        diagramBox.appendChild(figure);
+                    });
+                    (q.image_urls || []).forEach(url => {
+                        const image = document.createElement('img');
+                        image.src = url;
+                        image.alt = 'Question diagram';
+                        image.className = 'img-fluid rounded border shadow-sm m-1';
+                        image.style.maxHeight = '320px';
+                        diagramBox.appendChild(image);
+                    });
+                }
+                const visible = show && diagramBox.childElementCount > 0;
+                diagramBox.classList.toggle('d-none', !visible);
+                sourceToggle.setAttribute('aria-expanded', String(visible));
+                sourceToggle.textContent = visible ? 'Hide original regions' : 'Missing part? View original regions';
+            }
+
             // 2. Render Target Question
             function renderQuestion(index) {
                 if (index < 0 || index >= questions.length) return;
                 currentIndex = index;
                 const q = questions[currentIndex];
+                const renderVersion = ++questionRenderVersion;
                 questionStartTime = Date.now();
 
                 // Mark current question as visited
@@ -662,6 +709,12 @@
                 // since it is optional and may be inaccurate.
                 const cropUrls = q.crop_urls || [];
                 const imageFirst = !!q.image_first && cropUrls.length > 0;
+                const hasSources = (q.source_images || []).length > 0 || (q.image_urls || []).length > 0;
+                cropInstruction.textContent = 'Tap the image to zoom. Choose your answer below.';
+                sourceToggle.classList.toggle('d-none', !imageFirst || !hasSources);
+                // In text mode the original regions remain visible as before.
+                // In image-first mode they are available on demand, not repeated.
+                setSourceVisibility(q, !imageFirst);
                 cropBox.replaceChildren();
                 if (imageFirst) {
                     cropUrls.forEach(url => {
@@ -670,9 +723,22 @@
                         trigger.className = 'crop-zoom-trigger mb-2';
                         trigger.setAttribute('aria-label', 'Zoom original question from the PDF');
                         const image = document.createElement('img');
-                        image.src = url;
                         image.alt = 'Original question from the PDF';
                         image.className = 'img-fluid rounded border shadow-sm d-block';
+                        image.addEventListener('error', () => {
+                            // Ignore a late image failure from a question the user
+                            // has already left; never change another question's UI.
+                            if (questionRenderVersion !== renderVersion) return;
+                            trigger.remove();
+                            cropBox.classList.toggle('d-none', !cropBox.childElementCount);
+                            cropInstruction.textContent = hasSources
+                                ? 'An original image could not be loaded. Showing available text and source regions.'
+                                : 'An original image could not be loaded. Showing available text.';
+                            statementBox.classList.remove('d-none');
+                            ocrTextToggle.textContent = 'Hide extracted text';
+                            setSourceVisibility(q, true);
+                        });
+                        image.src = url;
                         trigger.appendChild(image);
                         trigger.addEventListener('click', () => openCropZoom(url, trigger));
                         cropBox.appendChild(trigger);
@@ -686,38 +752,7 @@
                 statementBox.style.whiteSpace = 'pre-line';
                 renderKaTeX(statementBox);
                 statementBox.classList.toggle('d-none', imageFirst && !ocrTextForced);
-
-                // Source snapshots may contain continuations, tables or another
-                // language outside the primary crop. Keep their labels and show
-                // them even in image-first mode; avoid duplicating diagrams that
-                // are already inside the primary crop.
-                diagramBox.replaceChildren();
-                (q.source_images || []).forEach(source => {
-                    const label = ({'stem-source': 'Original question region', 'table-source': 'Original table region', 'parallel-source': 'Other original-language region', 'option-source': 'Original answer choices'})[source.kind] || 'Original question region';
-                    const figure = document.createElement('figure');
-                    figure.className = 'd-inline-block align-top m-1';
-                    const image = document.createElement('img');
-                    image.src = source.url;
-                    image.alt = label;
-                    image.className = 'img-fluid rounded border shadow-sm d-block';
-                    image.style.maxHeight = '320px';
-                    const caption = document.createElement('figcaption');
-                    caption.className = 'small text-muted mt-1';
-                    caption.textContent = label + (source.kind === 'parallel-source' || source.kind === 'option-source' ? ' — printed order (1=A, 2=B, etc.)' : '');
-                    figure.append(image, caption);
-                    diagramBox.appendChild(figure);
-                });
-                if (!imageFirst) {
-                    (q.image_urls || []).forEach(url => {
-                        const image = document.createElement('img');
-                        image.src = url;
-                        image.alt = 'Question diagram';
-                        image.className = 'img-fluid rounded border shadow-sm m-1';
-                        image.style.maxHeight = '320px';
-                        diagramBox.appendChild(image);
-                    });
-                }
-                diagramBox.classList.toggle('d-none', !diagramBox.childElementCount);
+                ocrTextToggle.textContent = ocrTextForced ? 'Hide extracted text' : 'Show extracted text';
 
                 // Render MCQ Options
                 optionsContainer.innerHTML = '';
