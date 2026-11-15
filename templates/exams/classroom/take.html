@@ -1,0 +1,33 @@
+{% extends 'dashboard_base.html' %}
+{% block title %}{{ exam.title }} | {{ PLATFORM_NAME }}{% endblock %}
+{% block dashboard_content %}
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+    <div class="card border shadow-sm rounded-4 mt-3">
+      <div class="card-body p-4 p-md-5">
+        <span class="badge bg-light text-dark border mb-2">Classroom test · code {{ session.code }}</span>
+        <h2 class="fw-bold">{{ exam.title }}</h2>
+        <p class="text-muted">{{ exam.description }}</p>
+        <div class="row g-3 my-3">
+          <div class="col-6 col-md-3"><div class="bg-light rounded-3 p-3 text-center"><div class="small text-muted">Duration</div><div class="fw-bold">{{ exam.duration_minutes }} min</div></div></div>
+          <div class="col-6 col-md-3"><div class="bg-light rounded-3 p-3 text-center"><div class="small text-muted">Questions</div><div class="fw-bold">{{ exam.exam_questions.count }}</div></div></div>
+          <div class="col-6 col-md-3"><div class="bg-light rounded-3 p-3 text-center"><div class="small text-muted">+ Marks</div><div class="fw-bold">{{ exam.default_positive_marks }}</div></div></div>
+          <div class="col-6 col-md-3"><div class="bg-light rounded-3 p-3 text-center"><div class="small text-muted">− Marks</div><div class="fw-bold">{{ exam.default_negative_marks }}</div></div></div>
+        </div>
+        <div class="alert alert-info small">Your timer starts when you click Start and keeps running on the server — refreshing or reconnecting resumes the same attempt and the same time. Only questions with a teacher-confirmed answer key are scored.</div>
+
+        {% if completed and not session.allow_retakes %}
+          <div class="alert alert-secondary">You have already completed this test. {% with last=completed.first %}<a href="{% url 'exams:exam_completed' last.attempt_uuid %}">View your submission</a>.{% endwith %}</div>
+        {% elif can_start %}
+          <form method="post" action="{% url 'exams:classroom_take' session.pk %}">{% csrf_token %}
+            <button class="btn btn-primary btn-lg fw-bold w-100"><i class="bi bi-play-circle me-1"></i> Start test</button>
+          </form>
+          {% if completed and session.allow_retakes %}<p class="small text-muted mt-2">Retakes are allowed; your best graded attempt is ranked.</p>{% endif %}
+        {% else %}
+          <div class="alert alert-warning">This session is not accepting attempts right now.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

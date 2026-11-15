@@ -1,0 +1,38 @@
+{% extends 'dashboard_base.html' %}
+{% block title %}Leaderboard · {{ session.exam.title }} | {{ PLATFORM_NAME }}{% endblock %}
+{% block dashboard_content %}
+<div class="d-flex justify-content-between align-items-center pb-3 mb-4 border-bottom">
+  <div>
+    {% if is_owner %}<a href="{% url 'exams:classroom_session' session.pk %}" class="small text-decoration-none">← Live session</a>{% endif %}
+    <h2 class="fw-bold mb-0 mt-1"><i class="bi bi-trophy text-warning me-2"></i>Leaderboard</h2>
+    <p class="text-muted mb-0">{{ session.exam.title }} · code {{ session.code }}</p>
+  </div>
+</div>
+
+<div class="alert alert-light border small">Only graded attempts (with teacher-confirmed keys) are ranked. Ties are broken by fewer incorrect answers, then faster completion. Attempts still awaiting a key are not ranked.</div>
+
+<div class="card border shadow-sm rounded-4">
+  <div class="card-body p-3">
+    <div class="table-responsive">
+      <table class="table align-middle mb-0">
+        <thead><tr><th>#</th><th>Student</th><th class="text-end">Score</th><th class="text-end">Correct</th><th class="text-end">Incorrect</th><th class="text-end">%</th>{% if is_owner %}<th></th>{% endif %}</tr></thead>
+        <tbody>
+          {% for r in leaderboard %}
+          <tr>
+            <td class="fw-bold">{{ r.rank }}</td>
+            <td>{{ r.name }}{% if is_owner %}<div class="small text-muted">{{ r.username }}</div>{% endif %}</td>
+            <td class="text-end fw-semibold">{{ r.score }}</td>
+            <td class="text-end">{{ r.correct }}</td>
+            <td class="text-end">{{ r.incorrect }}</td>
+            <td class="text-end">{{ r.percentage }}%</td>
+            {% if is_owner %}<td class="text-end"><a class="small" href="{% url 'exams:student_result_detail' r.attempt_uuid %}">View</a></td>{% endif %}
+          </tr>
+          {% empty %}
+          <tr><td colspan="{% if is_owner %}7{% else %}6{% endif %}" class="text-center text-muted py-4">No graded results yet. Results appear here once students submit and keys are confirmed.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

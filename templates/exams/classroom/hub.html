@@ -1,0 +1,79 @@
+{% extends 'dashboard_base.html' %}
+{% block title %}Classroom Tests | {{ PLATFORM_NAME }}{% endblock %}
+{% block dashboard_content %}
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom">
+  <div>
+    <h2 class="fw-bold mb-1"><i class="bi bi-easel2 me-2 text-primary"></i>Classroom Tests</h2>
+    <p class="text-muted mb-0">Run any of your published tests as a live, join-code session for your class.</p>
+  </div>
+  <a href="{% url 'questions:paper_upload' %}" class="btn btn-primary mt-3 mt-md-0"><i class="bi bi-plus-lg me-1"></i> Create Test from PDF</a>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-6">
+    <div class="card border shadow-sm rounded-4 h-100">
+      <div class="card-body p-4">
+        <h5 class="fw-bold mb-3"><i class="bi bi-rocket-takeoff me-2 text-success"></i>Start a classroom session</h5>
+        {% if exams %}
+        <form method="post" action="{% url 'exams:classroom_session_create' %}" class="vstack gap-3">
+          {% csrf_token %}
+          <div>
+            <label class="form-label fw-semibold small" for="exam-select">Choose one of your published tests</label>
+            <select class="form-select" id="exam-select" name="exam" required>
+              {% for exam in exams %}
+                <option value="{{ exam.pk }}" {% if exam.status != 'published' %}disabled{% endif %}>
+                  {{ exam.title }}{% if exam.status != 'published' %} (draft — publish first){% endif %}
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="form-label fw-semibold small" for="label">Session label (optional)</label>
+            <input type="text" class="form-control" id="label" name="label" maxlength="120" placeholder="e.g. Class 10-B, Monday">
+          </div>
+          <div class="form-check"><input class="form-check-input" type="checkbox" id="retakes" name="allow_retakes">
+            <label class="form-check-label small" for="retakes">Allow retakes (best graded attempt is ranked)</label></div>
+          <div class="form-check"><input class="form-check-input" type="checkbox" id="show-lb" name="show_leaderboard_to_students">
+            <label class="form-check-label small" for="show-lb">Let students see the leaderboard</label></div>
+          <button class="btn btn-success fw-bold"><i class="bi bi-qr-code me-1"></i> Create session &amp; join code</button>
+        </form>
+        {% else %}
+        <p class="text-muted">You have no tests yet. <a href="{% url 'questions:paper_upload' %}">Create one from a PDF</a> and publish it, then start a session here.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card border shadow-sm rounded-4 h-100">
+      <div class="card-body p-4">
+        <h5 class="fw-bold mb-3"><i class="bi bi-broadcast me-2 text-danger"></i>My sessions</h5>
+        {% if session_rows %}
+        <div class="vstack gap-2">
+          {% for row in session_rows %}
+          <a href="{% url 'exams:classroom_session' row.session.pk %}" class="text-decoration-none">
+            <div class="d-flex justify-content-between align-items-center border rounded-3 p-3 bg-white">
+              <div class="overflow-hidden">
+                <div class="fw-semibold text-dark text-truncate">{{ row.session.exam.title }}</div>
+                <div class="small text-muted">{{ row.session.label|default:"" }}
+                  <span class="badge bg-light text-dark border ms-1">Code {{ row.session.code }}</span>
+                  {% if row.session.is_ended %}<span class="badge bg-secondary">Ended</span>
+                  {% elif row.session.is_open %}<span class="badge bg-success">Open</span>
+                  {% else %}<span class="badge bg-warning text-dark">Closed</span>{% endif %}
+                </div>
+              </div>
+              <div class="text-end small text-muted">
+                <div><strong>{{ row.counts.joined }}</strong> joined · <strong>{{ row.counts.submitted }}</strong> submitted</div>
+              </div>
+            </div>
+          </a>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">No sessions yet. Create one on the left to get a join code.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

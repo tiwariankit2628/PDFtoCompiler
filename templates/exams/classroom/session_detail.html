@@ -1,0 +1,127 @@
+{% extends 'dashboard_base.html' %}
+{% block title %}Live Session {{ session.code }} | {{ PLATFORM_NAME }}{% endblock %}
+{% block dashboard_content %}
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom">
+  <div>
+    <a href="{% url 'exams:classroom_hub' %}" class="small text-decoration-none">← Classroom</a>
+    <h2 class="fw-bold mb-0 mt-1">{{ session.exam.title }}</h2>
+    <p class="text-muted mb-0">{{ session.label }}
+      {% if session.is_ended %}<span class="badge bg-secondary">Ended</span>
+      {% elif session.is_open %}<span class="badge bg-success">Joining open</span>
+      {% else %}<span class="badge bg-warning text-dark">Joining closed</span>{% endif %}
+    </p>
+  </div>
+</div>
+
+<div class="row g-4">
+  <!-- Join code card -->
+  <div class="col-lg-4">
+    <div class="card border shadow-sm rounded-4">
+      <div class="card-body p-4 text-center">
+        <div class="small text-uppercase text-muted fw-bold mb-1">Join code</div>
+        <div class="display-5 fw-bold" style="letter-spacing:.15em" id="join-code">{{ session.code }}</div>
+        <div class="d-flex justify-content-center gap-2 my-3">
+          <button class="btn btn-sm btn-primary" type="button" onclick="copyText('{{ session.code }}', this)"><i class="bi bi-clipboard me-1"></i>Copy code</button>
+          <button class="btn btn-sm btn-outline-secondary" type="button" onclick="copyText('{{ join_url }}', this)"><i class="bi bi-link-45deg me-1"></i>Copy link</button>
+        </div>
+        <img src="{% url 'exams:classroom_qr' session.pk %}" alt="Join QR code" class="img-fluid mx-auto d-block" style="max-width:180px"
+             onerror="this.style.display='none';document.getElementById('qr-missing').style.display='block';">
+        <div id="qr-missing" class="small text-muted" style="display:none">QR codes need the optional <code>segno</code> package. Share the code or link instead.</div>
+        <div class="small text-muted mt-2">Students join at <br><span class="text-break">{{ join_url }}</span></div>
+      </div>
+    </div>
+
+    <!-- Controls -->
+    <div class="card border shadow-sm rounded-4 mt-3">
+      <div class="card-body p-3">
+        <h6 class="fw-bold mb-3">Controls</h6>
+        <form method="post" action="{% url 'exams:classroom_control' session.pk %}" class="d-flex flex-wrap gap-2">{% csrf_token %}
+          {% if session.is_open %}<button name="action" value="close" class="btn btn-sm btn-outline-warning">Close joining</button>
+          {% else %}<button name="action" value="open" class="btn btn-sm btn-outline-success" {% if session.is_ended %}disabled{% endif %}>Open joining</button>{% endif %}
+          <button name="action" value="regenerate" class="btn btn-sm btn-outline-secondary" {% if session.is_ended %}disabled{% endif %}>New code</button>
+        </form>
+        <form method="post" action="{% url 'exams:classroom_control' session.pk %}" class="mt-2"
+              onsubmit="return confirm('End the session now? In-progress attempts will be submitted and scored (saved answers kept). This cannot be undone.');">{% csrf_token %}
+          <input type="hidden" name="action" value="end"><input type="hidden" name="confirm" value="yes">
+          <button class="btn btn-sm btn-outline-danger w-100" {% if session.is_ended %}disabled{% endif %}><i class="bi bi-stop-circle me-1"></i>End test now</button>
+        </form>
+        <div class="d-flex gap-2 mt-3">
+          <a href="{% url 'exams:classroom_leaderboard' session.pk %}" class="btn btn-sm btn-outline-primary"><i class="bi bi-trophy me-1"></i>Leaderboard</a>
+          <a href="{% url 'exams:classroom_export' session.pk %}" class="btn btn-sm btn-outline-primary"><i class="bi bi-download me-1"></i>Export CSV</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Live monitoring -->
+  <div class="col-lg-8">
+    <div class="row g-2 mb-3" id="count-cards">
+      <div class="col-6 col-md-3"><div class="card border-0 shadow-sm rounded-4 text-center p-3"><div class="small text-muted">Joined</div><div class="h3 fw-bold mb-0" data-count="joined">{{ counts.joined }}</div></div></div>
+      <div class="col-6 col-md-3"><div class="card border-0 shadow-sm rounded-4 text-center p-3 border-start border-4 border-info"><div class="small text-muted">Started</div><div class="h3 fw-bold mb-0" data-count="started">{{ counts.started }}</div></div></div>
+      <div class="col-6 col-md-3"><div class="card border-0 shadow-sm rounded-4 text-center p-3 border-start border-4 border-success"><div class="small text-muted">Submitted</div><div class="h3 fw-bold mb-0" data-count="submitted">{{ counts.submitted }}</div></div></div>
+      <div class="col-6 col-md-3"><div class="card border-0 shadow-sm rounded-4 text-center p-3 border-start border-4 border-warning"><div class="small text-muted">Timed out</div><div class="h3 fw-bold mb-0" data-count="timed_out">{{ counts.timed_out }}</div></div></div>
+    </div>
+    <div class="small text-muted mb-2"><span id="live-dot" class="badge bg-success">● live</span> Auto-refreshing. “Joined”, “started”, “submitted” and “timed out” are distinct, server-truthful counts.</div>
+
+    <div class="card border shadow-sm rounded-4">
+      <div class="card-body p-3">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <h6 class="fw-bold mb-0">Participants (<span data-count="joined">{{ counts.joined }}</span>)</h6>
+          <input type="search" id="participant-filter" class="form-control form-control-sm w-auto" placeholder="Filter by name…">
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead><tr><th>Student</th><th>Status</th><th>Started</th><th>Submitted</th><th class="text-end">Score</th><th></th></tr></thead>
+            <tbody id="participant-body">
+              {% for r in rows %}
+              <tr data-name="{{ r.name|lower }} {{ r.username|lower }}">
+                <td><div class="fw-semibold">{{ r.name }}</div><div class="small text-muted">{{ r.username }}</div></td>
+                <td><span class="badge bg-light text-dark border text-capitalize">{{ r.status }}</span></td>
+                <td class="small">{{ r.started_at|date:"H:i:s"|default:"—" }}</td>
+                <td class="small">{{ r.submitted_at|date:"H:i:s"|default:"—" }}</td>
+                <td class="text-end">{% if r.score != None %}{{ r.score }}{% else %}<span class="text-muted small">—</span>{% endif %}</td>
+                <td class="text-end">{% if r.attempt_uuid %}<a class="small" href="{% url 'exams:student_result_detail' r.attempt_uuid %}">View</a>{% endif %}</td>
+              </tr>
+              {% empty %}
+              <tr><td colspan="6" class="text-center text-muted py-3">No students have joined yet. Share the code above.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% if page_obj.paginator.num_pages > 1 %}
+        <nav class="mt-2"><ul class="pagination pagination-sm mb-0">
+          {% if page_obj.has_previous %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}">Prev</a></li>{% endif %}
+          <li class="page-item disabled"><span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
+          {% if page_obj.has_next %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a></li>{% endif %}
+        </ul></nav>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function copyText(text, btn){ navigator.clipboard.writeText(text).then(()=>{ const o=btn.innerHTML; btn.innerHTML='<i class="bi bi-check2 me-1"></i>Copied'; setTimeout(()=>btn.innerHTML=o,1500); }).catch(()=>{}); }
+(function(){
+  const monitorUrl = "{% url 'exams:classroom_monitor' session.pk %}";
+  const filter = document.getElementById('participant-filter');
+  filter && filter.addEventListener('input', () => {
+    const q = filter.value.toLowerCase();
+    document.querySelectorAll('#participant-body tr[data-name]').forEach(tr => {
+      tr.style.display = tr.dataset.name.includes(q) ? '' : 'none';
+    });
+  });
+  async function poll(){
+    try {
+      const r = await fetch(monitorUrl + (new URL(location.href)).search, {headers:{'X-Requested-With':'XMLHttpRequest'}});
+      if(!r.ok) return;
+      const d = await r.json();
+      Object.entries(d.counts).forEach(([k,v]) => document.querySelectorAll(`[data-count="${k}"]`).forEach(el => el.textContent = v));
+      const dot = document.getElementById('live-dot');
+      if(d.is_ended){ dot.className='badge bg-secondary'; dot.textContent='● ended'; }
+    } catch(e){}
+  }
+  setInterval(poll, 5000);
+})();
+</script>
+{% endblock %}
