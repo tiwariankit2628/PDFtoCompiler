@@ -167,6 +167,18 @@ document.addEventListener("DOMContentLoaded", function() {
                 {% if q.is_flagged %}
                     <span class="badge bg-danger" title="{{ q.flag_reason }}"><i class="bi bi-flag-fill me-1"></i> Flagged: {{ q.flag_reason }}</span>
                 {% endif %}
+                {% if q.detected_type and q.detected_type != 'mcq_single' %}
+                    <span class="badge bg-info text-dark" title="Heuristically detected; verify before approval."><i class="bi bi-info-circle me-1"></i> {{ q.get_detected_type_display }}</span>
+                {% endif %}
+                {% if q.needs_source %}
+                    <span class="badge bg-warning text-dark" title="Stacked maths or complex layout; open the source excerpt in Edit."><i class="bi bi-image me-1"></i> Check source</span>
+                {% endif %}
+                {% if q.is_image_first %}
+                    <span class="badge bg-primary" title="Shown to students as the original-PDF crop with A/B/C/D buttons."><i class="bi bi-card-image me-1"></i> Image-first</span>
+                {% endif %}
+                {% if q.crop_warning %}
+                    <span class="badge bg-warning text-dark" title="{{ q.crop_warning }}"><i class="bi bi-exclamation-triangle me-1"></i> Crop may show an answer</span>
+                {% endif %}
             </div>
 
             <div class="d-flex align-items-center gap-2">

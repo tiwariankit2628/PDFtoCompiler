@@ -1,45 +1,18 @@
 {% extends 'dashboard_base.html' %}
 {% block title %}Create PDF practice | {{ PLATFORM_NAME }}{% endblock %}
 {% block dashboard_content %}
-<style>#cloud-consent-field[hidden], [data-mode-error][hidden], [data-consent-error][hidden], [data-cloud-page-error][hidden] { display:none !important; }</style>
 <a href="{% url 'questions:practice_list' %}" class="small text-decoration-none">← My PDF practice</a>
 <div class="card border shadow-sm p-4 p-md-5 mt-3" style="max-width: 760px;">
   <h2 class="fw-bold">Turn a PDF into practice</h2>
   <p class="text-muted">Upload a question paper, review the extracted questions and diagrams, then choose your test duration.</p>
-  <div class="alert alert-info small"><strong>Local (default):</strong> no PDF is sent to external providers. Digital text works best; scans require OCR on the server. All extraction can be incomplete or inaccurate.</div>
-  <div class="alert alert-warning small">
-    <p class="mb-2"><strong>Gemini only (lower-cost cloud):</strong> locally extracted text and page images go to Google Gemini, not Mathpix. The configured model and token usage determine charges; missing scanned or vector diagrams may need manual cropping.</p>
-    <p class="mb-2"><strong>Mathpix + Gemini:</strong> the PDF goes to Mathpix and its OCR text and page images to Google Gemini. Both may charge; Mathpix deletion is requested, but provider retention, caches and metadata may persist.</p>
-    <p class="mb-0">Cloud methods require server configuration and your consent. Google’s unpaid and paid tiers can have different data-use terms; do not send sensitive information to an unpaid service. Review <a href="https://mathpix.com/pricing/api" target="_blank" rel="noopener">Mathpix pricing</a>, <a href="https://docs.mathpix.com/concepts/data-retention" target="_blank" rel="noopener">Mathpix retention</a>, <a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank" rel="noopener">Gemini pricing</a> and <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener">Google terms</a>.</p>
-  </div>
+  <div class="alert alert-info small"><strong>Local extraction only:</strong> your PDF stays on this server and is never sent to external providers. Extraction can be incomplete or inaccurate, so review every question before you start.</div>
   <form method="post" enctype="multipart/form-data" novalidate>{% csrf_token %}
     {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors|striptags }}</div>{% endif %}
-    {% for field in form %}<div class="mb-3 {% if field.field.widget.input_type == 'checkbox' %}form-check{% endif %}" {% if field.name == 'cloud_consent' %}id="cloud-consent-field"{% endif %}>
-      {% if field.field.widget.input_type == 'checkbox' %}{{ field }}<label class="form-check-label" for="{{ field.id_for_label }}">{{ field.label }}</label>{% else %}<label class="form-label fw-semibold" for="{{ field.id_for_label }}">{{ field.label }}{% if field.field.required %} *{% endif %}</label>{{ field }}{% endif %}
-      {% for error in field.errors %}<div class="text-danger small mt-1" {% if field.name == 'extraction_mode' %}data-mode-error{% elif field.name == 'cloud_consent' %}data-consent-error{% elif field.name == 'pdf_file' and 'Cloud extraction is limited to' in error %}data-cloud-page-error{% endif %}>{{ error }}</div>{% endfor %}</div>{% endfor %}
-    <p class="small text-muted" id="method-changed-note" hidden role="status">Extraction method changed. It will be checked when you upload again; please reselect the PDF if needed.</p>
+    {% for field in form %}<div class="mb-3 {% if field.field.widget.input_type == 'checkbox' %}form-check{% endif %}">
+      {% if field.field.widget.input_type == 'checkbox' %}{{ field }}<label class="form-check-label" for="{{ field.id_for_label }}">{{ field.label }}</label>{% if field.help_text %}<small class="text-muted d-block">{{ field.help_text }}</small>{% endif %}{% else %}<label class="form-label fw-semibold" for="{{ field.id_for_label }}">{{ field.label }}{% if field.field.required %} *{% endif %}</label>{{ field }}{% if field.help_text %}<small class="text-muted d-block mt-1">{{ field.help_text }}</small>{% endif %}{% endif %}
+      {% for error in field.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}</div>{% endfor %}
     <p class="small text-muted">PDF only · up to 25 MB and {{ max_pages }} pages · no password-protected PDFs. If a submission fails, select the PDF again.</p>
     <button class="btn btn-primary px-4"><i class="bi bi-file-earmark-arrow-up me-1"></i> Upload & extract</button>
   </form>
 </div>
-<script>
-(() => {
-  const mode = document.getElementById('id_extraction_mode');
-  const consent = document.getElementById('id_cloud_consent');
-  const consentField = document.getElementById('cloud-consent-field');
-  if (!mode || !consent || !consentField) return;
-  const submittedMode = mode.value;
-  const update = () => {
-    const isCloud = mode.value !== 'local' && mode.value !== '';
-    consentField.hidden = !isCloud;
-    document.querySelectorAll('[data-mode-error]').forEach((el) => { el.hidden = mode.value !== submittedMode; });
-    document.querySelectorAll('[data-consent-error]').forEach((el) => { el.hidden = !isCloud || consent.checked; });
-    document.querySelectorAll('[data-cloud-page-error]').forEach((el) => { el.hidden = !isCloud; });
-    document.getElementById('method-changed-note').hidden = mode.value === submittedMode;
-  };
-  mode.addEventListener('change', update);
-  consent.addEventListener('change', update);
-  update();
-})();
-</script>
 {% endblock %}

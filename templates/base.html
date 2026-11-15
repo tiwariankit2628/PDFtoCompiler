@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="X-UA-Compatible" content="ie=edge">
-    <title>{% block title %}{{ PLATFORM_NAME }}{% endblock %} | Online CBT Examination System</title>
+    <title>{% block title %}{{ PLATFORM_NAME }}{% endblock %} | {{ PLATFORM_NAME }}</title>
     
     {# Manifest storage rewrites these local assets; upstream pre-collection SRI hashes would block them. #}
     <!-- Bootstrap 5.3 CSS -->
@@ -26,10 +26,9 @@
     <!-- Main Navigation Bar -->
     <nav class="navbar navbar-expand-lg navbar-cbt sticky-top">
         <div class="container">
-            <a class="navbar-brand d-flex align-items-center fw-bold text-dark text-decoration-none" href="{% url 'core:home' %}">
-                <i class="bi bi-shield-check text-primary fs-3 me-2"></i>
+            <a class="navbar-brand d-flex align-items-center fw-bold text-decoration-none gap-2" href="{% url 'core:home' %}">
+                <span class="brand-mark" aria-hidden="true"><i class="bi bi-fire"></i></span>
                 <span class="navbar-brand-name">{{ PLATFORM_NAME }}</span>
-                <span class="ms-2 navbar-brand-badge">CBT Engine</span>
             </a>
 
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#cbtNavbar" aria-controls="cbtNavbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -39,16 +38,7 @@
             <div class="collapse navbar-collapse" id="cbtNavbar">
                 <ul class="navbar-nav me-auto mb-2 mb-lg-0 ms-lg-4">
                     <li class="nav-item">
-                        <a class="nav-link text-secondary fw-medium" href="{% url 'core:home' %}#categories">Exam Categories</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link text-secondary fw-medium" href="{% url 'core:home' %}#features">CBT Engine</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link text-secondary fw-medium" href="{% url 'core:about' %}">Architecture</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link text-secondary fw-medium" href="{% url 'core:contact' %}">Contact</a>
+                        <a class="nav-link fw-medium" href="{% url 'core:contact' %}">Contact</a>
                     </li>
                 </ul>
 
@@ -56,7 +46,7 @@
                     {% if user.is_authenticated %}
                         <div class="dropdown navbar-account">
                             <button class="btn btn-cbt-outline dropdown-toggle d-flex align-items-center gap-2 navbar-account-toggle" type="button" id="userMenuButton" data-bs-toggle="dropdown" aria-expanded="false">
-                                <i class="bi bi-person-circle fs-5 text-primary"></i>
+                                <i class="bi bi-person-circle fs-5 text-coral"></i>
                                 <span class="navbar-account-name" title="{{ user.first_name|default:user.username }}">{{ user.first_name|default:user.username }}</span>
                                 <span class="badge rounded-pill text-bg-light border text-uppercase navbar-role-badge" title="{{ user.get_role_display }}" style="font-size: 0.68rem;">{{ user.get_role_display }}</span>
                             </button>
@@ -95,37 +85,35 @@
         <div class="container">
             <div class="row g-4">
                 <div class="col-lg-4">
-                    <div class="d-flex align-items-center mb-3 text-white fw-bold fs-5">
-                        <i class="bi bi-shield-check text-primary fs-3 me-2"></i>
+                    <div class="d-flex align-items-center mb-3 text-white fw-bold fs-5 gap-2">
+                        <span class="brand-mark" aria-hidden="true"><i class="bi bi-fire"></i></span>
                         <span>{{ PLATFORM_NAME }}</span>
                     </div>
-                    <p class="small text-secondary mb-3">
+                    <p class="small mb-3" style="color:#c9bdb0;">
                         {{ PLATFORM_TAGLINE }}. Designed for high-stakes entrance exams, government recruitment, institutional assessments, and customized mock tests.
                     </p>
-                    <div class="d-flex gap-3 text-secondary">
-                        <span class="badge text-bg-secondary"><i class="bi bi-shield-lock me-1"></i> Anti-Cheat Safe</span>
-                        <span class="badge text-bg-secondary"><i class="bi bi-lightning-charge me-1"></i> Real-time Recovery</span>
+                    <div class="d-flex flex-wrap gap-2">
+                        <span class="badge" style="background:#332a24;color:#e5d9cb;"><i class="bi bi-shield-lock me-1"></i> Anti-Cheat Safe</span>
+                        <span class="badge" style="background:#332a24;color:#e5d9cb;"><i class="bi bi-lightning-charge me-1"></i> Real-time Recovery</span>
                     </div>
                 </div>
 
                 <div class="col-6 col-lg-2 offset-lg-1">
-                    <h6 class="text-white fw-bold mb-3">Examination Types</h6>
+                    <h6 class="fw-bold mb-3">Product</h6>
                     <ul class="list-unstyled small">
-                        <li class="mb-2"><a href="{% url 'core:home' %}#categories">Competitive Exams</a></li>
-                        <li class="mb-2"><a href="{% url 'core:home' %}#categories">JEE & NEET Medical</a></li>
-                        <li class="mb-2"><a href="{% url 'core:home' %}#categories">Government Jobs</a></li>
-                        <li class="mb-2"><a href="{% url 'core:home' %}#categories">Coding Assessments</a></li>
-                        <li class="mb-2"><a href="{% url 'core:home' %}#categories">School & College Tests</a></li>
+                        <li class="mb-2"><a href="{% url 'core:home' %}">Home</a></li>
+                        <li class="mb-2"><a href="{% url 'core:home' %}#features">CBT Engine</a></li>
+                        <li class="mb-2"><a href="{% url 'core:home' %}#features">PDF Compiler</a></li>
+                        <li class="mb-2"><a href="{% url 'accounts:register' %}">Create Account</a></li>
                     </ul>
                 </div>
 
                 <div class="col-6 col-lg-2">
-                    <h6 class="text-white fw-bold mb-3">Platform</h6>
+                    <h6 class="fw-bold mb-3">Access</h6>
                     <ul class="list-unstyled small">
-                        <li class="mb-2"><a href="{% url 'core:about' %}">Architecture & Design</a></li>
-                        <li class="mb-2"><a href="{% url 'core:home' %}#features">PDF Test Compiler</a></li>
-                        <li class="mb-2"><a href="{% url 'core:home' %}#engine">CBT Examination Engine</a></li>
-                        <li class="mb-2"><a href="{% url 'accounts:login' %}">Student Portal</a></li>
+                        <li class="mb-2"><a href="{% url 'accounts:login' %}">Sign In</a></li>
+                        <li class="mb-2"><a href="{% url 'accounts:register' %}">Student Registration</a></li>
+                        <li class="mb-2"><a href="{% url 'accounts:register' %}">Teacher Registration</a></li>
                         <li class="mb-2"><a href="{% url 'core:contact' %}">Contact & Inquiries</a></li>
                     </ul>
                 </div>

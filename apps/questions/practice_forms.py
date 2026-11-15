@@ -9,7 +9,11 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 
-from .forms import BootstrapFormMixin
+from .forms import (
+    BootstrapFormMixin,
+    clean_local_extraction_mode,
+    local_extraction_field,
+)
 from .models import QuestionPaperUpload
 from .structured_forms import add_tables_editor, clean_tables_editor
 
@@ -18,14 +22,14 @@ class PracticeUploadForm(BootstrapFormMixin, forms.Form):
     title = forms.CharField(max_length=255, label="Practice test title")
     subject = forms.CharField(max_length=150, required=False)
     pdf_file = forms.FileField(label="Question paper PDF", widget=forms.ClearableFileInput(attrs={"accept": ".pdf,application/pdf"}))
-    extraction_mode = forms.ChoiceField(
-        label="Extraction method", choices=QuestionPaperUpload.ExtractionMode.choices,
-        initial=QuestionPaperUpload.ExtractionMode.LOCAL, required=False,
+    image_first = forms.BooleanField(
+        required=False, initial=True, label="Image-first (take the test on the original PDF image)",
+        help_text="Recommended. Each question shows the original PDF crop with A/B/C/D buttons below — no retyping.",
     )
-    cloud_consent = forms.BooleanField(
-        required=False,
-        label="I consent to sending this paper's content to the provider(s) of my selected cloud method, and accept their terms and possible charges.",
-    )
+    extraction_mode = local_extraction_field()
+
+    def clean_extraction_mode(self):
+        return clean_local_extraction_mode(self.cleaned_data.get("extraction_mode"))
 
     def clean_pdf_file(self):
         upload = self.cleaned_data["pdf_file"]
@@ -49,17 +53,8 @@ class PracticeUploadForm(BootstrapFormMixin, forms.Form):
 
     def clean(self):
         cleaned = super().clean()
-        mode = cleaned.get("extraction_mode") or QuestionPaperUpload.ExtractionMode.LOCAL
-        cleaned["extraction_mode"] = mode
-        if mode in (QuestionPaperUpload.ExtractionMode.CLOUD, QuestionPaperUpload.ExtractionMode.GEMINI):
-            if not cleaned.get("cloud_consent"):
-                self.add_error("cloud_consent", "Explicit consent is required before sending a PDF to external providers.")
-            from .cloud_providers import cloud_is_configured, gemini_only_is_configured
-            configured = gemini_only_is_configured() if mode == QuestionPaperUpload.ExtractionMode.GEMINI else cloud_is_configured()
-            if not configured:
-                self.add_error("extraction_mode", "Cloud extraction is not configured for this method. Choose local extraction or ask your administrator.")
-            if getattr(self, "pdf_page_count", 0) > settings.PDF_CLOUD_MAX_PAGES:
-                self.add_error("pdf_file", f"Cloud extraction is limited to {settings.PDF_CLOUD_MAX_PAGES} pages.")
+        # Extraction is local-only here (enforced by clean_extraction_mode).
+        cleaned["extraction_mode"] = cleaned.get("extraction_mode") or QuestionPaperUpload.ExtractionMode.LOCAL
         return cleaned
 
 

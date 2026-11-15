@@ -9,7 +9,14 @@
             <!-- Submission Confirmation Card -->
             <div class="card border-0 shadow-sm rounded-4 text-center p-4 p-md-5 mb-4">
                 <div class="mb-3">
-                    {% if attempt.status == 'timed_out' %}
+                    {% if attempt.status == 'terminated' %}
+                        <div class="rounded-circle bg-danger bg-opacity-10 text-danger d-inline-flex align-items-center justify-content-center" style="width: 80px; height: 80px;">
+                            <i class="bi bi-shield-exclamation fs-1"></i>
+                        </div>
+                        <h2 class="fw-bold text-dark mt-3 mb-1">Attempt Ended for Security Review</h2>
+                        <span class="badge bg-danger px-3 py-1.5 fw-bold text-uppercase">Strict Exam Mode</span>
+                        <p class="text-secondary small mt-3 mb-0">Your attempt ended after the disclosed page-switch limit. <strong>Your saved answers were preserved and scored.</strong> This is a reported signal for your teacher to review, not a proof of cheating.</p>
+                    {% elif attempt.status == 'timed_out' %}
                         <div class="rounded-circle bg-warning bg-opacity-10 text-warning d-inline-flex align-items-center justify-content-center" style="width: 80px; height: 80px;">
                             <i class="bi bi-clock-history fs-1"></i>
                         </div>

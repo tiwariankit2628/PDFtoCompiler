@@ -147,18 +147,16 @@ class PracticeUploadView(PrivateStudentMixin, View):
         upload = form.cleaned_data["pdf_file"]
         try:
             with transaction.atomic():
-                cloud_mode = form.cleaned_data["extraction_mode"] in (
-                    QuestionPaperUpload.ExtractionMode.CLOUD, QuestionPaperUpload.ExtractionMode.GEMINI,
-                )
-                if cloud_mode:
-                    require_feature(request.user, "cloud_extraction")
+                # Private practice extraction is local-only; PDFs are never sent
+                # to external providers (enforced by the form's local-only mode).
                 consume(request.user, "pdf_uploads")
                 paper = QuestionPaperUpload.objects.create(
                     is_student_private=True, title=form.cleaned_data["title"],
                     subject=form.cleaned_data["subject"], category=_system_category(),
                     uploaded_by=request.user, private_pdf_file=upload, file_size_bytes=upload.size,
-                    total_pages=form.pdf_page_count, extraction_mode=form.cleaned_data["extraction_mode"],
-                    cloud_consent_at=timezone.now() if cloud_mode else None,
+                    total_pages=form.pdf_page_count,
+                    extraction_mode=QuestionPaperUpload.ExtractionMode.LOCAL,
+                    image_first=form.cleaned_data.get("image_first", True),
                 )
         except (QuotaExceeded, FeatureUnavailable) as exc:
             messages.error(request, str(exc))
@@ -169,9 +167,7 @@ class PracticeUploadView(PrivateStudentMixin, View):
             messages.warning(request, "Practice is busy. Please retry your upload.")
             return redirect("questions:practice_upload")
         log_audit(request.user, "PRIVATE_PDF_UPLOADED", f"Private paper {paper.pk} uploaded.", request=request)
-        task = extract_cloud_paper if paper.extraction_mode in (
-            QuestionPaperUpload.ExtractionMode.CLOUD, QuestionPaperUpload.ExtractionMode.GEMINI,
-        ) else extract_private_practice_paper
+        task = extract_private_practice_paper
         try:
             if settings.CELERY_TASK_ALWAYS_EAGER:
                 task(paper.pk)
@@ -239,14 +235,14 @@ class PracticeSettingsView(PrivateStudentMixin, View):
                 status=Exam.ExamStatus.PUBLISHED, is_free=True, max_attempts=0,
                 duration_minutes=form.cleaned_data["duration_minutes"],
                 total_marks=Decimal("0.00"), passing_percentage=form.cleaned_data["passing_percentage"] or Decimal("0.00"),
-                shuffle_questions=False, shuffle_options=False,
+                shuffle_questions=False, shuffle_options=False, image_first_mode=bool(paper.image_first),
                 show_result_immediately=True, allow_review_answers=True,
                 description="Private practice from your PDF. Only questions with a supplied answer key are graded.",
             )
             for position, staged in enumerate(included, 1):
                 correct = form.answer_keys.get(staged.question_number, staged.correct_option).upper()
                 bank = Question.objects.create(
-                    is_private_practice=True, key_verified=bool(correct),
+                    is_private_practice=True, key_verified=bool(correct), is_image_first=bool(staged.is_image_first),
                     answer_status=AnswerStatus.STUDENT_CONFIRMED if correct else AnswerStatus.NEEDS_REVIEW, category=paper.category, creator=request.user,
                     source_paper=paper, subject=paper.subject or "General",
                     question_text=staged.question_text, tables=staged.tables, source_regions=staged.source_regions, primary_image_region=staged.primary_image_region, explanation=staged.explanation,

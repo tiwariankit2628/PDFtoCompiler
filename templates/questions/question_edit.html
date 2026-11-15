@@ -34,7 +34,7 @@
 <div class="row justify-content-center">
     <div class="col-lg-9">
         <div class="card border shadow-sm rounded-4 p-4 mb-4">
-            {% if question.source_regions %}<details class="card border p-3 mb-3"><summary class="fw-semibold">Compare original question excerpts</summary><p class="small text-muted mt-2">Original PDF regions; continuations can span pages or columns.</p><div class="d-flex flex-wrap gap-2">{% for region in question.source_regions %}<figure><img loading="lazy" class="img-fluid border rounded" style="max-height:480px" src="{% url 'questions:source_region_image' question.pk forloop.counter0 %}" alt="Original question on page {{ region.page }}"><figcaption class="small text-muted">Page {{ region.page }}</figcaption></figure>{% endfor %}</div></details>{% endif %}
+            {% if question.source_regions %}<details class="card border p-3 mb-3 {% if question.needs_source %}border-warning{% endif %}" {% if question.needs_source %}open{% endif %}><summary class="fw-semibold">Compare original question excerpts{% if question.needs_source %} <span class="badge bg-warning text-dark ms-1">Check source — stacked maths/layout</span>{% endif %}</summary><p class="small text-muted mt-2">Original PDF regions; continuations can span pages or columns.</p><div class="d-flex flex-wrap gap-2">{% for region in question.source_regions %}<figure><img loading="lazy" class="img-fluid border rounded" style="max-height:480px" src="{% url 'questions:source_region_image' question.pk forloop.counter0 %}" alt="Original question on page {{ region.page }}"><figcaption class="small text-muted">Page {{ region.page }}</figcaption></figure>{% endfor %}</div></details>{% endif %}
 <form method="post" enctype="multipart/form-data">
                 {% csrf_token %}
 
@@ -64,6 +64,11 @@
                         <label class="form-label fw-semibold small" for="{{ form.correct_option.id_for_label }}">Correct Option (Key)</label>
                         {{ form.correct_option }}
                         <small class="text-muted d-block">e.g. A, B, C, or D</small>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label fw-semibold small" for="{{ form.detected_type.id_for_label }}">Detected Type</label>
+                        {{ form.detected_type }}
+                        <small class="text-muted d-block">Verify; never used for grading.</small>
                     </div>
 
                     <div class="col-12">

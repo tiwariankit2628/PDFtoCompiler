@@ -2,10 +2,24 @@ from django.urls import path
 from . import views
 from . import views_candidate
 from . import views_analytics
+from . import classroom
 
 app_name = "exams"
 
 urlpatterns = [
+    # Teacher-led classroom tests (join codes / live sessions). Listed before the
+    # <slug:slug> patterns so these static prefixes always resolve first.
+    path("classroom/", classroom.ClassroomHubView.as_view(), name="classroom_hub"),
+    path("classroom/sessions/create/", classroom.ClassroomSessionCreateView.as_view(), name="classroom_session_create"),
+    path("classroom/sessions/<int:pk>/", classroom.ClassroomSessionDetailView.as_view(), name="classroom_session"),
+    path("classroom/sessions/<int:pk>/monitor/", classroom.ClassroomSessionMonitorView.as_view(), name="classroom_monitor"),
+    path("classroom/sessions/<int:pk>/control/", classroom.ClassroomSessionControlView.as_view(), name="classroom_control"),
+    path("classroom/sessions/<int:pk>/qr/", classroom.ClassroomSessionQrView.as_view(), name="classroom_qr"),
+    path("classroom/sessions/<int:pk>/leaderboard/", classroom.ClassroomLeaderboardView.as_view(), name="classroom_leaderboard"),
+    path("classroom/sessions/<int:pk>/export/", classroom.ClassroomExportView.as_view(), name="classroom_export"),
+    path("classroom/join/", classroom.ClassroomJoinView.as_view(), name="classroom_join"),
+    path("classroom/take/<int:pk>/", classroom.ClassroomTakeView.as_view(), name="classroom_take"),
+
     # Candidate CBT Examination Interface
     path("catalog/", views_candidate.ExamCatalogView.as_view(), name="exam_catalog"),
     path("<slug:slug>/instructions/", views_candidate.ExamInstructionsView.as_view(), name="exam_instructions"),

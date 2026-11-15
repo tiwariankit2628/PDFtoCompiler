@@ -14,7 +14,7 @@ def _tokens(text):
     return Counter(re.findall(r"\w+|[^\w\s]", text, flags=re.UNICODE))
 
 
-def reorder_wrapped_options(page, segment, markers, options, textpage=None):
+def reorder_wrapped_options(page, segment, markers, options, textpage=None, normalize=None):
     """Return repaired option text by key, or {} if geometry is uncertain."""
     keys = [option.get("key") for option in options]
     if (len(keys) < 2 or len(markers) != len(keys)
@@ -60,7 +60,7 @@ def reorder_wrapped_options(page, segment, markers, options, textpage=None):
                 # "Both (2) and (3)" within an answer.
                 if any((box & label).get_area() >= box.get_area() * .65 for _, label in markers):
                     continue
-                per_key[key].append((box.y0, box.x0, word[4]))
+                per_key[key].append((box.y0, box.x0, normalize(word[4]) if normalize else word[4]))
                 if box.y0 > marker.y0 + 6:
                     continuation_columns.add(key)
     if not continuation_columns or any(not per_key[key] for key in keys):

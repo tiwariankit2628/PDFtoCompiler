@@ -226,10 +226,26 @@ CELERY_BEAT_SCHEDULE = {
 # ------------------------------------------------------------------------------
 TESSERACT_CMD = os.environ.get("TESSERACT_CMD", "")
 
+# Optional local MinerU backend (best local math/figure/table extraction).
+# MINERU_PYTHON must point at the Python interpreter of a SEPARATE virtualenv
+# with `mineru[torch]` installed; it is run as a subprocess so MinerU's heavy
+# dependencies never enter this app's environment. Empty => the MinerU mode is
+# unavailable. Parsing is fully local; no document is sent to any service.
+MINERU_PYTHON = os.environ.get("MINERU_PYTHON", "")
+MINERU_EFFORT = os.environ.get("MINERU_EFFORT", "medium")  # flash|medium (torch pipeline)
+MINERU_MODEL_SOURCE = os.environ.get("MINERU_MODEL_SOURCE", "huggingface")
+MINERU_MAX_PAGES = int(os.environ.get("MINERU_MAX_PAGES", "60"))
+MINERU_TIMEOUT_SECONDS = int(os.environ.get("MINERU_TIMEOUT_SECONDS", "7200"))
+
 # Optional, explicitly requested AI comparisons for completed private tests.
 # The server must be a local-only Ollama instance; no model is bundled.
 LOCAL_PRACTICE_AI_ENABLED = os.environ.get("LOCAL_PRACTICE_AI_ENABLED", "False").lower() in ("true", "1")
 LOCAL_PRACTICE_AI_MODEL = os.environ.get("LOCAL_PRACTICE_AI_MODEL", "").strip()
+# Optional local vision-capable model (e.g. an Ollama multimodal model) used only
+# to compare image/image-first questions after submission. Empty = unavailable;
+# no model is bundled or downloaded, and images are sent only to local Ollama.
+LOCAL_PRACTICE_AI_VISION_MODEL = os.environ.get("LOCAL_PRACTICE_AI_VISION_MODEL", "").strip()
+LOCAL_PRACTICE_AI_VISION_MAX_IMAGES = int(os.environ.get("LOCAL_PRACTICE_AI_VISION_MAX_IMAGES", "4"))
 LOCAL_PRACTICE_AI_PORT = os.environ.get("LOCAL_PRACTICE_AI_PORT", "11434")
 LOCAL_PRACTICE_AI_TIMEOUT = os.environ.get("LOCAL_PRACTICE_AI_TIMEOUT", "120")
 LOCAL_PRACTICE_AI_MAX_QUESTIONS = os.environ.get("LOCAL_PRACTICE_AI_MAX_QUESTIONS", "300")

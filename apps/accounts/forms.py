@@ -158,6 +158,49 @@ class StudentRegistrationForm(BootstrapFormMixin, forms.ModelForm):
         return user
 
 
+class PublicRegistrationForm(StudentRegistrationForm):
+    """Public self-registration with a server-validated Student/Teacher choice.
+
+    Only STUDENT and TEACHER can ever be created here — admin, staff, superuser,
+    and category assignment are never settable from public registration. A missing
+    role defaults to STUDENT so older clients that post the legacy form keep
+    working unchanged.
+    """
+
+    # Only these two roles may be self-selected. Anything else is rejected.
+    PUBLIC_ROLES = {User.Roles.STUDENT, User.Roles.TEACHER}
+
+    role = forms.ChoiceField(
+        label="I am registering as",
+        choices=[
+            (User.Roles.STUDENT, "Student"),
+            (User.Roles.TEACHER, "Teacher"),
+        ],
+        required=False,  # legacy clients may omit it
+        initial=User.Roles.STUDENT,
+    )
+
+    def clean_role(self):
+        role = (self.cleaned_data.get("role") or User.Roles.STUDENT)
+        if role not in self.PUBLIC_ROLES:
+            raise forms.ValidationError("Choose either Student or Teacher.")
+        return role
+
+    def save(self, commit=True):
+        # Build the user without committing, then apply only the vetted role.
+        user = super().save(commit=False)
+        role = self.cleaned_data.get("role") or User.Roles.STUDENT
+        if role not in self.PUBLIC_ROLES:
+            role = User.Roles.STUDENT
+        user.role = role
+        # Hard guarantees: public registration never grants elevated access.
+        user.is_staff = False
+        user.is_superuser = False
+        if commit:
+            user.save()
+        return user
+
+
 class UserProfileForm(BootstrapFormMixin, forms.ModelForm):
     """
     Profile editing form for users.

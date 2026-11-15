@@ -157,35 +157,36 @@ class GeminiOnlyWorkflowTests(TestCase):
         data.update(kwargs)
         return QuestionPaperUpload.objects.create(**data)
 
-    def test_both_upload_forms_require_consent_configuration_and_page_limit(self):
+    def test_both_upload_forms_reject_cloud_and_default_to_local(self):
+        """Section 4: both upload forms offer local only; cloud/gemini/mineru are
+        rejected server-side, and an omitted method defaults to local."""
         def teacher_form(**extra):
-            return QuestionPaperUploadForm(data={"title": "Paper", "category": self.category.pk, "extraction_mode": "gemini", **extra}, files={"pdf_file": upload()}, user=self.teacher)
+            return QuestionPaperUploadForm(data={"title": "Paper", "category": self.category.pk, **extra}, files={"pdf_file": upload()}, user=self.teacher)
         def student_form(**extra):
-            return PracticeUploadForm(data={"title": "Paper", "extraction_mode": "gemini", **extra}, files={"pdf_file": upload()})
+            return PracticeUploadForm(data={"title": "Paper", **extra}, files={"pdf_file": upload()})
         for factory in (teacher_form, student_form):
-            form = factory()
-            self.assertFalse(form.is_valid())
-            self.assertIn("cloud_consent", form.errors)
-            self.assertTrue(factory(cloud_consent="on").is_valid())
-            with override_settings(PDF_GEMINI_ENABLED=False):
-                self.assertIn("extraction_mode", factory(cloud_consent="on").errors)
-            with override_settings(PDF_CLOUD_MAX_PAGES=1):
-                self.assertIn("pdf_file", factory(cloud_consent="on").errors)
+            default = factory()
+            self.assertTrue(default.is_valid(), default.errors)
+            self.assertEqual(default.cleaned_data["extraction_mode"], QuestionPaperUpload.ExtractionMode.LOCAL)
+            for mode in ("gemini", "cloud", "local_mineru", "__more__"):
+                form = factory(extraction_mode=mode)
+                self.assertFalse(form.is_valid(), f"mode {mode} should be rejected")
+                self.assertIn("extraction_mode", form.errors)
 
-    def test_teacher_screen_and_queued_upload_record_selected_mode(self):
+    def test_teacher_screen_is_local_only_and_rejects_crafted_cloud(self):
         response = self.client.get(reverse("questions:paper_upload"))
-        self.assertContains(response, "Gemini only (lower-cost cloud)")
-        self.assertContains(response, "Mathpix is not used")
-        with override_settings(CELERY_TASK_ALWAYS_EAGER=False), patch("apps.questions.tasks.extract_cloud_paper.delay") as delay, self.captureOnCommitCallbacks(execute=True):
+        self.assertContains(response, "Local PyMuPDF / Tesseract")
+        self.assertContains(response, "More methods")
+        self.assertNotContains(response, "Gemini only")
+        self.assertNotContains(response, "Mathpix")
+        with patch("apps.questions.tasks.extract_cloud_paper.delay") as delay:
             response = self.client.post(reverse("questions:paper_upload"), {
-                "title": "Teacher low cost", "category": self.category.pk,
+                "title": "Crafted cloud", "category": self.category.pk,
                 "extraction_mode": "gemini", "cloud_consent": "on", "pdf_file": upload(),
             })
-        self.assertEqual(response.status_code, 302)
-        paper = QuestionPaperUpload.objects.get(title="Teacher low cost")
-        self.assertEqual(paper.extraction_mode, "gemini")
-        self.assertIsNotNone(paper.cloud_consent_at)
-        delay.assert_called_once_with(paper.pk)
+        self.assertEqual(response.status_code, 200)  # re-rendered with error
+        self.assertFalse(QuestionPaperUpload.objects.filter(title="Crafted cloud").exists())
+        delay.assert_not_called()
 
     def test_full_mocked_pipeline_sends_only_to_google_and_saves_reviewable_original_crops(self):
         paper = self.paper()
@@ -257,42 +258,20 @@ class GeminiOnlyWorkflowTests(TestCase):
         self.assertIn("token counts", paper.extraction_log)
         self.assertEqual([method for method, _, _ in calls], ["GET", "POST"])
 
-    def test_student_private_cloud_feature_quota_and_storage(self):
+    def test_student_practice_upload_is_local_only_and_rejects_crafted_cloud(self):
         self.client.force_login(self.student)
         response = self.client.get(reverse("questions:practice_upload"))
-        self.assertContains(response, "Gemini only (lower-cost cloud)")
-        self.assertContains(response, "not Mathpix")
-        plan = PracticePlan.objects.get(is_default=True)
-        plan.allow_cloud_extraction = False
-        plan.save(update_fields=["allow_cloud_extraction"])
-        with patch("apps.questions.practice_views.extract_cloud_paper") as task:
-            response = self.client.post(reverse("questions:practice_upload"), {
-                "title": "Blocked", "extraction_mode": "gemini", "cloud_consent": "on", "pdf_file": upload(),
+        self.assertContains(response, "Local extraction only")
+        self.assertNotContains(response, "Gemini only")
+        self.assertNotContains(response, "Mathpix")
+        # A crafted gemini POST is rejected server-side: no paper, no usage, no task.
+        with patch("apps.questions.practice_views.extract_cloud_paper") as cloud_task, \
+             patch("apps.questions.practice_views.extract_private_practice_paper") as local_task:
+            rejected = self.client.post(reverse("questions:practice_upload"), {
+                "title": "Crafted cloud", "extraction_mode": "gemini", "cloud_consent": "on", "pdf_file": upload(),
             })
-            self.assertEqual(response.status_code, 302)
-            task.assert_not_called()
+        self.assertEqual(rejected.status_code, 200)  # re-rendered with error
         self.assertFalse(QuestionPaperUpload.objects.filter(uploaded_by=self.student).exists())
         self.assertFalse(PracticeUsage.objects.filter(user=self.student).exists())
-        plan.allow_cloud_extraction = True
-        plan.save(update_fields=["allow_cloud_extraction"])
-        calls = []
-        with patch("apps.questions.cloud_providers.requests.Session.request", side_effect=fake_google_request(calls)):
-            response = self.client.post(reverse("questions:practice_upload"), {
-                "title": "Private low cost", "extraction_mode": "gemini", "cloud_consent": "on", "pdf_file": upload(),
-            })
-        self.assertEqual(response.status_code, 302)
-        paper = QuestionPaperUpload.objects.get(title="Private low cost")
-        self.assertEqual(paper.status, QuestionPaperUpload.ProcessingStatus.EXTRACTED, paper.extraction_log)
-        self.assertTrue(paper.is_student_private and paper.private_pdf_file and not paper.pdf_file)
-        self.assertTrue(all(figure.private_image and not figure.image for figure in paper.figures.all()))
-        self.assertEqual(PracticeUsage.objects.get(user=self.student).pdf_uploads, 1)
-        review = self.client.get(reverse("questions:practice_settings", args=[paper.pk]))
-        self.assertContains(review, "1200 input, 500 response and 50 thinking tokens")
-        self.assertContains(review, "not a price or an amount you owe")
-        figure = paper.figures.first()
-        url = reverse("questions:practice_figure_file", args=[figure.pk])
-        owner = self.client.get(url)
-        self.assertEqual(owner.status_code, 200)
-        self.assertTrue(response_body(owner))
-        self.client.force_login(self.other)
-        self.assertEqual(self.client.get(url).status_code, 404)
+        cloud_task.assert_not_called()
+        local_task.assert_not_called()

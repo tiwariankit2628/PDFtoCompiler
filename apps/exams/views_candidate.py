@@ -416,21 +416,35 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
         questions_payload = []
         sections_map = {}
 
+        def figure_url(fig):
+            if exam.is_private_practice:
+                return reverse("questions:practice_bank_figure", args=[fig.pk]) if fig.private_image else None
+            return fig.image.url if fig.image else None
+
         for resp in responses_qs:
             eq = resp.exam_question
             q = eq.question
 
-            # Prepare options (shuffled if exam requires)
+            # An image-first question is shown as the original-PDF crop with A/B/C/D
+            # buttons. The printed choices live inside the image, so options must
+            # stay in fixed A..E order (never shuffled) to match the picture.
+            all_q_figures = list(q.figures.all())
+            crop_figures = [f for f in all_q_figures if f.option_id is None and f.source == "question_crop"]
+            crop_urls = [u for u in (figure_url(f) for f in crop_figures) if u]
+            question_image_first = bool(exam.image_first_mode and q.is_image_first and crop_urls)
+
+            # Prepare options (shuffled only when the exam asks AND it is safe).
             options_list = list(q.options.all())
-            if exam.shuffle_options:
+            if exam.shuffle_options and not question_image_first:
                 random.shuffle(options_list)
+            else:
+                options_list.sort(key=lambda o: (o.option_key or "", o.id))
 
             sanitized_options = []
             for opt in options_list:
-                if exam.is_private_practice:
-                    option_images = [reverse("questions:practice_bank_figure", args=[f.pk]) for f in opt.figures.all() if f.private_image]
-                else:
-                    option_images = ([opt.image.url] if opt.image else []) + [f.image.url for f in opt.figures.all() if f.image]
+                option_images = [u for u in (figure_url(f) for f in opt.figures.all()) if u]
+                if not exam.is_private_practice and opt.image:
+                    option_images = [opt.image.url] + option_images
                 sanitized_options.append(
                     {
                         "id": opt.id,
@@ -440,30 +454,16 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
                         "image_urls": option_images,
                     }
                 )
-            # Original source snapshots are supplementary, not diagrams or
-            # answer keys. Keep them labelled in the CBT so extracted text is
-            # not mistaken for a reliable transcription of complex equations.
-            snapshot_kinds = {"stem-source", "option-source", "table-source", "parallel-source"}
-            question_figures = [f for f in q.figures.all() if f.option_id is None]
+
+            # Non-crop figures (actual diagrams) remain available; for image-first
+            # they are already inside the crop, so the template shows the crop only.
+            diagram_figures = [f for f in all_q_figures if f.option_id is None and f.source != "question_crop"]
             if exam.is_private_practice:
-                question_images = ([reverse("questions:practice_bank_image", args=[q.pk])] if q.private_image else [])
-                url_for_figure = lambda f: reverse("questions:practice_bank_figure", args=[f.pk]) if f.private_image else None
+                question_images = ([reverse("questions:practice_bank_image", args=[q.pk])] if q.private_image else []) + [
+                    u for u in (figure_url(f) for f in diagram_figures) if u
+                ]
             else:
-                question_images = [q.image.url] if q.image else []
-                url_for_figure = lambda f: f.image.url if f.image else None
-            source_figures = []
-            for figure in question_figures:
-                url = url_for_figure(figure)
-                if not url:
-                    continue
-                if figure.source in snapshot_kinds:
-                    source_figures.append((figure, url))
-                else:
-                    question_images.append(url)
-            snapshot_order = {"stem-source": 0, "table-source": 1, "parallel-source": 2, "option-source": 3}
-            source_figures.sort(key=lambda item: (snapshot_order[item[0].source],
-                                                   item[0].page_number, item[0].order, item[0].pk))
-            source_images = [{"url": url, "kind": figure.source} for figure, url in source_figures]
+                question_images = ([q.image.url] if q.image else []) + [f.image.url for f in diagram_figures if f.image]
 
             section_name = eq.section or "General"
             sections_map[section_name] = sections_map.get(section_name, 0) + 1
@@ -476,9 +476,10 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
                     "section": section_name,
                     "question_text": q.question_text,
                     "tables": q.tables,
+                    "image_first": question_image_first,
+                    "crop_urls": crop_urls,
                     "image_url": question_images[0] if question_images else None,
                     "image_urls": question_images,
-                    "source_images": source_images,
                     "positive_marks": float(eq.positive_marks),
                     "negative_marks": float(eq.negative_marks),
                     "selected_option_id": resp.selected_option_id,
@@ -511,6 +512,11 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
             "not_answered_count": attempt.not_answered_count,
             "marked_review_count": attempt.marked_review_count,
             "not_visited_count": attempt.not_visited_count,
+            # Strict Exam Mode: server-authoritative so a refresh resumes the
+            # count and the original timer, never resetting either.
+            "strict_mode": exam.strict_exam_mode,
+            "tab_switch_count": attempt.tab_switch_warnings,
+            "tab_switch_limit": STRICT_TAB_SWITCH_LIMIT,
         }
         response = render(request, "exams/exam_session.html", context)
         if exam.is_private_practice:
@@ -675,24 +681,35 @@ class ExamSyncStatusView(ActiveUserRequiredMixin, View):
         )
 
 
+# Strict Exam Mode allows three disclosed warnings; the 4th distinct page-switch
+# episode ends the attempt for security review.
+STRICT_TAB_SWITCH_LIMIT = 3
+
+
 class ExamSecurityLogView(ActiveUserRequiredMixin, View):
-    """
-    Records anti-cheating signals (fullscreen exit, tab switch, window blur,
-    copy-paste attempt, context menu right-click).
-    Acts as a deterrent and monitoring audit trail without arbitrary disqualification.
+    """Records anti-cheating signals as an audit trail / deterrent.
+
+    Two distinct responsibilities, kept separate:
+    - A MIXED deterrent counter (`anti_cheat_warnings`) for blur, copy, fullscreen
+      exit, right-click, etc. These never end an attempt.
+    - In Strict Exam Mode, a dedicated, server-authoritative, idempotent count of
+      distinct page-switch (visible->hidden) episodes (`tab_switch_warnings`). The
+      4th distinct episode ends the attempt. Duplicate/delayed reports of the same
+      episode (same client_event_id) are counted once; races with submit/timeout
+      are serialized with select_for_update and are safe.
     """
 
     def post(self, request, attempt_uuid):
-        attempt = get_object_or_404(ExamAttempt, attempt_uuid=attempt_uuid)
+        attempt = get_object_or_404(ExamAttempt.objects.select_related("exam"), attempt_uuid=attempt_uuid)
 
         if attempt.student != request.user:
             return JsonResponse({"error": "Forbidden"}, status=403)
 
-        if attempt.exam.is_private_practice and attempt.is_expired:
+        if attempt.is_expired:
             attempt.auto_timeout_if_expired()
-            return JsonResponse({"status": "ignored"}, status=200)
         if attempt.status != ExamAttempt.AttemptStatus.IN_PROGRESS:
-            return JsonResponse({"status": "ignored"}, status=200)
+            # Already submitted / timed out / terminated: accept nothing further.
+            return JsonResponse({"status": "ignored", "attempt_status": attempt.status}, status=200)
 
         try:
             data = json.loads(request.body)
@@ -701,28 +718,80 @@ class ExamSecurityLogView(ActiveUserRequiredMixin, View):
 
         event_type = data.get("event_type", "WINDOW_BLUR")
         details = str(data.get("details", ""))[:250]
+        client_event_id = str(data.get("client_event_id", ""))[:64]
 
         valid_events = [choice[0] for choice in ExamSecurityLog.EventType.choices]
         if event_type not in valid_events:
             event_type = ExamSecurityLog.EventType.WINDOW_BLUR
 
+        if event_type == ExamSecurityLog.EventType.TAB_SWITCH:
+            return self._handle_tab_switch(attempt, client_event_id, details)
+
+        # Non-counting deterrent telemetry (blur, fullscreen exit, copy, etc.).
         with transaction.atomic():
-            attempt.anti_cheat_warnings += 1
-            attempt.save(update_fields=["anti_cheat_warnings"])
+            locked = ExamAttempt.objects.select_for_update().get(pk=attempt.pk)
+            if locked.status != ExamAttempt.AttemptStatus.IN_PROGRESS:
+                return JsonResponse({"status": "ignored", "attempt_status": locked.status}, status=200)
+            locked.anti_cheat_warnings += 1
+            locked.save(update_fields=["anti_cheat_warnings"])
+            ExamSecurityLog.objects.create(attempt=locked, event_type=event_type, details=details)
+            mixed = locked.anti_cheat_warnings
+        return JsonResponse({"status": "recorded", "event_type": event_type, "warning_count": mixed})
 
-            ExamSecurityLog.objects.create(
-                attempt=attempt,
-                event_type=event_type,
-                details=details,
-            )
+    def _handle_tab_switch(self, attempt, client_event_id, details):
+        strict = attempt.exam.strict_exam_mode
+        with transaction.atomic():
+            locked = ExamAttempt.objects.select_for_update().select_related("exam").get(pk=attempt.pk)
+            if locked.status != ExamAttempt.AttemptStatus.IN_PROGRESS:
+                return JsonResponse({"status": "ignored", "attempt_status": locked.status}, status=200)
 
-        return JsonResponse(
-            {
-                "status": "recorded",
-                "warning_count": attempt.anti_cheat_warnings,
-                "event_type": event_type,
-            }
-        )
+            # Idempotent per episode: a duplicate/delayed report with the same
+            # client_event_id creates nothing and does not advance the count.
+            if client_event_id:
+                _, created = ExamSecurityLog.objects.get_or_create(
+                    attempt=locked, client_event_id=client_event_id,
+                    defaults={"event_type": ExamSecurityLog.EventType.TAB_SWITCH, "details": details},
+                )
+            else:
+                ExamSecurityLog.objects.create(
+                    attempt=locked, event_type=ExamSecurityLog.EventType.TAB_SWITCH, details=details)
+                created = True
+
+            if created:
+                if strict:
+                    locked.tab_switch_warnings += 1
+                    locked.save(update_fields=["tab_switch_warnings"])
+                else:
+                    locked.anti_cheat_warnings += 1
+                    locked.save(update_fields=["anti_cheat_warnings"])
+
+            count = locked.tab_switch_warnings
+            mixed = locked.anti_cheat_warnings
+            terminated = strict and count > STRICT_TAB_SWITCH_LIMIT and locked.terminate_for_security(
+                reason="Strict Exam Mode page-switch limit exceeded")
+
+        if not strict:
+            return JsonResponse({"status": "recorded" if created else "duplicate",
+                                 "event_type": "TAB_SWITCH", "counts_toward_termination": False,
+                                 "warning_count": mixed})
+
+        if terminated or locked.status == ExamAttempt.AttemptStatus.TERMINATED:
+            return JsonResponse({
+                "status": "terminated", "tab_switch_count": count, "limit": STRICT_TAB_SWITCH_LIMIT,
+                "message": "Your attempt has ended for security review. Saved answers are preserved.",
+                "redirect_url": reverse("exams:exam_completed", kwargs={"attempt_uuid": attempt.attempt_uuid}),
+            }, status=200)
+
+        remaining = max(0, STRICT_TAB_SWITCH_LIMIT - count)
+        if count >= STRICT_TAB_SWITCH_LIMIT:
+            message = f"Warning {count} of {STRICT_TAB_SWITCH_LIMIT}. The next page switch will end your attempt."
+        else:
+            message = f"Warning {count} of {STRICT_TAB_SWITCH_LIMIT}. Stay on this page or your attempt may end."
+        return JsonResponse({
+            "status": "warning" if created else "duplicate", "tab_switch_count": count,
+            "limit": STRICT_TAB_SWITCH_LIMIT, "remaining": remaining,
+            "final_warning": count >= STRICT_TAB_SWITCH_LIMIT, "message": message,
+        })
 
 
 class ExamSubmitView(ActiveUserRequiredMixin, View):

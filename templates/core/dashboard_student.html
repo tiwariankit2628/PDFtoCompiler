@@ -3,225 +3,193 @@
 {% block title %}Student Dashboard | {{ PLATFORM_NAME }}{% endblock %}
 
 {% block dashboard_content %}
-<!-- Welcome & Candidate Profile Banner -->
-<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom">
-    <div>
-        <div class="d-flex align-items-center gap-2 mb-1">
-            <h2 class="fw-bold mb-0">Welcome, {{ user.first_name|default:user.username }}!</h2>
-            <span class="badge bg-primary text-uppercase px-2 py-1">Candidate</span>
+<!-- Welcome banner -->
+<div class="welcome-banner p-4 p-lg-4 mb-4">
+    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3">
+        <div>
+            <span class="badge role-badge-student text-uppercase px-2 py-1 mb-2">Candidate</span>
+            <h2 class="fw-bold mb-1">Welcome back, {{ user.first_name|default:user.username }}!</h2>
+            <p class="mb-0" style="color:rgba(255,255,255,.82);">
+                Target: <strong class="text-white">{{ user.target_exam|default:"General Practice" }}</strong>
+                {% if user.institute_name %} · {{ user.institute_name }}{% endif %}
+            </p>
         </div>
-        <p class="text-muted mb-0">
-            Target Exam: <strong class="text-dark">{{ user.target_exam|default:"General Practice" }}</strong>
-            {% if user.institute_name %} | Institute: <strong class="text-dark">{{ user.institute_name }}</strong>{% endif %}
-        </p>
-    </div>
-    <div class="mt-3 mt-md-0 d-flex flex-wrap gap-2">
-        <a href="{% url 'questions:practice_upload' %}" class="btn btn-sm btn-cbt-primary">
-            <i class="bi bi-file-earmark-pdf me-1"></i> Create PDF Practice
-        </a>
-        <a href="{% url 'accounts:profile' %}" class="btn btn-sm btn-cbt-outline">
-            <i class="bi bi-person me-1"></i> Edit Profile
-        </a>
-        <a href="{% url 'exams:exam_catalog' %}" class="btn btn-sm btn-cbt-primary">
-            <i class="bi bi-search me-1"></i> Explore Tests
-        </a>
+        <div class="d-flex flex-wrap gap-2">
+            <a href="{% url 'exams:classroom_join' %}" class="btn btn-cbt-primary btn-sm">
+                <i class="bi bi-qr-code-scan me-1"></i> Join Test with Code
+            </a>
+            <a href="{% url 'questions:practice_upload' %}" class="btn btn-light btn-sm">
+                <i class="bi bi-file-earmark-pdf me-1"></i> New PDF Practice
+            </a>
+            <a href="{% url 'questions:practice_list' %}" class="btn btn-light btn-sm">
+                <i class="bi bi-collection-play me-1"></i> My Practice
+            </a>
+        </div>
     </div>
 </div>
 
-<div class="card border-0 shadow-sm mb-4 overflow-hidden"><div class="card-body p-4" style="background:linear-gradient(120deg,#eef5ff,#f4f2ff)"><div class="d-flex flex-wrap justify-content-between align-items-center gap-3"><div><span class="small fw-bold text-primary text-uppercase">Your private workspace</span><h4 class="fw-bold mt-1 mb-1">Practice, reflect, improve.</h4><p class="text-muted small mb-0">{{ practice_count }} practice attempt{{ practice_count|pluralize }} · {{ practice_usage.plan.name }} plan · Usage resets monthly</p></div><div class="d-flex flex-wrap gap-2"><a class="btn btn-primary" href="{% url 'questions:practice_list' %}">My practice</a><a class="btn btn-outline-primary" href="{% url 'questions:practice_bank' %}">Question bank</a><a class="btn btn-light" href="{% url 'payments:plans' %}">Plans & usage</a></div></div><div class="row g-2 mt-3">{% for counter in practice_usage.counters %}<div class="col-md-4"><div class="bg-white rounded p-3 h-100"><div class="d-flex justify-content-between small"><span>{{ counter.label }}</span><strong>{{ counter.used }} / {% if counter.limit != None %}{{ counter.limit }}{% else %}∞{% endif %}</strong></div><div class="progress mt-2" style="height:5px"><div class="progress-bar" style="width:{{ counter.percent }}%"></div></div></div></div>{% endfor %}</div></div></div>
-{% if recent_practice_attempts %}<div class="card border shadow-sm mb-4"><div class="card-header bg-white py-3 d-flex justify-content-between"><h5 class="fw-bold mb-0">Recent private practice</h5><a class="small" href="{% url 'questions:practice_history' %}">All history →</a></div><div class="list-group list-group-flush">{% for attempt in recent_practice_attempts %}<div class="list-group-item d-flex justify-content-between align-items-center"><div><strong>{{ attempt.exam.title }}</strong><div class="small text-muted">{{ attempt.started_at|date:'d M Y, H:i' }} · {{ attempt.get_status_display }}</div></div>{% if attempt.status == 'in_progress' %}<a href="{% url 'exams:exam_session' attempt.attempt_uuid %}" class="btn btn-sm btn-primary">Resume</a>{% else %}<a href="{% url 'questions:practice_result' attempt.attempt_uuid %}" class="btn btn-sm btn-outline-primary">Insights</a>{% endif %}</div>{% endfor %}</div></div>{% endif %}
+<!-- Join a classroom test -->
+<div class="card border-0 shadow-sm rounded-4 mb-4">
+    <div class="card-body p-4 d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3">
+        <div class="d-flex align-items-center gap-3">
+            <div class="icon-box-primary" style="width:48px;height:48px;font-size:1.4rem;"><i class="bi bi-qr-code-scan"></i></div>
+            <div>
+                <h5 class="fw-bold mb-0">Join a classroom test</h5>
+                <p class="text-muted small mb-0">Got a code from your teacher? Enter it to go straight to the test.</p>
+            </div>
+        </div>
+        <form method="post" action="{% url 'exams:classroom_join' %}" class="d-flex gap-2" style="max-width:360px;">{% csrf_token %}
+            <input type="text" name="code" class="form-control fw-bold text-center" style="letter-spacing:.2em;text-transform:uppercase;"
+                   maxlength="12" placeholder="ENTER CODE" aria-label="Join code" required>
+            <button class="btn btn-primary fw-bold px-3"><i class="bi bi-box-arrow-in-right"></i></button>
+        </form>
+    </div>
+</div>
 
-<!-- Candidate Metrics & Freemium Card -->
+<!-- Key metrics -->
 <div class="row g-3 mb-4">
-    <div class="col-sm-6 col-md-4">
-        <div class="card h-100 p-3 border shadow-sm">
-            <div class="d-flex align-items-center justify-content-between mb-2">
-                <span class="text-muted small fw-medium">Freemium Trial Status</span>
-                <span class="badge {% if not user.free_test_attempted %}bg-success{% else %}bg-secondary{% endif %}">
-                    {% if not user.free_test_attempted %}Eligible{% else %}Used{% endif %}
-                </span>
+    <div class="col-6 col-xl-3">
+        <div class="tile-3d p-3 h-100">
+            <div class="icon-box plum sm mb-2"><i class="bi bi-stars"></i></div>
+            <div class="d-flex align-items-center justify-content-between">
+                <span class="stat-value fs-3">{% if not user.free_test_attempted %}1{% else %}0{% endif %}</span>
+                <span class="badge {% if not user.free_test_attempted %}bg-success{% else %}text-bg-light border{% endif %}">{% if not user.free_test_attempted %}Eligible{% else %}Used{% endif %}</span>
             </div>
-            <h4 class="fw-bold text-dark mb-1">
-                {% if not user.free_test_attempted %}
-                    1 Free Test Available
-                {% else %}
-                    Trial Test Used
-                {% endif %}
-            </h4>
-            <p class="text-muted small mb-0">
-                {% if not user.free_test_attempted %}
-                    You are eligible for one full-length CBT mock examination at no charge.
-                {% else %}
-                    Subscribe or enroll in institutional series to unlock premium examinations.
-                {% endif %}
-            </p>
+            <div class="small text-muted mt-1">Free full-length mock{% if not user.free_test_attempted %} available{% endif %}</div>
         </div>
     </div>
-
-    <div class="col-sm-6 col-md-4">
-        <div class="card h-100 p-3 border shadow-sm">
-            <div class="d-flex align-items-center justify-content-between mb-2">
-                <span class="text-muted small fw-medium">Examinations Attempted</span>
-                <i class="bi bi-journal-check text-primary fs-5"></i>
-            </div>
-            <h4 class="fw-bold text-dark mb-1">{{ total_attempts }}</h4>
-            <p class="text-muted small mb-0">
-                <span class="text-success fw-bold">{{ passed_attempts }}</span> passed tests across all categories.
-            </p>
+    <div class="col-6 col-xl-3">
+        <div class="tile-3d p-3 h-100">
+            <div class="icon-box amber sm mb-2"><i class="bi bi-journal-check"></i></div>
+            <span class="stat-value fs-3">{{ total_attempts }}</span>
+            <div class="small text-muted mt-1"><span class="text-teal fw-bold">{{ passed_attempts }}</span> passed · exams attempted</div>
         </div>
     </div>
-
-    <div class="col-sm-12 col-md-4">
-        <div class="card h-100 p-3 border shadow-sm">
-            <div class="d-flex align-items-center justify-content-between mb-2">
-                <span class="text-muted small fw-medium">Average Performance</span>
-                <i class="bi bi-graph-up-arrow text-success fs-5"></i>
-            </div>
-            <h4 class="fw-bold text-dark mb-1">{{ avg_percentage }}%</h4>
-            <p class="text-muted small mb-0">Cumulative accuracy across completed examination attempts.</p>
+    <div class="col-6 col-xl-3">
+        <div class="tile-3d p-3 h-100">
+            <div class="icon-box teal sm mb-2"><i class="bi bi-graph-up-arrow"></i></div>
+            <span class="stat-value fs-3">{{ avg_percentage }}%</span>
+            <div class="small text-muted mt-1">Average accuracy across attempts</div>
+        </div>
+    </div>
+    <div class="col-6 col-xl-3">
+        <div class="tile-3d p-3 h-100">
+            <div class="icon-box sm mb-2"><i class="bi bi-lightning-charge-fill"></i></div>
+            <span class="stat-value fs-3">{{ practice_count }}</span>
+            <div class="small text-muted mt-1">Private practice attempt{{ practice_count|pluralize }}</div>
         </div>
     </div>
 </div>
 
-<!-- Available Examinations Section -->
-<div class="card border shadow-sm mb-4" id="available-exams">
-    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
-        <h5 class="fw-bold mb-0"><i class="bi bi-collection-play text-primary me-2"></i> Available Online Examinations</h5>
-        <span class="text-muted small">{{ available_exams.count }} Tests</span>
+<!-- Private practice workspace -->
+<div class="surface-card p-4 mb-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+            <span class="small fw-bold text-coral text-uppercase" style="letter-spacing:.5px;">Your private workspace</span>
+            <h4 class="fw-bold mt-1 mb-1">Practice, reflect, improve.</h4>
+            <p class="text-muted small mb-0">{{ practice_usage.plan.name }} plan · usage resets monthly</p>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+            <a class="btn btn-cbt-primary btn-sm" href="{% url 'questions:practice_upload' %}"><i class="bi bi-upload me-1"></i> Upload PDF</a>
+            <a class="btn btn-cbt-outline btn-sm" href="{% url 'questions:practice_bank' %}"><i class="bi bi-collection me-1"></i> Question Bank</a>
+            <a class="btn btn-cbt-outline btn-sm" href="{% url 'payments:plans' %}"><i class="bi bi-credit-card me-1"></i> Plans &amp; Usage</a>
+        </div>
     </div>
-    <div class="card-body p-4">
-        {% if available_exams %}
-        <div class="row g-3">
-            {% for exam in available_exams %}
-            <div class="col-md-6 col-lg-4">
-                <div class="card h-100 border rounded-3 p-3 card-hover-effect">
-                    <div class="d-flex justify-content-between align-items-center mb-2">
-                        <span class="badge bg-light text-dark border small">{{ exam.category.name }}</span>
-                        {% if exam.is_free %}
-                            <span class="badge bg-success">Free Test</span>
+    <div class="row g-2 mt-2">
+        {% for counter in practice_usage.counters %}
+        <div class="col-md-4">
+            <div class="bg-ivory rounded-3 p-3 h-100 border" style="border-color:var(--line) !important;">
+                <div class="d-flex justify-content-between small">
+                    <span class="fw-medium">{{ counter.label }}</span>
+                    <strong>{{ counter.used }} / {% if counter.limit != None %}{{ counter.limit }}{% else %}∞{% endif %}</strong>
+                </div>
+                <div class="progress mt-2" style="height:6px;background:var(--ivory-2);">
+                    <div class="progress-bar" style="width:{{ counter.percent }}%"></div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="row g-4">
+    <!-- Recent private practice -->
+    <div class="col-lg-6">
+        <div class="surface-card h-100">
+            <div class="card-header bg-transparent py-3 d-flex justify-content-between align-items-center" style="border-bottom:1px solid var(--line);">
+                <h5 class="fw-bold mb-0"><i class="bi bi-lightning-charge-fill text-coral me-2"></i> Recent practice</h5>
+                <a class="small text-decoration-none" href="{% url 'questions:practice_history' %}">All history →</a>
+            </div>
+            {% if recent_practice_attempts %}
+            <div class="list-group list-group-flush">
+                {% for attempt in recent_practice_attempts %}
+                <div class="list-group-item d-flex justify-content-between align-items-center bg-transparent">
+                    <div class="pe-2">
+                        <strong class="d-block text-truncate">{{ attempt.exam.title }}</strong>
+                        <span class="small text-muted">{{ attempt.started_at|date:'d M Y, H:i' }} · {{ attempt.get_status_display }}</span>
+                    </div>
+                    {% if attempt.status == 'in_progress' %}
+                        <a href="{% url 'exams:exam_session' attempt.attempt_uuid %}" class="btn btn-sm btn-cbt-primary flex-shrink-0">Resume</a>
+                    {% else %}
+                        <a href="{% url 'questions:practice_result' attempt.attempt_uuid %}" class="btn btn-sm btn-cbt-outline flex-shrink-0">Insights</a>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty-state">
+                <div class="empty-ico"><i class="bi bi-file-earmark-pdf"></i></div>
+                <h6 class="fw-bold text-dark mb-1">No practice yet</h6>
+                <p class="small mb-3">Upload a PDF and turn it into a private, timed practice set.</p>
+                <a href="{% url 'questions:practice_upload' %}" class="btn btn-sm btn-cbt-primary"><i class="bi bi-upload me-1"></i> Create first practice</a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Exam attempt history -->
+    <div class="col-lg-6">
+        <div class="surface-card h-100">
+            <div class="card-header bg-transparent py-3 d-flex justify-content-between align-items-center" style="border-bottom:1px solid var(--line);">
+                <h5 class="fw-bold mb-0"><i class="bi bi-clock-history text-coral me-2"></i> Exam attempts</h5>
+                <span class="text-muted small">{{ total_attempts }} total</span>
+            </div>
+            {% if recent_attempts %}
+            <div class="list-group list-group-flush">
+                {% for attempt in recent_attempts %}
+                <div class="list-group-item bg-transparent">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div class="pe-2">
+                            <strong class="d-block text-truncate">{{ attempt.exam.title }}</strong>
+                            <span class="small text-muted">{{ attempt.started_at|date:"M d, Y H:i" }} · {{ attempt.exam.category.name }}</span>
+                        </div>
+                        {% if attempt.status == 'in_progress' %}
+                            <a href="{% url 'exams:exam_session' attempt.attempt_uuid %}" class="btn btn-sm btn-cbt-primary flex-shrink-0"><i class="bi bi-play-fill"></i> Resume</a>
+                        {% elif attempt.exam.show_result_immediately %}
+                            <a href="{% url 'exams:student_result_detail' attempt.attempt_uuid %}" class="btn btn-sm btn-cbt-outline flex-shrink-0">Scorecard</a>
                         {% else %}
-                            <span class="badge bg-primary">Premium</span>
+                            <span class="badge text-bg-light border flex-shrink-0">Under evaluation</span>
                         {% endif %}
                     </div>
-                    <h6 class="fw-bold text-dark mb-2">{{ exam.title }}</h6>
-                    <div class="small text-muted mb-3 d-flex gap-3">
-                        <span><i class="bi bi-clock me-1"></i> {{ exam.duration_minutes }} Mins</span>
-                        <span><i class="bi bi-award me-1"></i> {{ exam.total_marks }} Marks</span>
+                    {% if attempt.status != 'in_progress' and attempt.exam.show_result_immediately %}
+                    <div class="mt-1">
+                        {% if attempt.is_passed %}
+                            <span class="badge bg-success">Passed · {{ attempt.percentage }}%</span>
+                        {% else %}
+                            <span class="badge" style="background:var(--danger);color:#fff;">Not qualified · {{ attempt.percentage }}%</span>
+                        {% endif %}
                     </div>
-                    <a href="{% url 'exams:exam_instructions' exam.slug %}" class="btn btn-sm btn-primary w-100 mt-auto">
-                        <i class="bi bi-play-circle me-1"></i> Start Examination
-                    </a>
+                    {% endif %}
                 </div>
+                {% endfor %}
             </div>
-            {% endfor %}
-        </div>
-        {% else %}
-        <div class="text-center py-4 text-muted">
-            <i class="bi bi-journal-x fs-1 text-muted d-block mb-2"></i>
-            <h6 class="fw-bold">No Examinations Currently Published</h6>
-            <p class="small mb-0">New mock tests and assessments are being uploaded by teachers. Check back shortly!</p>
-        </div>
-        {% endif %}
-    </div>
-</div>
-
-<!-- Attempt History Table -->
-<div class="card border shadow-sm mb-4">
-    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
-        <h5 class="fw-bold mb-0"><i class="bi bi-clock-history text-secondary me-2"></i> My Examination Attempts & History</h5>
-        <span class="text-muted small">{{ total_attempts }} Attempts</span>
-    </div>
-    <div class="card-body p-0">
-        {% if recent_attempts %}
-        <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0 small">
-                <thead class="table-light">
-                    <tr>
-                        <th>Date & Time</th>
-                        <th>Examination</th>
-                        <th>Category</th>
-                        <th>Status</th>
-                        <th>Score</th>
-                        <th>Result</th>
-                        <th class="text-end">Action</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for attempt in recent_attempts %}
-                    <tr>
-                        <td class="text-muted">{{ attempt.started_at|date:"M d, Y H:i" }}</td>
-                        <td class="fw-semibold text-dark">{{ attempt.exam.title }}</td>
-                        <td><span class="badge bg-light text-dark border">{{ attempt.exam.category.name }}</span></td>
-                        <td>
-                            {% if attempt.status == 'in_progress' %}
-                                <a href="{% url 'exams:exam_session' attempt.attempt_uuid %}" class="btn btn-sm btn-primary py-0 px-2 fw-semibold">
-                                    <i class="bi bi-play-fill"></i> Resume
-                                </a>
-                            {% else %}
-                                <span class="badge text-bg-light border">{{ attempt.get_status_display }}</span>
-                            {% endif %}
-                        </td>
-                        <td class="fw-bold">
-                            {% if attempt.status == 'in_progress' %}
-                                <span class="text-muted small">In Progress</span>
-                            {% elif attempt.exam.show_result_immediately %}
-                                {{ attempt.score_obtained }} / {{ attempt.total_marks }}
-                            {% else %}
-                                <span class="text-muted small">Submitted</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if attempt.status == 'in_progress' %}
-                                <span class="badge bg-warning text-dark">Active Session</span>
-                            {% elif attempt.exam.show_result_immediately %}
-                                {% if attempt.is_passed %}
-                                    <span class="badge bg-success">Passed ({{ attempt.percentage }}%)</span>
-                                {% else %}
-                                    <span class="badge bg-danger">Not Qualified ({{ attempt.percentage }}%)</span>
-                                {% endif %}
-                            {% else %}
-                                <span class="badge bg-secondary">Under Evaluation</span>
-                            {% endif %}
-                        </td>
-                        <td class="text-end">
-                            {% if attempt.status != 'in_progress' %}
-                                <a href="{% url 'exams:student_result_detail' attempt.attempt_uuid %}" class="btn btn-sm btn-outline-primary py-0 px-2 fw-semibold" title="View Detailed Scorecard">
-                                    <i class="bi bi-graph-up-arrow me-1"></i> Scorecard
-                                </a>
-                            {% else %}
-                                -
-                            {% endif %}
-                        </td>
-                    </tr>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-        <div class="p-4 text-center text-muted">
-            <i class="bi bi-check2-circle fs-3 text-secondary d-block mb-2"></i>
-            You haven't attempted any CBT examinations yet. Select an available test above to start.
-        </div>
-        {% endif %}
-    </div>
-</div>
-
-<!-- Dynamic Categories Quick Navigation -->
-<div class="card border shadow-sm">
-    <div class="card-header bg-white py-3">
-        <h6 class="fw-bold mb-0"><i class="bi bi-grid-fill text-warning me-2"></i> Explore Examination Categories</h6>
-    </div>
-    <div class="card-body">
-        <div class="row g-2">
-            {% for cat in categories %}
-            <div class="col-6 col-md-3">
-                <div class="p-2 border rounded bg-light text-center small">
-                    <i class="bi {{ cat.icon }} text-primary fs-5 d-block mb-1"></i>
-                    <span class="fw-semibold d-block text-truncate">{{ cat.name }}</span>
-                </div>
+            {% else %}
+            <div class="empty-state">
+                <div class="empty-ico"><i class="bi bi-check2-circle"></i></div>
+                <h6 class="fw-bold text-dark mb-1">No exam attempts yet</h6>
+                <p class="small mb-0">Your institutional exam attempts and scorecards will appear here.</p>
             </div>
-            {% endfor %}
+            {% endif %}
         </div>
     </div>
 </div>

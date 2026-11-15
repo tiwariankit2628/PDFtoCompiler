@@ -113,6 +113,16 @@ class Exam(models.Model):
     )
     shuffle_questions = models.BooleanField("Shuffle Questions for Candidates", default=True)
     shuffle_options = models.BooleanField("Shuffle Options for Candidates", default=True)
+    # Image-first exams render each question as the original-PDF crop with A/B/C/D
+    # selection buttons below; answers are still bound by option id, so scoring is
+    # unchanged. Enabling this forces options into fixed A..E order (see views).
+    image_first_mode = models.BooleanField("Image-first display", default=False)
+    # Strict Exam Mode (teacher-led tests only): disclosed three-warning page-switch
+    # rule. Scoped to this exam; never changes other exams or private practice.
+    strict_exam_mode = models.BooleanField(
+        "Strict exam mode (3-warning page-switch rule)", default=False,
+        help_text="Disclosed to students. Counts distinct page switches; the 4th ends the attempt for review.",
+    )
     max_attempts = models.PositiveIntegerField(
         "Max Attempts Allowed", default=1, help_text="0 allows unlimited attempts."
     )
@@ -222,6 +232,13 @@ class ExamAttempt(models.Model):
         SUBMITTED = "submitted", "Submitted"
         EVALUATED = "evaluated", "Evaluated"
         TIMED_OUT = "timed_out", "Timed Out"
+        # Ended by Strict Exam Mode after the disclosed page-switch limit. Saved
+        # answers are kept and evaluated; this is a reported signal for review,
+        # never a proof of cheating.
+        TERMINATED = "terminated", "Ended for Security Review"
+
+    # Terminal states that must never resume, be re-timed, or accept new answers.
+    FINAL_STATUSES = ("submitted", "evaluated", "timed_out", "terminated")
 
     attempt_uuid = models.UUIDField(
         "Attempt UUID",
@@ -259,7 +276,20 @@ class ExamAttempt(models.Model):
         on_delete=models.SET_NULL,
         related_name="+",
     )
+    # Classroom (teacher-led, join-code) session this attempt belongs to, if any.
+    # Null for ordinary public exams and private practice. Results, counts and the
+    # leaderboard for a classroom test are scoped by this session.
+    classroom_session = models.ForeignKey(
+        "ClassroomSession", on_delete=models.CASCADE, null=True, blank=True, related_name="attempts",
+    )
+    # A MIXED deterrent telemetry counter (blur, copy, fullscreen exit, etc.).
+    # It is NOT the strict three-strike tab-switch count; see tab_switch_warnings.
     anti_cheat_warnings = models.PositiveIntegerField("Anti-Cheat Warnings", default=0)
+    # Distinct visible->hidden (page switch) episodes counted ONLY in strict mode.
+    # Server-authoritative and idempotent per client_event_id; drives termination.
+    tab_switch_warnings = models.PositiveIntegerField("Tab-switch Warnings", default=0)
+    # True once the strict page-switch limit ended the attempt for review.
+    is_security_locked = models.BooleanField("Ended for security review", default=False)
     rank = models.PositiveIntegerField("Candidate Rank", null=True, blank=True)
     percentile = models.DecimalField("Percentile", max_digits=5, decimal_places=2, null=True, blank=True)
     correct_count = models.PositiveIntegerField("Correct Count", default=0)
@@ -277,7 +307,14 @@ class ExamAttempt(models.Model):
                 fields=["exam", "student"],
                 condition=models.Q(is_private_practice=True, status="in_progress"),
                 name="one_active_private_practice_attempt",
-            )
+            ),
+            # One in-progress attempt per student per classroom session; prevents
+            # duplicate joins/attempts from reconnects or concurrent requests.
+            models.UniqueConstraint(
+                fields=["classroom_session", "student"],
+                condition=models.Q(status="in_progress", classroom_session__isnull=False),
+                name="one_active_classroom_attempt",
+            ),
         ]
 
     def __str__(self):
@@ -327,12 +364,20 @@ class ExamAttempt(models.Model):
     def not_answered_count(self):
         return self.responses.filter(is_visited=True, selected_option__isnull=True).count()
 
+    @property
+    def uses_confirmed_key_only(self):
+        """Classroom and private-practice attempts grade only teacher/student
+        confirmed keys; a missing key is 'awaiting key', never a wrong answer.
+        Ordinary institutional exams keep grading every assigned question."""
+        return self.exam.is_private_practice or self.classroom_session_id is not None
+
     def evaluate_attempt(self):
         """
         Evaluates student's responses, calculating positive marks,
         negative penalties, net score, and pass/fail outcome.
         Stores question-level correctness and marks awarded snapshot.
         """
+        confirmed = self.uses_confirmed_key_only
         total_pos = Decimal("0.00")
         total_neg = Decimal("0.00")
         corr = 0
@@ -341,18 +386,22 @@ class ExamAttempt(models.Model):
         graded_marks = Decimal("0.00")
         all_private_keys_verified = True
         responses = self.responses.select_related("exam_question__question", "selected_option")
-        if self.exam.is_private_practice:
+        if confirmed:
             responses = responses.prefetch_related("exam_question__question__options")
 
         for resp in responses.all():
             # Student PDFs commonly contain no answer key. Never interpret a
             # missing key as an incorrect answer or invent the correct choice.
             question = resp.exam_question.question
-            has_key = (not self.exam.is_private_practice or
-                       (question.key_verified and sum(1 for opt in question.options.all() if opt.is_correct) == 1))
-            if self.exam.is_private_practice and not has_key:
+            # A confirmed key is a student-confirmed key (key_verified) OR a
+            # teacher-confirmed key (answer_status 'manually_verified'), with
+            # exactly one correct option. A missing key is never a wrong answer.
+            key_confirmed = question.key_verified or question.answer_status == "manually_verified"
+            has_key = (not confirmed or
+                       (key_confirmed and sum(1 for opt in question.options.all() if opt.is_correct) == 1))
+            if confirmed and not has_key:
                 all_private_keys_verified = False
-            if has_key and self.exam.is_private_practice:
+            if has_key and confirmed:
                 graded_marks += resp.exam_question.positive_marks
             if resp.selected_option is not None and not has_key:
                 resp.is_correct = None
@@ -388,7 +437,7 @@ class ExamAttempt(models.Model):
         else:
             self.accuracy_percentage = Decimal("0.00")
 
-        total_m = (graded_marks if self.exam.is_private_practice else
+        total_m = (graded_marks if confirmed else
                    Decimal(str(self.total_marks)) if self.total_marks else Decimal("0.00"))
         if total_m > Decimal("0.00"):
             pct = (net_score / total_m) * Decimal("100.0")
@@ -397,9 +446,9 @@ class ExamAttempt(models.Model):
             self.percentage = Decimal("0.00")
 
         passing_pct = Decimal(str(self.exam.passing_percentage)) if self.exam.passing_percentage else Decimal("0.00")
-        # A private practice target is meaningful only with a complete,
-        # student-confirmed key. It is not an institutional qualification.
-        if self.exam.is_private_practice:
+        # A confirmed-key-only target (private practice or classroom) is meaningful
+        # only with a complete, confirmed key; it is not an institutional result.
+        if confirmed:
             self.is_passed = bool(all_private_keys_verified and graded_marks > 0 and passing_pct > 0 and self.percentage >= passing_pct)
         else:
             self.is_passed = self.percentage >= passing_pct
@@ -456,7 +505,7 @@ class ExamAttempt(models.Model):
         Submits the examination attempt atomically and evaluates candidate score.
         Prevents duplicate submissions and re-calculates exam leaderboard ranks.
         """
-        if self.status in [self.AttemptStatus.SUBMITTED, self.AttemptStatus.EVALUATED, self.AttemptStatus.TIMED_OUT]:
+        if self.status in self.FINAL_STATUSES:
             return False
 
         now = timezone.now()
@@ -468,7 +517,26 @@ class ExamAttempt(models.Model):
             self.time_taken_seconds = max(0, int((end - self.started_at).total_seconds()))
         self.evaluate_attempt()
         self.save()
-        if not self.exam.is_private_practice:
+        # Classroom ranks are computed per session in-view, not globally.
+        if not self.exam.is_private_practice and not self.classroom_session_id:
+            self.recalculate_ranks()
+        return True
+
+    def terminate_for_security(self, reason=""):
+        """End this attempt under Strict Exam Mode, keeping and evaluating all
+        saved answers. Idempotent: a no-op once the attempt is already final."""
+        if self.status in self.FINAL_STATUSES:
+            return False
+        now = timezone.now()
+        self.status = self.AttemptStatus.TERMINATED
+        self.is_security_locked = True
+        self.submitted_at = now
+        if not self.time_taken_seconds and self.started_at:
+            self.time_taken_seconds = max(0, int((now - self.started_at).total_seconds()))
+        # Preserve and score whatever was already saved; termination is not a zero.
+        self.evaluate_attempt()
+        self.save()
+        if not self.exam.is_private_practice and not self.classroom_session_id:
             self.recalculate_ranks()
         return True
 
@@ -558,12 +626,157 @@ class ExamSecurityLog(models.Model):
     attempt = models.ForeignKey(ExamAttempt, on_delete=models.CASCADE, related_name="security_logs")
     event_type = models.CharField("Event Type", max_length=50, choices=EventType.choices)
     details = models.CharField("Details / Meta", max_length=255, blank=True)
+    # Client-generated id for ONE visible->hidden episode. A unique (attempt,
+    # client_event_id) pair makes strict counting idempotent: duplicate or delayed
+    # reports of the same episode are recorded once. Blank for non-counting signals.
+    client_event_id = models.CharField(max_length=64, blank=True, default="")
     timestamp = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         verbose_name = "Exam Security Log"
         verbose_name_plural = "Exam Security Logs"
         ordering = ["-timestamp"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["attempt", "client_event_id"],
+                condition=~models.Q(client_event_id=""),
+                name="unique_attempt_client_event",
+            )
+        ]
 
     def __str__(self):
         return f"Attempt #{self.attempt_id} - {self.event_type} at {self.timestamp}"
+
+
+class ClassroomSession(models.Model):
+    """A teacher-led, join-code session of an exam (quiz-platform style).
+
+    One exam (the test template) can have many sessions - e.g. one per class -
+    each with its own unpredictable join code, its own attempts, counts and
+    leaderboard. Attempts link via ExamAttempt.classroom_session, so results stay
+    separate per session. There is NO application-imposed cap on participants.
+    """
+
+    # Unambiguous alphabet (no 0/O/1/I/L) for codes that are easy to read/type.
+    CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+    CODE_LENGTH = 6
+
+    exam = models.ForeignKey("Exam", on_delete=models.CASCADE, related_name="classroom_sessions")
+    teacher = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="classroom_sessions")
+    label = models.CharField("Session label", max_length=120, blank=True, help_text="e.g. 'Class 10-B, Monday'.")
+    code = models.CharField(max_length=12, unique=True, db_index=True)
+    is_open = models.BooleanField("Joining open", default=True)
+    allow_retakes = models.BooleanField(
+        "Allow retakes", default=False,
+        help_text="If on, a student may take this session more than once; only their best graded attempt is ranked.",
+    )
+    show_leaderboard_to_students = models.BooleanField("Students can see leaderboard", default=False)
+    ended_at = models.DateTimeField(null=True, blank=True, help_text="Set when the teacher ends the session.")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["teacher", "-created_at"]),
+            models.Index(fields=["exam", "-created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.exam.title} [{self.code}]"
+
+    @classmethod
+    def generate_code(cls):
+        import secrets
+        return "".join(secrets.choice(cls.CODE_ALPHABET) for _ in range(cls.CODE_LENGTH))
+
+    @classmethod
+    def create_for(cls, exam, teacher, **kwargs):
+        """Create a session with a unique code, retrying safely on collision."""
+        from django.db import IntegrityError
+        for _ in range(12):
+            try:
+                with transaction.atomic():
+                    return cls.objects.create(exam=exam, teacher=teacher, code=cls.generate_code(), **kwargs)
+            except IntegrityError:
+                continue
+        raise RuntimeError("Could not allocate a unique join code; please retry.")
+
+    def regenerate_code(self):
+        from django.db import IntegrityError
+        for _ in range(12):
+            new_code = self.generate_code()
+            try:
+                with transaction.atomic():
+                    self.code = new_code
+                    self.save(update_fields=["code", "updated_at"])
+                    return new_code
+            except IntegrityError:
+                continue
+        raise RuntimeError("Could not allocate a unique join code; please retry.")
+
+    @property
+    def is_ended(self):
+        return self.ended_at is not None
+
+    @property
+    def joining_allowed(self):
+        """Whether NEW students may join. Existing attempts are unaffected by this."""
+        return self.is_open and not self.is_ended and self.exam.status == Exam.ExamStatus.PUBLISHED
+
+    def end_now(self):
+        """Close the session and time out any still-in-progress attempts (explicit,
+        teacher-confirmed action). Saved answers are preserved and evaluated."""
+        if self.is_ended:
+            return False
+        self.ended_at = timezone.now()
+        self.is_open = False
+        self.save(update_fields=["ended_at", "is_open", "updated_at"])
+        for attempt in self.attempts.filter(status=ExamAttempt.AttemptStatus.IN_PROGRESS):
+            attempt.submit_attempt(is_timeout=True)
+        return True
+
+    def counts(self):
+        """Distinct, server-truthful participation counts for live monitoring.
+
+        joined     - students who entered the code (registered, timer not started)
+        started    - distinct students who began an attempt
+        in_progress- attempts currently running
+        submitted  - attempts submitted/evaluated
+        timed_out  - attempts auto-ended by the timer or End-Test-Now
+        These stay distinct; "joined" >= "started".
+        """
+        from django.db.models import Count, Q as _Q
+        agg = self.attempts.aggregate(
+            in_progress=Count("id", filter=_Q(status=ExamAttempt.AttemptStatus.IN_PROGRESS)),
+            submitted=Count("id", filter=_Q(status__in=[ExamAttempt.AttemptStatus.SUBMITTED,
+                                                        ExamAttempt.AttemptStatus.EVALUATED])),
+            timed_out=Count("id", filter=_Q(status=ExamAttempt.AttemptStatus.TIMED_OUT)),
+        )
+        agg["joined"] = self.participants.count()
+        agg["started"] = self.attempts.values("student").distinct().count()
+        return agg
+
+
+class ClassroomParticipant(models.Model):
+    """A student who joined a classroom session by code.
+
+    Joining registers identity (idempotently - a reconnect never double-counts)
+    WITHOUT starting the timer, keeping "joined" distinct from "started". The
+    actual attempt (and server timer) is created only when the student begins.
+    """
+
+    session = models.ForeignKey(ClassroomSession, on_delete=models.CASCADE, related_name="participants")
+    student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="classroom_participations")
+    joined_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["session", "student"], name="unique_session_participant"),
+        ]
+        indexes = [models.Index(fields=["session", "joined_at"])]
+        ordering = ["joined_at", "id"]
+
+    def __str__(self):
+        return f"{self.student_id} in {self.session_id}"

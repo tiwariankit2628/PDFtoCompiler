@@ -17,9 +17,10 @@ import unicodedata
 import pymupdf as fitz
 
 from .pdf_tables import borderless_table_from_pdf, repair_simple_superscripts, source_box, table_from_pdf
-from .pdf_math import is_type3_font, reconstruct_option_fractions
+from .pdf_math import is_type3_font, reconstruct_option_fractions, inline_stacked_fractions, radical_overbars, math_residue
 from .pdf_graphics import bounded_ink_candidate, scanned_graphic_candidates
 from .pdf_options import recover_column_major_grid, reorder_wrapped_options
+from .pdf_symbols import is_private_use, is_symbol_font, symbol_translation
 
 
 PREFIXED_QUESTION = re.compile(
@@ -70,18 +71,39 @@ TABLE_REFERENCE = re.compile(
 
 
 def _find_geometric_tables(page, **kwargs):
-    """Use line/text geometry even if another library activated a layout model.
-
-    Recent PyMuPDF versions otherwise default to gating table detection on
-    process-global model classifications. Older supported versions do not have
-    this keyword, so retain their original behavior on that specific error.
-    """
+    """Use line/text geometry even if another library activated a layout model."""
     try:
         return page.find_tables(use_layout=False, **kwargs)
     except TypeError as exc:
         if not re.search(r"unexpected keyword argument [\"']use_layout[\"']", str(exc)):
             raise
         return page.find_tables(**kwargs)
+
+
+# A bare page number such as "[2]", "- 3 -" or "Page 4 of 9" (never a question label).
+PAGE_FURNITURE = re.compile(r"^\W*(?:page\s*)?\d{1,4}\W*(?:(?:of|/)\s*\d{1,4}\W*)?$", re.IGNORECASE)
+
+
+def _is_long_rule(drawing, page_rect):
+    """True for a straight rule that spans a large part of the page."""
+    items = drawing.get("items", [])
+    box = drawing.get("rect")
+    if not items or box is None:
+        return False
+    for item in items:
+        if item[0] == "l":
+            if abs(item[1].y - item[2].y) > 1.5 and abs(item[1].x - item[2].x) > 1.5:
+                return False
+        elif item[0] == "re":
+            rect = fitz.Rect(item[1])
+            if rect.height > 2 and rect.width > 2:
+                return False
+        else:
+            return False
+    box = fitz.Rect(box)
+    if box.height > 2 and box.width > 2:
+        return False
+    return box.width > page_rect.width * 0.38 or box.height > page_rect.height * 0.25
 
 
 def _option_raw(match):
@@ -168,6 +190,7 @@ class LayoutQuestion:
     source_regions: list = field(default_factory=list)
     extra_figures: list = field(default_factory=list)
     primary_image_region: dict = field(default_factory=dict)
+    needs_source: bool = False
 
 
 def parse_options(text):
@@ -263,6 +286,8 @@ class DigitalQuestionLayout:
         self._table_data_cache = {}
         self._drawings_by_page = {}
         self._vectors_by_page = {}
+        self._decoration_signatures = None
+        self._symbol_tables = {}
         # The legacy document-wide signal remains a fallback for continuation
         # pages. Per-page evidence prevents a multi-column page from slicing a
         # later full-width page in half.
@@ -283,10 +308,15 @@ class DigitalQuestionLayout:
                 blocks = ocr_page.get_text("dict", textpage=textpage)["blocks"]
             else:
                 blocks = page.get_text("dict")["blocks"]
+            symbol_chars, other_chars = set(), set()
             for block in blocks:
                 if block["type"] != 0:
                     continue
                 for line in block["lines"]:
+                    for span in line["spans"]:
+                        private = {char for char in span["text"] if is_private_use(char)}
+                        if private:
+                            (symbol_chars if is_symbol_font(span.get("font")) else other_chars).update(private)
                     text = (_ocr_line_text(line["spans"]) if page_index in self.ocr_pages
                             else "".join(span["text"] for span in line["spans"]).strip())
                     if not text:
@@ -310,6 +340,10 @@ class DigitalQuestionLayout:
                         page_edge_keys.add(self._edge_key(page, text, rect))
             self.edge_counts.update(page_edge_keys)
             self.lines.append(page_lines)
+            # Only characters used exclusively by a Symbol font on this page are
+            # translated; other fonts reuse the private-use range differently.
+            if page_index not in self.ocr_pages:
+                self._symbol_tables[page_index] = symbol_translation(symbol_chars - other_chars)
             page_images = page.get_image_info(xrefs=True)
             self.images.append(page_images)
             # A full-page raster may already have an invisible OCR text layer.
@@ -484,7 +518,83 @@ class DigitalQuestionLayout:
 
     @staticmethod
     def _edge_key(page, text, rect):
-        return (_compact(text), round(rect.x0 / page.rect.width, 2), round(rect.y0 / page.rect.height, 2))
+        value = _compact(text)
+        # "[2]", "[3]" … are the same piece of page furniture on every page. A
+        # value that could also be an option label ("[2]", "(3)") only counts
+        # when it sits in the outermost page margin.
+        outer_margin = rect.y0 > page.rect.height * 0.96 or rect.y1 < page.rect.height * 0.04
+        if (PAGE_FURNITURE.match(value) and not NUMBERED_QUESTION.match(value)
+                and not PREFIXED_QUESTION.match(value)
+                and (outer_margin or not OPTION_AT_START.match(value))):
+            value = re.sub(r"\d+", "#", value)
+        return (value, round(rect.x0 / page.rect.width, 2), round(rect.y0 / page.rect.height, 2))
+
+    def _page_drawings(self, page_index):
+        if page_index not in self._drawings_by_page:
+            try:
+                self._drawings_by_page[page_index] = self.doc[page_index].get_drawings()
+            except Exception:
+                self._drawings_by_page[page_index] = []
+        return self._drawings_by_page[page_index]
+
+    @staticmethod
+    def _drawing_signature(drawing):
+        box = drawing["rect"]
+        return (round(box.x0), round(box.y0), round(box.x1), round(box.y1), len(drawing.get("items", [])))
+
+    def _content_drawings(self, page_index):
+        """Vector drawings of a page without its decoration.
+
+        Artwork drawn at the same place on many pages (a watermark, a column
+        separator, header/footer rules) is page furniture, not question content.
+        Left in, a watermark's outline is mistaken for fraction bars and glues
+        every diagram on the page into one useless page-sized cluster.
+        """
+        if self._decoration_signatures is None:
+            counts = Counter()
+            for index in range(len(self.doc)):
+                if index in self.ocr_pages:
+                    continue
+                counts.update({self._drawing_signature(d) for d in self._page_drawings(index)})
+            threshold = max(3, -(-len(self.doc) * 3 // 10))  # at least 3 pages and 30%
+            self._decoration_signatures = {sig for sig, count in counts.items() if count >= threshold}
+        return [d for d in self._page_drawings(page_index)
+                if self._drawing_signature(d) not in self._decoration_signatures]
+
+    def _ruled_tables(self, page_index):
+        """Ruled tables found from the page's own lines, ignoring decoration.
+
+        A watermark's outline otherwise fuses real tables and nearby diagrams
+        into one bogus page-wide "table".
+        """
+        page = self.doc[page_index]
+        try:
+            return page.find_tables(paths=self._content_drawings(page_index)).tables[:100]
+        except TypeError:  # older PyMuPDF without the ``paths`` argument
+            return page.find_tables().tables[:100]
+
+    def _text_unit(self, page_index):
+        heights = [rect.height for _, rect, _ in self.lines[page_index] if rect.height > 0]
+        return median(heights) if heights else 10.0
+
+    def _has_math_residue(self, question):
+        """True when a segment holds 2-D maths/layout plain text cannot capture."""
+        for segment in question.segments:
+            if segment.page_index in self.ocr_pages:
+                continue
+            tables = [fitz.Rect(table.bbox)
+                      for table in self._tables_by_page.get(segment.page_index, [])]
+            try:
+                if math_residue(self.doc[segment.page_index], segment.rect,
+                                self._content_drawings(segment.page_index), tables):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _normalize_symbols(self, page_index, text):
+        table = self._symbol_tables.get(page_index)
+        return text.translate(table) if table else text
 
     def _numbered_anchors(self):
         """Find plain numeric question labels only when option evidence exists.
@@ -834,6 +944,14 @@ class DigitalQuestionLayout:
                 and max((span["size"] for span in spans), default=0) > typical_size * 1.3
             ):
                 top = max(top, rect.y1 + 1)
+            # A running head set in a clearly smaller font above every question
+            # (a subject/syllabus banner) is not part of any question either.
+            elif (
+                anchors and rect.y1 < first_y and rect.y1 < page.rect.height * 0.10
+                and len(text.strip()) >= 12
+                and max((span["size"] for span in spans), default=0) < typical_size * 0.85
+            ):
+                top = max(top, rect.y1 + 1)
         return top, bottom
 
     def _decorative_image(self, page_index, image):
@@ -852,7 +970,15 @@ class DigitalQuestionLayout:
     def _text_in_rect(self, page_index, rect):
         page = self.doc[page_index]
         if page_index not in self.ocr_pages:
-            return repair_simple_superscripts(page, rect, page.get_text("text", clip=rect, sort=True))
+            # Inline vertically-stacked fractions (num over den) before reading
+            # order can split them across lines and scramble options/statements.
+            # Falls back to native text when no reliable fraction rule is found.
+            try:
+                rebuilt = inline_stacked_fractions(page, rect, self._content_drawings(page_index))
+            except Exception:
+                rebuilt = None
+            text = rebuilt if rebuilt is not None else page.get_text("text", clip=rect, sort=True)
+            return self._normalize_symbols(page_index, repair_simple_superscripts(page, rect, text))
         # PyMuPDF ignores clip= when a prebuilt OCR TextPage is passed. Filter
         # OCR spans geometrically instead, so one question/column cannot consume
         # the entire page. OCR spans are usually individual words.
@@ -1101,7 +1227,7 @@ class DigitalQuestionLayout:
                     # A raster scan has no usable vector rulings for this
                     # detector; OCR text alone cannot establish a cell grid.
                     self._tables_by_page[segment.page_index] = (
-                        [] if segment.page_index in self.ocr_pages else _find_geometric_tables(page).tables[:100]
+                        [] if segment.page_index in self.ocr_pages else (self._ruled_tables(segment.page_index) if hasattr(self, '_ruled_tables') else _find_geometric_tables(page).tables[:100])
                     )
                 except Exception:
                     self._tables_by_page[segment.page_index] = []
@@ -1204,6 +1330,9 @@ class DigitalQuestionLayout:
                     mid_index = table.col_count // 2 - 1
                     if table.col_count in (2, 4) and len(row_cells) > mid_index and row_cells[mid_index]:
                         boundary = (row_cells[mid_index][2] - box.x0) / box.width
+                    for row in data["rows"]:
+                        for cell in row:
+                            cell["text"] = self._normalize_symbols(segment.page_index, cell["text"])
                     candidates.append((box, data, boundary))
                     if borderless:
                         question.issues.append("Borderless table inferred from source alignment; check all cells against the original.")
@@ -1271,10 +1400,12 @@ class DigitalQuestionLayout:
             self._vectors_by_page[page_index] = []
             return []
         try:
-            if page_index not in self._drawings_by_page:
-                self._drawings_by_page[page_index] = page.get_drawings()
-            drawings = self._drawings_by_page[page_index]
-            clusters = page.cluster_drawings(drawings=drawings, x_tolerance=5, y_tolerance=5)
+            # Watermarks and page-spanning rules otherwise chain unrelated
+            # figures into one page-sized cluster that is then discarded. Short
+            # strokes stay: axes, arrows and boxes are what diagrams are made of.
+            shaped = [drawing for drawing in self._content_drawings(page_index)
+                      if not _is_long_rule(drawing, page.rect)]
+            clusters = page.cluster_drawings(drawings=shaped, x_tolerance=5, y_tolerance=5)
         except Exception:
             self._vectors_by_page[page_index] = []
             self.log(f"Warning: Page {page_index + 1}: vector diagram detection failed; review the original page.")
@@ -1289,7 +1420,11 @@ class DigitalQuestionLayout:
             if any((box & table).get_area() >= box.get_area() * .60 for table in table_boxes):
                 continue
             expanded = box + (-1, -1, 1, 1)
-            item_count = sum(len(drawing.get("items", [])) for drawing in drawings
+            unit = self._text_unit(page_index)
+            if box.height <= 4 * unit and radical_overbars(
+                    [d for d in shaped if expanded.contains((d["rect"].tl + d["rect"].br) / 2)], unit, 4.0):
+                continue  # a radical sign over an expression, not a figure
+            item_count = sum(len(drawing.get("items", [])) for drawing in shaped
                              if expanded.contains((drawing["rect"].tl + drawing["rect"].br) / 2))
             if item_count < 3:
                 continue  # a box, underline or a pair of axes is not enough
@@ -1699,11 +1834,9 @@ class DigitalQuestionLayout:
             if grid_markers or segment.page_index in self.ocr_pages or not segment.has_complex_math or not question.options:
                 continue
             try:
-                if segment.page_index not in self._drawings_by_page:
-                    self._drawings_by_page[segment.page_index] = self.doc[segment.page_index].get_drawings()
                 reconstructed = reconstruct_option_fractions(
                     self.doc[segment.page_index], segment, question.options, OPTION_MARKER,
-                    _normalize_option, self._drawings_by_page[segment.page_index])
+                    _normalize_option, self._content_drawings(segment.page_index))
             except Exception:
                 self.log(f"Warning: Page {segment.page_index + 1}: math reconstruction failed; review the original page.")
                 continue
@@ -1715,6 +1848,18 @@ class DigitalQuestionLayout:
             {"page": segment.page_index + 1, "box": source_box(self.doc[segment.page_index], segment.rect)}
             for segment in question.segments if segment.text.strip() or segment.images
         ]
+        # Glyphs with no usable Unicode mapping (unassigned or private-use code
+        # points, replacement characters) render as empty boxes. Omit them and
+        # say so, rather than showing boxes or pretending the text is complete.
+        def readable(value):
+            return "".join(char for char in value
+                           if char != "�" and unicodedata.category(char) not in ("Cn", "Co"))
+        cleaned = [readable(question.text)] + [readable(option["text"]) for option in question.options]
+        if cleaned != [question.text] + [option["text"] for option in question.options]:
+            question.text = _compact(cleaned[0])
+            for option, value in zip(question.options, cleaned[1:]):
+                option["text"] = _compact(value)
+            question.issues.append("Some symbols have no text mapping in this PDF and were omitted; compare with the source.")
         if any(segment.page_index in self.ocr_pages for segment in question.segments):
             question.issues.append("Local OCR may misread text, formulas, options or diagrams; check the original page.")
         elif any(segment.page_index in self.raster_pages for segment in question.segments):
@@ -1729,6 +1874,12 @@ class DigitalQuestionLayout:
             question.issues.append("Option boundaries may be ambiguous; compare with the source.")
         if any(segment.has_complex_math for segment in question.segments):
             question.issues.append("Mathematical formatting may be inaccurate; compare with the source.")
+        # Two-dimensional maths (nested fractions, limits, multi-row brackets) or a
+        # table the text could not linearise mean the written question cannot be
+        # trusted on its own; mark it so the review UI shows the source crop.
+        if not question.tables and self._has_math_residue(question):
+            question.needs_source = True
+            question.issues.append("This question has stacked maths or a layout that plain text cannot capture; use the original source excerpt.")
         if question.tables:
             question.issues.append("Extracted table structure needs checking against the source, including merged cells and formulas.")
         elif TABLE_REFERENCE.search(question.text):
@@ -1756,7 +1907,9 @@ class DigitalQuestionLayout:
             if not segment.has_complex_math and len(markers[first_option_segment]) == len(question.options):
                 ocr = self.ocr_pages.get(segment.page_index)
                 page, textpage = ocr if ocr else (self.doc[segment.page_index], None)
-                repaired = reorder_wrapped_options(page, segment, markers[first_option_segment], question.options, textpage)
+                repaired = reorder_wrapped_options(
+                    page, segment, markers[first_option_segment], question.options, textpage,
+                    normalize=lambda value: self._normalize_symbols(segment.page_index, value))
                 if repaired and any(option["text"] != repaired[option["key"]] for option in question.options):
                     for option in question.options:
                         option["text"] = repaired[option["key"]]
@@ -1795,7 +1948,24 @@ class DigitalQuestionLayout:
                             and len(question.text) > len(compact_prefix)):
                         question.text = question.text[:-len(compact_prefix)].rstrip()
 
+        def label_beside(rect, candidates):
+            """The one option label printed beside this figure, if unambiguous.
+
+            Image choices are commonly laid out as ``(1) [graph]`` with the label
+            vertically centred on a taller figure. A figure spanning several
+            labels of one column (a floated statement figure) matches none.
+            """
+            hits = sorted((rect.x0 - marker.x1, key) for key, marker in candidates
+                          if rect.y0 - 2 <= (marker.y0 + marker.y1) / 2 <= rect.y1 + 2
+                          and rect.x0 >= marker.x1 - 3)
+            if not hits or (len(hits) > 1 and hits[1][0] - hits[0][0] < 15):
+                return None
+            return hits[0][1]
+
         def option_for(rect, candidates):
+            beside = label_beside(rect, candidates)
+            if beside is not None:
+                return beside
             # Require a clear left-to-right column and vertical interval.
             possible = []
             for key, marker in candidates:
@@ -1862,13 +2032,24 @@ class DigitalQuestionLayout:
                 if rect.get_area() > page.rect.get_area() * 0.55:
                     question.issues.append("Full-page image cannot be assigned as a diagram; compare with the source.")
                     continue
+                overhang = False
                 unknown_position = first_option_segment is not None and index == first_option_segment and first_y is None
                 in_options = first_option_segment is not None and (
                     index > first_option_segment
-                    or (index == first_option_segment and first_y is not None and rect.y0 >= first_y - 3)
+                    or (index == first_option_segment and first_y is not None
+                        and (rect.y0 >= first_y - 3 or label_beside(rect, page_markers) is not None))
                 )
                 if source in ("vector", "scan"):
                     rect = self._figure_crop_box(segment.page_index, segment, rect)
+                elif not segment.rect.contains(rect):
+                    inside = rect & segment.rect
+                    if inside.get_area() >= rect.get_area() * 0.70:
+                        rect = inside
+                    elif (index == 0 and rect.x0 >= segment.rect.x0 - 1 and rect.x1 <= segment.rect.x1 + 1
+                          and rect.y1 <= segment.rect.y1 and 0 < segment.rect.y0 - rect.y0 <= 12):
+                        # An inline image on the question's first line may stand
+                        # a little taller than that line; it still belongs here.
+                        overhang = True
                 target = None if unknown_position else option_for(rect, page_markers) if in_options else ""
                 if source in ("vector", "scan"):
                     description = "vector" if source == "vector" else "scanned-page"
@@ -1878,7 +2059,7 @@ class DigitalQuestionLayout:
                         target = None
                 if in_options or unknown_position:
                     question.issues.append("Possible option image detected; check its assignment against the source.")
-                if not segment.rect.contains(rect):
+                if not segment.rect.contains(rect) and not overhang:
                     target = None
                 try:
                     # Bound memory on PDFs with enormous physical page boxes.
