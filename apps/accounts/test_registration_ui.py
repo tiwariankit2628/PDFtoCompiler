@@ -23,6 +23,13 @@ class PublicRegistrationTests(TestCase):
         data.update(extra)
         return self.client.post(reverse("accounts:register"), data)
 
+    def test_role_link_only_preselects_the_two_public_roles(self):
+        for requested, expected in (("teacher", "TEACHER"), ("STUDENT", "STUDENT"), ("ADMIN", "STUDENT"), ("", "STUDENT")):
+            with self.subTest(requested=requested):
+                response = self.client.get(reverse("accounts:register"), {"role": requested})
+                self.assertEqual(response.context["form"]["role"].value(), expected)
+                self.assertContains(response, f'value="{expected}" checked')
+
     def test_student_registration_creates_student_and_routes(self):
         resp = self._post(username="stud1", email="s1@example.com", role="STUDENT")
         self.assertEqual(resp.status_code, 302)

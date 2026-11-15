@@ -397,8 +397,16 @@ class ExamAttempt(models.Model):
             # teacher-confirmed key (answer_status 'manually_verified'), with
             # exactly one correct option. A missing key is never a wrong answer.
             key_confirmed = question.key_verified or question.answer_status == "manually_verified"
-            has_key = (not confirmed or
-                       (key_confirmed and sum(1 for opt in question.options.all() if opt.is_correct) == 1))
+            correct_options = [opt for opt in question.options.all() if opt.is_correct] if confirmed else []
+            has_key = not confirmed or (key_confirmed and len(correct_options) == 1)
+            if self.classroom_session_id:
+                # Historical key state cannot be reconstructed from a question
+                # that a teacher may later edit. Record it with the evaluation;
+                # existing attempts deliberately remain unknown rather than
+                # being guessed or silently regraded by a data migration.
+                resp.key_confirmed_at_grading = has_key
+                resp.correct_option_key_at_grading = correct_options[0].option_key if has_key else None
+                resp.selected_option_key_at_grading = resp.selected_option.option_key if resp.selected_option else None
             if confirmed and not has_key:
                 all_private_keys_verified = False
             if has_key and confirmed:
@@ -423,7 +431,10 @@ class ExamAttempt(models.Model):
                 unatt += 1
                 resp.is_correct = None
                 resp.marks_awarded = Decimal("0.00")
-            resp.save(update_fields=["is_correct", "marks_awarded"])
+            fields = ["is_correct", "marks_awarded"]
+            if self.classroom_session_id:
+                fields += ["key_confirmed_at_grading", "correct_option_key_at_grading", "selected_option_key_at_grading"]
+            resp.save(update_fields=fields)
 
         net_score = total_pos - total_neg
         self.score_obtained = net_score
@@ -464,6 +475,7 @@ class ExamAttempt(models.Model):
         """
         attempts = list(
             self.exam.attempts.filter(
+                classroom_session__isnull=True,
                 status__in=[
                     self.AttemptStatus.SUBMITTED,
                     self.AttemptStatus.EVALUATED,
@@ -579,6 +591,12 @@ class ExamResponse(models.Model):
     order = models.PositiveIntegerField("Candidate Display Order", default=0)
     marks_awarded = models.DecimalField("Marks Awarded", max_digits=5, decimal_places=2, default=0.0)
     is_correct = models.BooleanField("Is Correct", null=True, blank=True)
+    # Nullable snapshots for classroom results. NULL means an older record (or
+    # an in-progress response), not an unconfirmed key. Option text remains the
+    # current question version; these fields preserve the grading-time labels.
+    key_confirmed_at_grading = models.BooleanField(null=True, blank=True, editable=False)
+    correct_option_key_at_grading = models.CharField(max_length=10, null=True, blank=True, editable=False)
+    selected_option_key_at_grading = models.CharField(max_length=10, null=True, blank=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

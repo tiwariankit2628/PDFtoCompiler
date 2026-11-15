@@ -23,6 +23,9 @@ const assert = require('assert');
     await Promise.all([page.waitForURL('**/dashboard/**'), page.locator('form').filter({has:page.locator('#id_username')}).locator('button[type=submit]').click()]);
     await page.goto(base+'/questions/practice/upload/');
     await page.locator('#id_title').fill('Structured browser paper');
+    // This case tests the editable structured table renderer. Image-first crop
+    // rendering is covered separately by the source and practice smoke tests.
+    await page.locator('#id_image_first').uncheck();
     await page.locator('#id_pdf_file').setInputFiles(source);
     await Promise.all([page.waitForURL('**/settings/'), page.getByRole('button',{name:/Upload & extract/i}).click()]);
     assert.strictEqual(await page.locator('table.question-table').count(), 1, 'Extracted table missing');
@@ -54,8 +57,9 @@ const assert = require('assert');
     await noOverflow('AI review');
 
     await page.getByRole('link',{name:'← Edit question'}).click();
-    await page.getByText('Compare original question excerpts').click();
-    await page.locator('img[alt^="Original question"]').first().waitFor({state:'visible'});
+    const original = page.locator('img[alt^="Original question"]').first();
+    if (!(await original.isVisible())) await page.getByText('Compare original question excerpts').click();
+    await original.waitFor({state:'visible'});
     await page.waitForFunction(() => document.querySelector('img[alt^="Original question"]').naturalWidth > 0);
     await page.getByRole('textbox',{name:'Table 1, row 3, cell 2'}).fill('$\\frac{1}{2}$');
     await page.getByRole('button',{name:'Add row'}).click();
@@ -72,6 +76,7 @@ const assert = require('assert');
     await Promise.all([page.waitForURL('**/instructions/'), page.getByRole('button',{name:'Create private test'}).click()]);
     await page.locator('#declaration-check').check();
     await Promise.all([page.waitForURL('**/session/**'),page.locator('#start-btn').click()]);
+    await page.locator('#fs-continue-windowed').click();
     assert(await page.locator('table.question-table').getByText('Reviewed row').isVisible(), 'Table did not reach CBT');
     assert(await page.locator('table.question-table .katex').count(), 'CBT table math did not render');
     const payload = await page.locator('#questions-data').textContent();

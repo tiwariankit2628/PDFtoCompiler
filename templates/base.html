@@ -4,149 +4,88 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <meta name="theme-color" content="#171a19">
     <title>{% block title %}{{ PLATFORM_NAME }}{% endblock %} | {{ PLATFORM_NAME }}</title>
-    
-    {# Manifest storage rewrites these local assets; upstream pre-collection SRI hashes would block them. #}
-    <!-- Bootstrap 5.3 CSS -->
+    {# Local assets are rewritten by the production static manifest. #}
     <link href="{% static 'vendor/bootstrap/bootstrap.min.css' %}" rel="stylesheet">
-    
-    <!-- Bootstrap Icons -->
-    <link rel="stylesheet" href="{% static 'vendor/bootstrap-icons/bootstrap-icons.min.css' %}">
-    
-    <!-- Custom CBT CSS -->
-    <link rel="stylesheet" href="{% static 'css/style.css' %}">
-    <link rel="stylesheet" href="{% static 'css/question-content.css' %}">
+    <link href="{% static 'vendor/bootstrap-icons/bootstrap-icons.min.css' %}" rel="stylesheet">
+    <link href="{% static 'css/style.css' %}" rel="stylesheet">
+    <link href="{% static 'css/question-content.css' %}" rel="stylesheet">
+    <link href="{% static 'css/experience.css' %}" rel="stylesheet">
     <script defer src="{% static 'js/table-editor.js' %}"></script>
-    
     {% block extra_head %}{% endblock %}
 </head>
 <body>
-
-    <!-- Main Navigation Bar -->
-    <nav class="navbar navbar-expand-lg navbar-cbt sticky-top">
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <nav class="navbar navbar-expand-lg navbar-cbt sticky-top" aria-label="Main navigation">
         <div class="container">
-            <a class="navbar-brand d-flex align-items-center fw-bold text-decoration-none gap-2" href="{% url 'core:home' %}">
+            <a class="navbar-brand d-flex align-items-center text-decoration-none gap-2" href="{% url 'core:home' %}">
                 <span class="brand-mark" aria-hidden="true"><i class="bi bi-fire"></i></span>
-                <span class="navbar-brand-name">{{ PLATFORM_NAME }}</span>
+                <span class="brand-lockup"><span class="navbar-brand-name">{{ PLATFORM_NAME }}</span><span class="brand-caption">THE PRACTICE STUDIO</span></span>
             </a>
-
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#cbtNavbar" aria-controls="cbtNavbar" aria-expanded="false" aria-label="Toggle navigation">
                 <span class="navbar-toggler-icon"></span>
             </button>
-
             <div class="collapse navbar-collapse" id="cbtNavbar">
                 <ul class="navbar-nav me-auto mb-2 mb-lg-0 ms-lg-4">
-                    <li class="nav-item">
-                        <a class="nav-link fw-medium" href="{% url 'core:contact' %}">Contact</a>
-                    </li>
+                    <li class="nav-item"><a class="nav-link" href="{% url 'core:contact' %}">Contact</a></li>
                 </ul>
-
                 <div class="navbar-actions d-flex align-items-center gap-2">
                     {% if user.is_authenticated %}
-                        <div class="dropdown navbar-account">
-                            <button class="btn btn-cbt-outline dropdown-toggle d-flex align-items-center gap-2 navbar-account-toggle" type="button" id="userMenuButton" data-bs-toggle="dropdown" aria-expanded="false">
-                                <i class="bi bi-person-circle fs-5 text-coral"></i>
-                                <span class="navbar-account-name" title="{{ user.first_name|default:user.username }}">{{ user.first_name|default:user.username }}</span>
-                                <span class="badge rounded-pill text-bg-light border text-uppercase navbar-role-badge" title="{{ user.get_role_display }}" style="font-size: 0.68rem;">{{ user.get_role_display }}</span>
-                            </button>
-                            <ul class="dropdown-menu dropdown-menu-end shadow-sm border-0 py-2" aria-labelledby="userMenuButton">
-                                <li><a class="dropdown-item py-2" href="{% url 'core:dashboard_router' %}"><i class="bi bi-speedometer2 me-2 text-primary"></i> Dashboard</a></li>
-                                <li><a class="dropdown-item py-2" href="{% url 'accounts:profile' %}"><i class="bi bi-person me-2 text-secondary"></i> My Profile</a></li>
-                                {% if user.is_staff or user.is_admin_role %}
-                                <li><a class="dropdown-item py-2" href="/admin/" target="_blank"><i class="bi bi-gear me-2 text-danger"></i> Django Admin</a></li>
-                                {% endif %}
-                                <li><hr class="dropdown-divider"></li>
-                                <li><a class="dropdown-item py-2 text-danger" href="{% url 'accounts:logout' %}"><i class="bi bi-box-arrow-right me-2"></i> Sign Out</a></li>
-                            </ul>
-                        </div>
+                    <div class="dropdown navbar-account">
+                        <button class="btn btn-cbt-outline dropdown-toggle d-flex align-items-center gap-2 navbar-account-toggle" type="button" id="userMenuButton" data-bs-toggle="dropdown" aria-expanded="false">
+                            <i class="bi bi-person-circle fs-5 text-coral" aria-hidden="true"></i>
+                            <span class="navbar-account-name" title="{{ user.first_name|default:user.username }}">{{ user.first_name|default:user.username }}</span>
+                            <span class="badge rounded-pill text-bg-light border text-uppercase navbar-role-badge" title="{{ user.get_role_display }}">{{ user.get_role_display }}</span>
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end shadow-sm border-0 py-2" aria-labelledby="userMenuButton">
+                            <li><a class="dropdown-item py-2" href="{% url 'core:dashboard_router' %}"><i class="bi bi-grid me-2" aria-hidden="true"></i> Dashboard</a></li>
+                            <li><a class="dropdown-item py-2" href="{% url 'accounts:profile' %}"><i class="bi bi-person me-2" aria-hidden="true"></i> My Profile</a></li>
+                            {% if user.is_staff or user.is_admin_role %}<li><a class="dropdown-item py-2" href="{% url 'admin:index' %}" target="_blank" rel="noopener"><i class="bi bi-gear me-2" aria-hidden="true"></i> Django Admin</a></li>{% endif %}
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item py-2 text-danger" href="{% url 'accounts:logout' %}"><i class="bi bi-box-arrow-right me-2" aria-hidden="true"></i> Sign Out</a></li>
+                        </ul>
+                    </div>
                     {% else %}
-                        <a href="{% url 'accounts:login' %}" class="btn btn-cbt-outline">Sign In</a>
-                        <a href="{% url 'accounts:register' %}" class="btn btn-cbt-primary">
-                            <span>Get Started Free</span>
-                            <i class="bi bi-arrow-right ms-1"></i>
-                        </a>
+                    <a href="{% url 'accounts:login' %}" class="btn btn-cbt-outline">Sign in</a>
+                    <a href="{% url 'accounts:register' %}" class="btn btn-cbt-primary">Get started <i class="bi bi-arrow-up-right ms-1" aria-hidden="true"></i></a>
                     {% endif %}
                 </div>
             </div>
         </div>
     </nav>
 
-    <!-- Global Messages Toast / Notification -->
     {% include 'includes/messages.html' %}
+    <main id="main-content" class="flex-grow-1" tabindex="-1">{% block content %}{% endblock %}</main>
 
-    <!-- Main Dynamic Content -->
-    <main class="flex-grow-1">
-        {% block content %}{% endblock %}
-    </main>
-
-    <!-- Platform Footer -->
-    <footer class="footer-cbt">
+    <footer class="footer-cbt site-footer">
         <div class="container">
-            <div class="row g-4">
-                <div class="col-lg-4">
-                    <div class="d-flex align-items-center mb-3 text-white fw-bold fs-5 gap-2">
-                        <span class="brand-mark" aria-hidden="true"><i class="bi bi-fire"></i></span>
-                        <span>{{ PLATFORM_NAME }}</span>
-                    </div>
-                    <p class="small mb-3" style="color:#c9bdb0;">
-                        {{ PLATFORM_TAGLINE }}. Designed for high-stakes entrance exams, government recruitment, institutional assessments, and customized mock tests.
-                    </p>
-                    <div class="d-flex flex-wrap gap-2">
-                        <span class="badge" style="background:#332a24;color:#e5d9cb;"><i class="bi bi-shield-lock me-1"></i> Anti-Cheat Safe</span>
-                        <span class="badge" style="background:#332a24;color:#e5d9cb;"><i class="bi bi-lightning-charge me-1"></i> Real-time Recovery</span>
-                    </div>
+            <div class="footer-topline"><span>BUILT FOR THE NEXT ATTEMPT.</span><i class="bi bi-arrow-up-right" aria-hidden="true"></i></div>
+            <div class="row g-4 g-lg-5 footer-grid">
+                <div class="col-lg-5">
+                    <a href="{% url 'core:home' %}" class="footer-brand text-decoration-none"><span class="brand-mark" aria-hidden="true"><i class="bi bi-fire"></i></span><span>{{ PLATFORM_NAME }}</span></a>
+                    <p class="footer-intro">A thoughtful space to turn papers into practice, create assessments and keep moving forward.</p>
+                    <span class="footer-note"><i class="bi bi-stars" aria-hidden="true"></i> MADE FOR CURIOUS MINDS</span>
                 </div>
-
                 <div class="col-6 col-lg-2 offset-lg-1">
-                    <h6 class="fw-bold mb-3">Product</h6>
-                    <ul class="list-unstyled small">
-                        <li class="mb-2"><a href="{% url 'core:home' %}">Home</a></li>
-                        <li class="mb-2"><a href="{% url 'core:home' %}#features">CBT Engine</a></li>
-                        <li class="mb-2"><a href="{% url 'core:home' %}#features">PDF Compiler</a></li>
-                        <li class="mb-2"><a href="{% url 'accounts:register' %}">Create Account</a></li>
-                    </ul>
+                    <h2 class="footer-heading">Explore</h2>
+                    <ul class="list-unstyled"><li><a href="{% url 'core:home' %}#how-it-works">How it works</a></li><li><a href="{% url 'core:home' %}#showcase">The experience</a></li><li><a href="{% url 'core:contact' %}">Contact</a></li></ul>
                 </div>
-
                 <div class="col-6 col-lg-2">
-                    <h6 class="fw-bold mb-3">Access</h6>
-                    <ul class="list-unstyled small">
-                        <li class="mb-2"><a href="{% url 'accounts:login' %}">Sign In</a></li>
-                        <li class="mb-2"><a href="{% url 'accounts:register' %}">Student Registration</a></li>
-                        <li class="mb-2"><a href="{% url 'accounts:register' %}">Teacher Registration</a></li>
-                        <li class="mb-2"><a href="{% url 'core:contact' %}">Contact & Inquiries</a></li>
-                    </ul>
+                    <h2 class="footer-heading">Get started</h2>
+                    <ul class="list-unstyled"><li><a href="{% url 'accounts:register' %}?role=STUDENT">For students</a></li><li><a href="{% url 'accounts:register' %}?role=TEACHER">For teachers</a></li><li><a href="{% url 'accounts:login' %}">Sign in</a></li></ul>
                 </div>
-
-                <div class="col-lg-3">
-                    <h6 class="text-white fw-bold mb-3">Institutional Inquiries</h6>
-                    <p class="small text-secondary mb-2">Need a custom white-label CBT system for your school, college, or coaching institute?</p>
-                    <a href="mailto:{{ PLATFORM_SUPPORT_EMAIL }}" class="btn btn-sm btn-cbt-outline text-white border-secondary bg-transparent mb-3">
-                        <i class="bi bi-envelope me-1"></i> {{ PLATFORM_SUPPORT_EMAIL }}
-                    </a>
+                <div class="col-lg-2">
+                    <h2 class="footer-heading">Say hello</h2>
+                    <p class="footer-contact">Questions about your workspace?</p>
+                    <a class="footer-email" href="mailto:{{ PLATFORM_SUPPORT_EMAIL }}">Get in touch <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>
                 </div>
             </div>
-
-            <hr class="border-secondary my-4">
-
-            <div class="d-flex flex-column flex-md-row justify-content-between align-items-center small text-secondary">
-                <p class="mb-0">&copy; {{ CURRENT_YEAR }} {{ PLATFORM_NAME }}. All rights reserved.</p>
-                <div class="d-flex gap-3 mt-2 mt-md-0">
-                    <a href="#">Privacy Policy</a>
-                    <a href="#">Terms of Service</a>
-                    <a href="#">Security Statement</a>
-                </div>
-            </div>
+            <div class="footer-bottom"><span>&copy; {{ CURRENT_YEAR }} {{ PLATFORM_NAME }}</span><span>Make practice count.</span></div>
         </div>
     </footer>
-
-    <!-- Bootstrap 5.3 Bundle with Popper -->
     <script src="{% static 'vendor/bootstrap/bootstrap.bundle.min.js' %}"></script>
-    
-    <!-- Custom Platform JS -->
     <script src="{% static 'js/main.js' %}"></script>
-    
     {% block extra_js %}{% endblock %}
 </body>
 </html>
-

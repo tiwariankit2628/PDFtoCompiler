@@ -13,6 +13,7 @@ from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.cache import patch_cache_control
 from django.views import View
 from django.views.generic import DetailView, ListView
 
@@ -23,15 +24,37 @@ from .models import Exam, ExamAttempt, ExamResponse
 from .pdf_generator import generate_student_scorecard_pdf
 
 
+def _ensure_final_for_results(attempt):
+    """Do not present an active attempt as a completed result or scorecard."""
+    if attempt.status == ExamAttempt.AttemptStatus.IN_PROGRESS and attempt.is_expired:
+        attempt.auto_timeout_if_expired()
+    if attempt.status == ExamAttempt.AttemptStatus.IN_PROGRESS:
+        raise PermissionDenied("Results are available after this attempt ends.")
+
+
 class PrivateResultRedirectMixin:
-    """Private attempts never enter institutional result/analytics templates."""
-    def get(self, request, *args, **kwargs):
+    """Keep private results separate and protect an active institutional test.
+
+    Dispatch is used rather than get so the same policy applies to the PDF
+    view, which implements its own get method. Previous results from the same
+    examination must not reveal answers while a new attempt is in progress.
+    """
+    def dispatch(self, request, *args, **kwargs):
         attempt = get_object_or_404(ExamAttempt.objects.select_related("exam"), attempt_uuid=kwargs["attempt_uuid"])
         if attempt.exam.is_private_practice:
             if attempt.student_id != request.user.pk or attempt.exam.creator_id != request.user.pk:
                 raise Http404()
             return redirect("questions:practice_result", attempt_uuid=attempt.attempt_uuid)
-        return super().get(request, *args, **kwargs)
+        if request.user.is_student and attempt.student_id == request.user.pk:
+            active_attempts = ExamAttempt.objects.filter(
+                exam_id=attempt.exam_id, student=request.user, status=ExamAttempt.AttemptStatus.IN_PROGRESS,
+            ).select_related("exam").order_by("started_at")
+            for active in active_attempts:
+                if active.is_expired:
+                    active.auto_timeout_if_expired()
+                else:
+                    return redirect("exams:exam_session", attempt_uuid=active.attempt_uuid)
+        return super().dispatch(request, *args, **kwargs)
 
 
 class StudentResultDetailView(ActiveUserRequiredMixin, PrivateResultRedirectMixin, DetailView):
@@ -47,6 +70,11 @@ class StudentResultDetailView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
     slug_field = "attempt_uuid"
     slug_url_kwarg = "attempt_uuid"
 
+    def get_template_names(self):
+        if self.object.classroom_session_id:
+            return ["exams/classroom/result.html"]
+        return super().get_template_names()
+
     def get_object(self, queryset=None):
         attempt = super().get_object(queryset)
         user = self.request.user
@@ -56,6 +84,7 @@ class StudentResultDetailView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
             if not (user.is_teacher and (attempt.exam.creator == user or user.assigned_categories.filter(pk=attempt.exam.category_id).exists())):
                 raise PermissionDenied("You do not have permission to view this student's result.")
 
+        _ensure_final_for_results(attempt)
         return attempt
 
     def get_context_data(self, **kwargs):
@@ -72,6 +101,22 @@ class StudentResultDetailView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
         can_view_scores = bool(exam.show_result_immediately or user.is_admin_role or user.is_teacher)
         context["can_view_scores"] = can_view_scores
         context["exam"] = exam
+
+        if attempt.classroom_session_id:
+            # The ordinary institutional report assumes every answer has a key;
+            # classroom attempts explicitly allow unverified/ungraded answers.
+            if can_view_scores:
+                from .classroom_results import classroom_result_summary
+                context["classroom_summary"] = classroom_result_summary(attempt)
+                context["can_review"] = bool(exam.allow_review_answers or user.is_admin_role or user.is_teacher)
+            is_reviewer = bool(user.is_admin_role or (user.is_teacher and (
+                exam.creator_id == user.pk or user.assigned_categories.filter(pk=exam.category_id).exists())))
+            context["is_security_reviewer"] = is_reviewer
+            if is_reviewer:
+                context["security_logs"] = attempt.security_logs.all()[:200]
+                context["security_tab_switches"] = attempt.tab_switch_warnings
+                context["security_locked"] = attempt.is_security_locked
+            return context
 
         if can_view_scores:
             analytics = compute_student_attempt_analytics(attempt)
@@ -93,7 +138,7 @@ class StudentResultDetailView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
 
         # Previous attempts by this student on this examination
         context["other_attempts"] = (
-            ExamAttempt.objects.filter(exam=exam, student=attempt.student)
+            ExamAttempt.objects.filter(exam=exam, student=attempt.student, classroom_session__isnull=True)
             .exclude(id=attempt.id)
             .order_by("-started_at")
         )
@@ -135,6 +180,7 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
             if not (user.is_teacher and (attempt.exam.creator == user or user.assigned_categories.filter(pk=attempt.exam.category_id).exists())):
                 raise PermissionDenied("You do not have permission to review these answers.")
 
+        _ensure_final_for_results(attempt)
         return attempt
 
     def get_context_data(self, **kwargs):
@@ -174,21 +220,35 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
             eq = r.exam_question
             q = eq.question
             options = list(q.options.all())
-
-            correct_option = next((opt for opt in options if opt.is_correct), None)
-
-            if r.selected_option is None:
-                status = "unattempted"
-                status_label = "Unattempted"
-                badge_class = "secondary"
-            elif r.selected_option.is_correct:
-                status = "correct"
-                status_label = "Correct"
-                badge_class = "success"
+            correct_options = [opt for opt in options if opt.is_correct]
+            if attempt.classroom_session_id:
+                from .classroom_results import classroom_response_status
+                status = classroom_response_status(r)
+                # Never replace an older saved grade with today's editable key.
+                # For new attempts the original option label was snapshotted;
+                # legacy attempts without it do not expose an invented answer.
+                saved_key = r.correct_option_key_at_grading if r.key_confirmed_at_grading is True else None
+                matching = [opt for opt in options if opt.option_key == saved_key] if saved_key is not None else []
+                correct_option = matching[0] if len(matching) == 1 else None
+                current_key_matches = bool(
+                    saved_key is not None and (q.key_verified or q.answer_status == "manually_verified")
+                    and len(correct_options) == 1 and correct_options[0].option_key == saved_key
+                )
+                explanation = q.explanation if current_key_matches else ""
             else:
-                status = "incorrect"
-                status_label = "Incorrect"
-                badge_class = "danger"
+                saved_key = None
+                correct_option = correct_options[0] if correct_options else None
+                explanation = q.explanation
+                if r.selected_option is None:
+                    status = "unattempted"
+                elif r.selected_option.is_correct:
+                    status = "correct"
+                else:
+                    status = "incorrect"
+            status_label, badge_class = {
+                "correct": ("Correct", "success"), "incorrect": ("Incorrect", "danger"),
+                "ungraded": ("Answered, ungraded", "secondary"), "unattempted": ("Unattempted", "secondary"),
+            }[status]
 
             reviewed_questions.append({
                 "response": r,
@@ -198,6 +258,8 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
                 "options": options,
                 "selected_option": r.selected_option,
                 "correct_option": correct_option,
+                "saved_key": saved_key,
+                "saved_choice": r.selected_option_key_at_grading if attempt.classroom_session_id else None,
                 "status": status,
                 "status_label": status_label,
                 "badge_class": badge_class,
@@ -205,7 +267,7 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
                 "time_spent": r.time_spent_seconds,
                 "positive_marks": eq.positive_marks,
                 "negative_marks": eq.negative_marks,
-                "explanation": q.explanation,
+                "explanation": explanation,
             })
 
         context["reviewed_questions"] = reviewed_questions
@@ -213,6 +275,10 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
         context["correct_total"] = sum(1 for q in reviewed_questions if q["status"] == "correct")
         context["incorrect_total"] = sum(1 for q in reviewed_questions if q["status"] == "incorrect")
         context["unattempted_total"] = sum(1 for q in reviewed_questions if q["status"] == "unattempted")
+        context["ungraded_total"] = sum(1 for q in reviewed_questions if q["status"] == "ungraded")
+        if attempt.classroom_session_id:
+            from .classroom_results import classroom_result_summary
+            context["classroom_summary"] = classroom_result_summary(attempt)
         return context
 
 
@@ -238,16 +304,24 @@ class StudentResultPdfView(ActiveUserRequiredMixin, PrivateResultRedirectMixin, 
             if not (user.is_teacher and (attempt.exam.creator == user or user.assigned_categories.filter(pk=attempt.exam.category_id).exists())):
                 raise PermissionDenied("You do not have permission to download this scorecard.")
 
-        # Ensure evaluated
-        if attempt.status == ExamAttempt.AttemptStatus.IN_PROGRESS and attempt.is_expired:
-            attempt.auto_timeout_if_expired()
+        # A PDF must obey the same release setting as the web scorecard.
+        if user.is_student and not attempt.exam.show_result_immediately:
+            raise PermissionDenied("Results have not been released for this examination.")
 
-        analytics = compute_student_attempt_analytics(attempt)
-        pdf_bytes = generate_student_scorecard_pdf(attempt, analytics)
+        _ensure_final_for_results(attempt)
+
+        if attempt.classroom_session_id:
+            from .classroom_report import generate_classroom_report
+            from .classroom_results import classroom_result_summary
+            pdf_bytes = generate_classroom_report(attempt, classroom_result_summary(attempt))
+        else:
+            analytics = compute_student_attempt_analytics(attempt)
+            pdf_bytes = generate_student_scorecard_pdf(attempt, analytics)
 
         filename = f"{attempt.student.username}_{attempt.exam.slug[:30]}_scorecard.pdf"
         response = HttpResponse(pdf_bytes, content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        patch_cache_control(response, private=True, no_store=True)
         return response
 
 
@@ -264,7 +338,11 @@ class ExamLeaderboardView(ActiveUserRequiredMixin, DetailView):
     slug_url_kwarg = "slug"
 
     def get_queryset(self):
-        return super().get_queryset().filter(is_private_practice=False)
+        queryset = super().get_queryset().filter(is_private_practice=False)
+        # Do not reveal unpublished scores through the leaderboard.
+        if self.request.user.is_student:
+            queryset = queryset.filter(show_result_immediately=True)
+        return queryset
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -272,7 +350,7 @@ class ExamLeaderboardView(ActiveUserRequiredMixin, DetailView):
 
         # Recalculate official ranks to ensure leaderboard accuracy
         latest_attempt = exam.attempts.filter(
-            status__in=["submitted", "evaluated", "timed_out"]
+            classroom_session__isnull=True, status__in=["submitted", "evaluated", "timed_out"]
         ).first()
         if latest_attempt:
             latest_attempt.recalculate_ranks()
@@ -288,6 +366,7 @@ class ExamLeaderboardView(ActiveUserRequiredMixin, DetailView):
         if self.request.user.is_student:
             student_best = exam.attempts.filter(
                 student=self.request.user,
+                classroom_session__isnull=True,
                 status__in=["submitted", "evaluated", "timed_out"],
             ).order_by("rank").first()
             context["student_best_attempt"] = student_best
@@ -359,12 +438,12 @@ class TeacherExportExamResultsCsvView(TeacherRequiredMixin, View):
                 raise PermissionDenied("You cannot export results for this examination.")
 
         # Recalculate ranks to ensure export accuracy
-        sample_att = exam.attempts.filter(status__in=["submitted", "evaluated", "timed_out"]).first()
+        sample_att = exam.attempts.filter(classroom_session__isnull=True, status__in=["submitted", "evaluated", "timed_out"]).first()
         if sample_att:
             sample_att.recalculate_ranks()
 
         attempts = (
-            exam.attempts.filter(status__in=["submitted", "evaluated", "timed_out"])
+            exam.attempts.filter(classroom_session__isnull=True, status__in=["submitted", "evaluated", "timed_out"])
             .select_related("student")
             .order_by("rank", "-score_obtained", "time_taken_seconds")
         )

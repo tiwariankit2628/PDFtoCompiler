@@ -15,7 +15,7 @@
                         </div>
                         <h2 class="fw-bold text-dark mt-3 mb-1">Attempt Ended for Security Review</h2>
                         <span class="badge bg-danger px-3 py-1.5 fw-bold text-uppercase">Strict Exam Mode</span>
-                        <p class="text-secondary small mt-3 mb-0">Your attempt ended after the disclosed page-switch limit. <strong>Your saved answers were preserved and scored.</strong> This is a reported signal for your teacher to review, not a proof of cheating.</p>
+                        <p class="text-secondary small mt-3 mb-0">Your attempt ended after the disclosed page-switch limit. <strong>Your saved answers were preserved{% if attempt.classroom_session_id %}; only confirmed-key responses were scored{% else %} and scored{% endif %}.</strong> This is a reported signal for your teacher to review, not a proof of cheating.</p>
                     {% elif attempt.status == 'timed_out' %}
                         <div class="rounded-circle bg-warning bg-opacity-10 text-warning d-inline-flex align-items-center justify-content-center" style="width: 80px; height: 80px;">
                             <i class="bi bi-clock-history fs-1"></i>
@@ -64,8 +64,17 @@
                     </div>
                 </div>
 
-                <!-- Provisional Result Section (if show_result_immediately is True) -->
-                {% if show_results %}
+                <!-- Classroom scores include only saved, confirmed-key grading decisions. -->
+                {% if show_results and attempt.classroom_session_id %}
+                <div class="card bg-light border p-4 rounded-4 mb-4 text-start">
+                    <h5 class="fw-bold mb-2"><i class="bi bi-clipboard-check text-primary me-2" aria-hidden="true"></i>Classroom result</h5>
+                    <p class="small text-muted">Only answers with confirmed keys are scored. Missing or unverified keys are never treated as wrong.</p>
+                    {% if classroom_summary.score_available %}<p class="mb-2">Score on confirmed keys: <strong>{{ attempt.score_obtained }}</strong>{% if not classroom_summary.fully_keyed %} <span class="text-muted small">(may be partial)</span>{% endif %}</p>{% else %}<p class="mb-2">A score is not available from the saved grading information.</p>{% endif %}
+                    {% if classroom_summary.pending_keys %}<p class="small text-warning-emphasis">{{ classroom_summary.pending_keys }} question{{ classroom_summary.pending_keys|pluralize }} had no confirmed key when graded.</p>{% endif %}
+                    {% if classroom_summary.unknown_keys %}<p class="small text-muted">Some unanswered questions do not have a recorded key status.</p>{% endif %}
+                    <a href="{% url 'exams:student_result_detail' attempt.attempt_uuid %}" class="btn btn-cbt-primary btn-sm">View classroom result</a>
+                </div>
+                {% elif show_results %}
                 <div class="card bg-light border p-4 rounded-4 mb-4 text-start">
                     <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
                         <h5 class="fw-bold text-dark mb-0"><i class="bi bi-award-fill text-primary me-2"></i> Immediate Score Report</h5>

@@ -19,6 +19,7 @@ const assert = require('assert');
       page.locator('form').filter({has: page.locator('#id_username')}).locator('button[type=submit]').click(),
     ]);
     await page.goto(process.env.SOURCE_TEST_URL + process.env.SOURCE_TEST_SESSION_PATH);
+    await page.locator('#fs-continue-windowed').click();
     const parallel = process.env.SOURCE_TEST_PARALLEL === '1';
     const caption = parallel ? 'Other original-language region' : 'Original answer choices';
     await page.getByText(caption, {exact: false}).waitFor({state: 'visible'});
@@ -40,6 +41,7 @@ const assert = require('assert');
       assert.strictEqual(saved.status(), 200);
     }
     await page.reload();
+    await page.locator('#fs-continue-windowed').click();
     if (parallel) await page.locator('#palette-btn-0').click();
     await page.getByText(caption, {exact: false}).waitFor({state: 'visible'});
     if (parallel) assert(await page.locator('.option-card.selected').filter({hasText: 'English 1-2'}).isVisible());

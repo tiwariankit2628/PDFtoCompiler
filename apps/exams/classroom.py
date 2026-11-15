@@ -18,6 +18,7 @@ from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db import IntegrityError, OperationalError, connection, transaction
+from django.db.models import Exists, OuterRef, Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -78,8 +79,15 @@ def _participant_rows(session, page_number, per_page=25):
                     .order_by("joined_at", "id"))
     paginator = Paginator(participants, per_page)
     page = paginator.get_page(page_number)
-    # Map student -> most relevant attempt (latest) for this session.
-    attempts = {a.student_id: a for a in session.attempts.select_related("student").order_by("student_id", "-started_at")}
+    # Keep the newest attempt per participant. A dict comprehension over a
+    # newest-first queryset would overwrite it with the oldest retake.
+    scored_key = ExamResponse.objects.filter(attempt_id=OuterRef("pk")).filter(
+        Q(is_correct__isnull=False) | Q(key_confirmed_at_grading=True))
+    attempts = {}
+    for attempt in (session.attempts.filter(student_id__in=[p.student_id for p in page.object_list])
+                    .select_related("student").annotate(has_scored_key=Exists(scored_key))
+                    .order_by("student_id", "-started_at", "-id")):
+        attempts.setdefault(attempt.student_id, attempt)
     rows = []
     for p in page.object_list:
         a = attempts.get(p.student_id)
@@ -88,12 +96,15 @@ def _participant_rows(session, page_number, per_page=25):
             "username": p.student.username,
             "joined_at": p.joined_at,
             "status": a.status if a else "joined",
+            "status_display": a.get_status_display() if a else "Joined",
             "started_at": a.started_at if a else None,
             "submitted_at": a.submitted_at if a else None,
-            "score": float(a.score_obtained) if a and a.status in (
+            "score": float(a.score_obtained) if a and a.has_scored_key and a.status in (
                 ExamAttempt.AttemptStatus.SUBMITTED, ExamAttempt.AttemptStatus.EVALUATED,
-                ExamAttempt.AttemptStatus.TIMED_OUT) else None,
+                ExamAttempt.AttemptStatus.TIMED_OUT, ExamAttempt.AttemptStatus.TERMINATED) else None,
             "attempt_uuid": str(a.attempt_uuid) if a else None,
+            "result_url": (reverse("exams:student_result_detail", args=[a.attempt_uuid])
+                           if a and a.status in ExamAttempt.FINAL_STATUSES else None),
         })
     return page, rows
 
@@ -101,10 +112,13 @@ def _participant_rows(session, page_number, per_page=25):
 def _session_leaderboard(session):
     """Graded attempts ranked by score (ties: fewer wrong, then faster).
 
-    Only confirmed-key graded attempts are ranked. With retakes, each student's
-    best graded attempt is used. Ungraded/awaiting-key attempts are not ranked.
+    Only attempts with at least one saved graded response are ranked. With
+    retakes, each student's best graded attempt is used. Attempts entirely
+    awaiting a key (or with no graded responses) are not ranked.
     """
-    final = (session.attempts.select_related("student").filter(
+    graded_response = ExamResponse.objects.filter(attempt_id=OuterRef("pk"), is_correct__isnull=False)
+    final = (session.attempts.select_related("student").annotate(has_graded_response=Exists(graded_response)).filter(
+        has_graded_response=True,
         status__in=[ExamAttempt.AttemptStatus.SUBMITTED, ExamAttempt.AttemptStatus.EVALUATED,
                     ExamAttempt.AttemptStatus.TIMED_OUT]))
     best = {}
@@ -236,7 +250,8 @@ class ClassroomSessionQrView(TeacherRequiredMixin, View):
         except Exception:
             return HttpResponse(status=404)
         import io
-        buf = io.StringIO()
+        # Segno's SVG serializer writes bytes to file-like objects.
+        buf = io.BytesIO()
         segno.make(join_url(request, session), error="m").save(buf, kind="svg", scale=5, border=2)
         return HttpResponse(buf.getvalue(), content_type="image/svg+xml")
 
@@ -262,21 +277,28 @@ class ClassroomExportView(TeacherRequiredMixin, View):
         response["Content-Disposition"] = f'attachment; filename="classroom_{session.code}_results.csv"'
         writer = csv.writer(response)
         writer.writerow(["Name", "Username", "Status", "Joined", "Started", "Submitted",
-                         "Score", "Correct", "Incorrect", "Unanswered", "Percentage"])
-        attempts = {a.student_id: a for a in session.attempts.select_related("student").order_by("student_id", "-started_at")}
+                         "Score (confirmed keys)", "Correct", "Incorrect", "Unanswered", "Ungraded",
+                         "Unconfirmed keys at grading", "Unknown key status", "Percentage (confirmed keys)"])
+        from .classroom_results import classroom_result_summary
+        attempts = {}
+        for attempt in (session.attempts.select_related("student").prefetch_related("responses")
+                        .order_by("student_id", "-started_at", "-id")):
+            attempts.setdefault(attempt.student_id, attempt)
         for p in session.participants.select_related("student").order_by("joined_at"):
             a = attempts.get(p.student_id)
-            graded = a and a.status in (ExamAttempt.AttemptStatus.SUBMITTED,
-                                        ExamAttempt.AttemptStatus.EVALUATED, ExamAttempt.AttemptStatus.TIMED_OUT)
+            summary = classroom_result_summary(a) if a and a.status in ExamAttempt.FINAL_STATUSES else None
+            counts = summary["counts"] if summary else {}
             writer.writerow([
                 p.student.get_full_name() or p.student.username, p.student.username,
                 a.status if a else "joined",
                 timezone.localtime(p.joined_at).strftime("%Y-%m-%d %H:%M") if p.joined_at else "",
                 timezone.localtime(a.started_at).strftime("%Y-%m-%d %H:%M") if a and a.started_at else "",
                 timezone.localtime(a.submitted_at).strftime("%Y-%m-%d %H:%M") if a and a.submitted_at else "",
-                f"{a.score_obtained}" if graded else "", a.correct_count if graded else "",
-                a.incorrect_count if graded else "", a.unattempted_count if graded else "",
-                f"{a.percentage}" if graded else "",
+                f"{a.score_obtained}" if summary and summary["score_available"] else "",
+                counts.get("correct", ""), counts.get("incorrect", ""), counts.get("unattempted", ""),
+                counts.get("ungraded", ""), summary["pending_keys"] if summary else "",
+                summary["unknown_keys"] if summary else "",
+                f'{summary["percentage"]}' if summary and summary["percentage"] is not None else "",
             ])
         return response
 

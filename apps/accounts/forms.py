@@ -37,12 +37,12 @@ class UserLoginForm(BootstrapFormMixin, AuthenticationForm):
     username = forms.CharField(
         label="Username or Email",
         widget=forms.TextInput(
-            attrs={"placeholder": "Enter username or email address", "autofocus": True}
+            attrs={"placeholder": "Enter username or email address", "autocomplete": "username"}
         ),
     )
     password = forms.CharField(
         label="Password",
-        widget=forms.PasswordInput(attrs={"placeholder": "Enter your password"}),
+        widget=forms.PasswordInput(attrs={"placeholder": "Enter your password", "autocomplete": "current-password"}),
     )
 
     def clean(self):
@@ -126,6 +126,14 @@ class StudentRegistrationForm(BootstrapFormMixin, forms.ModelForm):
             "target_exam",
             "password",
         ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for name, hint in {
+            "first_name": "given-name", "last_name": "family-name", "username": "username",
+            "email": "email", "password": "new-password", "confirm_password": "new-password",
+        }.items():
+            self.fields[name].widget.attrs["autocomplete"] = hint
 
     def clean_username(self):
         username = self.cleaned_data.get("username").strip().lower()

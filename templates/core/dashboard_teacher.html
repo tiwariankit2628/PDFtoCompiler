@@ -7,10 +7,10 @@
 <div class="welcome-banner teal p-4 mb-4">
     <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3">
         <div>
-            <span class="badge role-badge-teacher text-uppercase px-2 py-1 mb-2">Content Manager</span>
-            <h2 class="fw-bold mb-1">Instructor Workspace</h2>
+            <span class="workspace-kicker">YOUR TEACHING SPACE / INSTRUCTOR</span>
+            <h2 class="fw-bold mt-2 mb-1">Instructor Workspace</h2>
             <p class="mb-0" style="color:rgba(255,255,255,.82);">
-                {{ user.institute_name|default:"Independent Faculty" }} · author exams, compile papers and track student activity.
+                {{ user.institute_name|default:"Independent Faculty" }} · make room for meaningful practice.
             </p>
         </div>
         <div class="d-flex flex-wrap gap-2">
@@ -42,7 +42,8 @@
 </div>
 {% endif %}
 
-<!-- Metrics -->
+<!-- Metrics are scoped to this teacher's own examinations. -->
+<div class="workspace-section-label"><h3>Your overview</h3><span>YOUR WORK, AT A GLANCE</span></div>
 <div class="row g-3 mb-4">
     <div class="col-6 col-xl-3">
         <div class="tile-3d p-3 h-100">
@@ -75,6 +76,7 @@
 </div>
 
 <!-- Workflow shortcuts -->
+<div class="workspace-section-label"><h3>Make something happen</h3><span>YOUR WORKSPACE</span></div>
 <div class="row g-3 mb-4">
     <div class="col-sm-6 col-lg-3">
         <a href="{% url 'questions:paper_upload' %}" class="text-decoration-none">
@@ -112,6 +114,15 @@
             </div>
         </a>
     </div>
+</div>
+
+<div class="surface-card mb-4">
+    <div class="card-header bg-transparent py-3 d-flex justify-content-between align-items-center gap-2" style="border-bottom:1px solid var(--line);">
+        <h5 class="fw-bold mb-0">Your recent tests</h5><a href="{% url 'exams:exam_list' %}" class="small text-decoration-none">View all <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>
+    </div>
+    {% if recent_created_exams %}<div class="list-group list-group-flush">{% for exam in recent_created_exams %}
+    <div class="list-group-item bg-transparent d-flex justify-content-between align-items-center gap-3"><div><strong class="d-block">{{ exam.title }}</strong><span class="small text-muted">{{ exam.get_status_display }} · {{ exam.created_at|date:'d M Y' }}</span></div><a href="{% url 'exams:exam_edit' exam.pk %}" class="btn btn-sm btn-cbt-outline flex-shrink-0">Edit</a></div>
+    {% endfor %}</div>{% else %}<div class="empty-state py-4"><div class="empty-ico"><i class="bi bi-journal-plus"></i></div><h6 class="fw-bold mb-1">Nothing here yet</h6><p class="small mb-2">Your own tests will appear here once you create them.</p><a href="{% url 'exams:exam_create' %}" class="small fw-bold text-decoration-none">Create a test <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a></div>{% endif %}
 </div>
 
 <div class="row g-4" id="categories">
@@ -154,7 +165,7 @@
                         <strong class="d-block text-truncate">{{ attempt.student.get_full_name|default:attempt.student.username }}</strong>
                         <span class="small text-muted text-truncate d-block">{{ attempt.exam.title }} · {{ attempt.started_at|date:"M d, H:i" }}</span>
                     </div>
-                    <span class="badge text-bg-light border flex-shrink-0">{{ attempt.score_obtained }} / {{ attempt.total_marks }}</span>
+                    {% if attempt.status == 'in_progress' %}<span class="badge text-bg-light border flex-shrink-0">In progress</span>{% elif attempt.classroom_session_id %}<a href="{% url 'exams:student_result_detail' attempt.attempt_uuid %}" class="btn btn-sm btn-cbt-outline flex-shrink-0">View result</a>{% else %}<span class="badge text-bg-light border flex-shrink-0">{{ attempt.score_obtained }} / {{ attempt.total_marks }}</span>{% endif %}
                 </div>
                 {% endfor %}
             </div>

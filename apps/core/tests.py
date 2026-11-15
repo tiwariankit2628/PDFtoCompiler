@@ -44,7 +44,7 @@ class CoreViewTests(TestCase):
         for route_name in ["core:home", "core:about", "core:contact"]:
             resp = self.client.get(reverse(route_name))
             self.assertEqual(resp.status_code, 200)
-            self.assertContains(resp, "CBT Engine")
+            self.assertContains(resp, "TestForge CBT")
 
     def test_dashboard_router_redirects_by_role(self):
         # Student redirect
@@ -76,7 +76,7 @@ class CoreViewTests(TestCase):
         self.client.login(username="super_user", password="Password123!")
         resp = self.client.get(reverse("core:super_admin_dashboard"))
         self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "Platform Governance & Analytics")
+        self.assertContains(resp, "Platform Governance &amp; Analytics")
         self.client.logout()
 
         # Standard admin is denied (403 PermissionDenied)
@@ -138,6 +138,25 @@ class CoreViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Science Assessment 1")
         self.assertContains(resp, "85.0%")
+
+    def test_student_dashboard_metrics_do_not_leak_unreleased_or_in_progress_scores(self):
+        released = Exam.objects.create(title="Released", slug="released", category=self.category,
+            creator=self.teacher, status=Exam.ExamStatus.PUBLISHED, show_result_immediately=True)
+        hidden = Exam.objects.create(title="Unreleased", slug="unreleased", category=self.category,
+            creator=self.teacher, status=Exam.ExamStatus.PUBLISHED, show_result_immediately=False)
+        ExamAttempt.objects.create(exam=released, student=self.student, status=ExamAttempt.AttemptStatus.SUBMITTED,
+            percentage=80, is_passed=True)
+        ExamAttempt.objects.create(exam=hidden, student=self.student, status=ExamAttempt.AttemptStatus.SUBMITTED,
+            percentage=99, is_passed=True)
+        ExamAttempt.objects.create(exam=released, student=self.student, status=ExamAttempt.AttemptStatus.IN_PROGRESS,
+            percentage=70, is_passed=True)
+        self.client.force_login(self.student)
+        response = self.client.get(reverse("core:student_dashboard"))
+        self.assertEqual(response.context["total_attempts"], 3)
+        self.assertEqual(response.context["passed_attempts"], 1)
+        self.assertEqual(response.context["avg_percentage"], 80)
+        self.assertNotContains(response, "99%")
+        self.assertNotContains(response, "70%")
 
     def test_audit_log_view_restricted_to_super_admin(self):
         # Super admin can view

@@ -7,10 +7,10 @@
 <div class="welcome-banner p-4 p-lg-4 mb-4">
     <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3">
         <div>
-            <span class="badge role-badge-student text-uppercase px-2 py-1 mb-2">Candidate</span>
-            <h2 class="fw-bold mb-1">Welcome back, {{ user.first_name|default:user.username }}!</h2>
+            <span class="workspace-kicker">YOUR PRACTICE SPACE / STUDENT</span>
+            <h2 class="fw-bold mt-2 mb-1">Good to see you, {{ user.first_name|default:user.username }}.</h2>
             <p class="mb-0" style="color:rgba(255,255,255,.82);">
-                Target: <strong class="text-white">{{ user.target_exam|default:"General Practice" }}</strong>
+                Your next step starts here. <strong class="text-white">{{ user.target_exam|default:"Make practice count." }}</strong>
                 {% if user.institute_name %} · {{ user.institute_name }}{% endif %}
             </p>
         </div>
@@ -41,12 +41,13 @@
         <form method="post" action="{% url 'exams:classroom_join' %}" class="d-flex gap-2" style="max-width:360px;">{% csrf_token %}
             <input type="text" name="code" class="form-control fw-bold text-center" style="letter-spacing:.2em;text-transform:uppercase;"
                    maxlength="12" placeholder="ENTER CODE" aria-label="Join code" required>
-            <button class="btn btn-primary fw-bold px-3"><i class="bi bi-box-arrow-in-right"></i></button>
+            <button class="btn btn-primary fw-bold px-3" aria-label="Join classroom test"><i class="bi bi-box-arrow-in-right" aria-hidden="true"></i></button>
         </form>
     </div>
 </div>
 
-<!-- Key metrics -->
+<!-- Real, permission-scoped metrics -->
+<div class="workspace-section-label"><h3>Your overview</h3><span>YOUR PROGRESS, AT A GLANCE</span></div>
 <div class="row g-3 mb-4">
     <div class="col-6 col-xl-3">
         <div class="tile-3d p-3 h-100">
@@ -62,14 +63,14 @@
         <div class="tile-3d p-3 h-100">
             <div class="icon-box amber sm mb-2"><i class="bi bi-journal-check"></i></div>
             <span class="stat-value fs-3">{{ total_attempts }}</span>
-            <div class="small text-muted mt-1"><span class="text-teal fw-bold">{{ passed_attempts }}</span> passed · exams attempted</div>
+            <div class="small text-muted mt-1">Institutional exams attempted · <span class="text-teal fw-bold">{{ passed_attempts }}</span> passed with results available</div>
         </div>
     </div>
     <div class="col-6 col-xl-3">
         <div class="tile-3d p-3 h-100">
             <div class="icon-box teal sm mb-2"><i class="bi bi-graph-up-arrow"></i></div>
-            <span class="stat-value fs-3">{{ avg_percentage }}%</span>
-            <div class="small text-muted mt-1">Average accuracy across attempts</div>
+            <span class="stat-value fs-3">{% if avg_percentage != None %}{{ avg_percentage }}%{% else %}—{% endif %}</span>
+            <div class="small text-muted mt-1">Average of available exam results</div>
         </div>
     </div>
     <div class="col-6 col-xl-3">
@@ -152,7 +153,7 @@
         <div class="surface-card h-100">
             <div class="card-header bg-transparent py-3 d-flex justify-content-between align-items-center" style="border-bottom:1px solid var(--line);">
                 <h5 class="fw-bold mb-0"><i class="bi bi-clock-history text-coral me-2"></i> Exam attempts</h5>
-                <span class="text-muted small">{{ total_attempts }} total</span>
+                <span class="text-muted small">{{ recent_test_count }} total</span>
             </div>
             {% if recent_attempts %}
             <div class="list-group list-group-flush">
@@ -161,7 +162,7 @@
                     <div class="d-flex justify-content-between align-items-center">
                         <div class="pe-2">
                             <strong class="d-block text-truncate">{{ attempt.exam.title }}</strong>
-                            <span class="small text-muted">{{ attempt.started_at|date:"M d, Y H:i" }} · {{ attempt.exam.category.name }}</span>
+                            <span class="small text-muted">{{ attempt.started_at|date:"M d, Y H:i" }} · {% if attempt.classroom_session_id %}Classroom{% else %}{{ attempt.exam.category.name }}{% endif %}</span>
                         </div>
                         {% if attempt.status == 'in_progress' %}
                             <a href="{% url 'exams:exam_session' attempt.attempt_uuid %}" class="btn btn-sm btn-cbt-primary flex-shrink-0"><i class="bi bi-play-fill"></i> Resume</a>
@@ -171,7 +172,7 @@
                             <span class="badge text-bg-light border flex-shrink-0">Under evaluation</span>
                         {% endif %}
                     </div>
-                    {% if attempt.status != 'in_progress' and attempt.exam.show_result_immediately %}
+                    {% if attempt.status != 'in_progress' and attempt.exam.show_result_immediately and not attempt.classroom_session_id %}
                     <div class="mt-1">
                         {% if attempt.is_passed %}
                             <span class="badge bg-success">Passed · {{ attempt.percentage }}%</span>

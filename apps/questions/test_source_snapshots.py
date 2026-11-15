@@ -412,8 +412,10 @@ class SnapshotPrivateWorkflowTests(TestCase):
 
     def test_parallel_sources_and_shuffled_options_keep_confirmed_key_mapping(self):
         doc = parallel_pdf(); data = doc.write(); doc.close()
+        # This case specifically exercises shuffled text options. Image-first
+        # has its own tests and intentionally keeps printed choice order fixed.
         paper = QuestionPaperUpload.objects.create(title="Parallel paper", category=self.category,
-            uploaded_by=self.owner, is_student_private=True, subject="Physics",
+            uploaded_by=self.owner, is_student_private=True, subject="Physics", image_first=False,
             private_pdf_file=SimpleUploadedFile("parallel.pdf", data, content_type="application/pdf"))
         self.assertEqual(PDFQuestionExtractor(paper).extract(), 3)
         first = paper.extracted_questions.get(question_number=1)

@@ -37,6 +37,13 @@ const {chromium} = require('playwright-core');
     const size = await page.evaluate(() => ({width: document.documentElement.scrollWidth, viewport: document.documentElement.clientWidth}));
     assert(size.width <= size.viewport + 1, `${label}: horizontal overflow ${size.width}px > ${size.viewport}px`);
   }
+  async function noBadgeClip(role, width) {
+    const badge = await page.locator('.sidebar-user-info .badge').evaluate(el => ({
+      width: el.clientWidth, scrollWidth: el.scrollWidth, height: el.clientHeight, scrollHeight: el.scrollHeight,
+    }));
+    assert(badge.width > 0 && badge.scrollWidth <= badge.width + 1 && badge.scrollHeight <= badge.height + 1,
+      `${role} role badge is clipped at ${width}px: ${JSON.stringify(badge)}`);
+  }
   async function login(role) {
     await page.goto(base + data.paths.logout);
     await page.goto(base + data.paths.login);
@@ -58,14 +65,13 @@ const {chromium} = require('playwright-core');
         await page.locator('#cbtNavbar.show').waitFor();
         await noOverflow(`expanded public menu ${width}`);
         if (width === 390) {
-          await page.locator('#cbtNavbar .nav-link[href$="#features"]').click();
-          await page.waitForURL('**/#features');
-          await page.locator('#cbtNavbar:not(.show)').waitFor();
-          const anchor = await page.evaluate(() => ({
-            target: document.getElementById('features').getBoundingClientRect().top,
-            nav: document.querySelector('.navbar').getBoundingClientRect().bottom,
-          }));
-          assert(anchor.target >= anchor.nav - 1, 'Mobile navigation covers the selected section');
+          // The old Features navbar entry was deliberately removed; Contact
+          // remains available in the real responsive navigation.
+          await Promise.all([
+            page.waitForURL(base + data.paths.contact),
+            page.locator('#cbtNavbar .nav-link').filter({hasText:'Contact'}).click(),
+          ]);
+          await noOverflow('contact after mobile navigation');
         } else {
           await page.locator('.navbar-toggler').click();
           await page.locator('#cbtNavbar:not(.show)').waitFor();
@@ -100,6 +106,7 @@ const {chromium} = require('playwright-core');
           assert(await page.locator('#dashboardSidebar a').filter({hasText: data.roles[role].nav}).isVisible(),
             `${role} sidebar navigation missing on mobile`);
           await noOverflow(`${role} dashboard menu ${width}`);
+          await noBadgeClip(role, width);
           if (width === 390) {
             await Promise.all([
               page.waitForURL(base + data.roles[role].target),
@@ -108,6 +115,7 @@ const {chromium} = require('playwright-core');
           }
         } else {
           assert(await page.locator('#dashboardSidebar a').filter({hasText: data.roles[role].nav}).isVisible());
+          await noBadgeClip(role, width);
         }
       }
       const paths = {
@@ -134,6 +142,8 @@ const {chromium} = require('playwright-core');
         for (const width of [320, 1440, 390]) {
           await page.setViewportSize({width, height: 900});
           await visit(data.paths.session, `student exam session ${width}`);
+          assert(await page.locator('#fullscreen-gate').isVisible(), 'Fullscreen choice must be offered');
+          await page.locator('#fs-continue-windowed').click();
           assert(await page.locator('.katex').count(), 'KaTeX did not render in the exam session');
           const payload = await page.locator('#questions-data').textContent();
           assert(!payload.includes('is_correct') && !payload.includes('explanation'), 'Answer key leaked to browser');
@@ -147,6 +157,7 @@ const {chromium} = require('playwright-core');
               page.locator('#btn-save-next').click(),
             ]);
             await page.reload({waitUntil: 'networkidle'});
+            await page.locator('#fs-continue-windowed').click();
             assert.strictEqual(await page.locator('.option-card.selected').count(), 1, 'Mobile answer was not saved');
             await page.locator('#btn-open-submit-modal').click();
             await page.locator('#submitModal.show').waitFor();

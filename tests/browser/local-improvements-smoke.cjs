@@ -17,23 +17,10 @@ const assert = require('assert');
     await page.locator('#id_password').fill('BrowserPracticePass987!');
     await Promise.all([page.waitForURL('**/dashboard/**'), page.locator('form').filter({has:page.locator('#id_username')}).locator('button[type=submit]').click()]);
     await page.goto(base + '/questions/practice/upload/');
+    assert.strictEqual(await page.locator('#id_extraction_mode').inputValue(), 'local');
+    assert.strictEqual(await page.locator('#id_extraction_mode option[value="gemini"]').count(), 0);
+    assert(await page.locator('#id_extraction_mode option[value="__more__"]').isDisabled());
     await page.locator('#id_title').fill('Local browser PDF');
-    await page.locator('#id_pdf_file').setInputFiles(process.env.LOCAL_IMPROVE_PDF);
-    await page.locator('#id_extraction_mode').selectOption('gemini');
-    await Promise.all([
-      page.waitForResponse(response => response.url().includes('/practice/upload/') && response.request().method() === 'POST'),
-      page.getByRole('button', {name:/Upload & extract/i}).click(),
-    ]);
-    const cloudError = page.locator('[data-mode-error]');
-    assert(await cloudError.isVisible(), 'unconfigured cloud error missing');
-    assert(await page.locator('[data-consent-error]').isVisible(), 'cloud consent error missing');
-    await page.locator('#id_extraction_mode').selectOption('local');
-    assert(!(await cloudError.isVisible()), 'stale cloud configuration error stayed visible for local mode');
-    assert(!(await page.locator('#cloud-consent-field').isVisible()), 'cloud consent remained visible in local mode');
-    assert(await page.locator('#method-changed-note').isVisible(), 'method change guidance missing');
-    await page.locator('#id_extraction_mode').selectOption('gemini');
-    assert(await cloudError.isVisible(), 'switching back to the rejected cloud mode should restore its error');
-    await page.locator('#id_extraction_mode').selectOption('local');
     await page.locator('#id_pdf_file').setInputFiles(process.env.LOCAL_IMPROVE_PDF);
     await Promise.all([page.waitForURL('**/settings/'),page.getByRole('button',{name:/Upload & extract/i}).click()]);
     assert(await page.getByText('Extracted questions', {exact:false}).first().isVisible());

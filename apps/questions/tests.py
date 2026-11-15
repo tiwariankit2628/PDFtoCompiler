@@ -117,7 +117,8 @@ class PDFUploadAndValidationTests(TestCase):
         self.client.login(username="teacher_uploader", password="Password123!")
         res = self.client.get(reverse("questions:paper_upload"))
         self.assertEqual(res.status_code, 200)
-        self.assertContains(res, "Upload Question Paper PDF")
+        self.assertContains(res, "Let's prepare your paper.")
+        self.assertContains(res, "Local PyMuPDF / Tesseract")
 
 
 class PDFQuestionExtractionEngineTests(TestCase):

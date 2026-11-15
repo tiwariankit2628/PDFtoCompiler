@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% block title %}Classroom result · {{ exam.title }}{% endblock %}
+{% block content %}
+<div class="container py-4 py-lg-5">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+    <div><a href="{% url 'core:dashboard_router' %}" class="small fw-bold text-decoration-none"><i class="bi bi-arrow-left me-1" aria-hidden="true"></i> Dashboard</a><h2 class="fw-bold mt-2 mb-1">Classroom result</h2><p class="text-muted mb-0">{{ exam.title }} · {{ attempt.student.get_full_name|default:attempt.student.username }}</p></div>
+    {% if can_view_scores %}<div class="d-flex flex-wrap gap-2"><a href="{% url 'exams:student_result_pdf' attempt.attempt_uuid %}" class="btn btn-cbt-outline btn-sm"><i class="bi bi-download me-1" aria-hidden="true"></i> Download summary</a>{% if can_review %}<a href="{% url 'exams:student_result_review' attempt.attempt_uuid %}" class="btn btn-cbt-primary btn-sm">Review answers <i class="bi bi-arrow-up-right ms-1" aria-hidden="true"></i></a>{% endif %}</div>{% endif %}
+  </div>
+  {% if not can_view_scores %}
+    <div class="surface-card p-5 text-center"><div class="icon-box mx-auto mb-3"><i class="bi bi-hourglass-split" aria-hidden="true"></i></div><h3 class="fw-bold">Results are under evaluation</h3><p class="text-muted mb-0">Your answers are recorded. Your teacher controls when this result is released.</p></div>
+  {% else %}
+    <div class="welcome-banner p-4 p-lg-5 mb-4"><div class="d-flex flex-wrap justify-content-between align-items-end gap-3"><div><span class="workspace-kicker">CLASSROOM / SAVED RESPONSES</span><h2 class="fw-bold mt-2 mb-1">Work recorded.</h2><p class="mb-0" style="color:rgba(255,255,255,.82)">Only responses with confirmed keys were scored.</p></div><div><span class="workspace-kicker">SCORE ON CONFIRMED KEYS</span><div class="display-6 fw-bold text-white">{% if classroom_summary.score_available %}{{ attempt.score_obtained }}{% else %}—{% endif %}</div></div></div></div>
+    {% if classroom_summary.pending_keys %}<div class="alert alert-warning small"><strong>{{ classroom_summary.pending_keys }} question{{ classroom_summary.pending_keys|pluralize }} had no confirmed key when graded.</strong> Answers without a key were not marked wrong; changing a key later does not automatically regrade an attempt.</div>{% endif %}
+    {% if classroom_summary.unknown_keys %}<div class="alert alert-light border small">For {{ classroom_summary.unknown_keys }} unanswered question{{ classroom_summary.unknown_keys|pluralize }} in this older attempt, the key status at grading was not recorded. A complete outcome cannot be determined from the saved data.</div>{% endif %}
+    <div class="row g-3 mb-4">
+      <div class="col-6 col-lg-3"><div class="tile-3d p-3 h-100"><span class="text-muted small">Correct</span><div class="stat-value fs-3">{{ classroom_summary.counts.correct }}</div></div></div>
+      <div class="col-6 col-lg-3"><div class="tile-3d p-3 h-100"><span class="text-muted small">Incorrect</span><div class="stat-value fs-3">{{ classroom_summary.counts.incorrect }}</div></div></div>
+      <div class="col-6 col-lg-3"><div class="tile-3d p-3 h-100"><span class="text-muted small">Answered, ungraded</span><div class="stat-value fs-3">{{ classroom_summary.counts.ungraded }}</div></div></div>
+      <div class="col-6 col-lg-3"><div class="tile-3d p-3 h-100"><span class="text-muted small">Unattempted</span><div class="stat-value fs-3">{{ classroom_summary.counts.unattempted }}</div></div></div>
+    </div>
+    <div class="surface-card p-4"><h4 class="fw-bold">About this result</h4><p class="text-muted small mb-2">Grading decisions are shown as recorded when the attempt ended. A missing or ambiguous key is never treated as a wrong answer.</p>{% if classroom_summary.percentage != None %}<p class="small mb-0">Percentage on the keys confirmed at grading: <strong>{{ classroom_summary.percentage }}%</strong>{% if not classroom_summary.fully_keyed %} · This may be partial, not an overall outcome.{% endif %}</p>{% else %}<p class="small mb-0">A percentage is not available from the saved grading information.</p>{% endif %}</div>
+    {% if is_security_reviewer %}<div class="surface-card p-4 mt-4"><h5 class="fw-bold">Security review</h5><p class="small text-muted">Page-switch warnings: {{ security_tab_switches }}. These events are signals for review, not proof of cheating.</p>{% if security_locked %}<p class="small text-danger fw-bold">This attempt ended for security review; saved responses were preserved.</p>{% endif %}{% if security_logs %}<ul class="small mb-0">{% for event in security_logs %}<li>{{ event.timestamp|date:'d M Y H:i:s' }} · {{ event.get_event_type_display }}{% if event.details %} · {{ event.details }}{% endif %}</li>{% endfor %}</ul>{% else %}<p class="small text-muted mb-0">No security events were recorded.</p>{% endif %}</div>{% endif %}
+  {% endif %}
+</div>
+{% endblock %}

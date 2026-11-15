@@ -114,12 +114,10 @@ class ExamInstructionsView(ActiveUserRequiredMixin, DetailView):
             active_attempt.auto_timeout_if_expired()
             active_attempt = None
 
+        # Classroom sessions have their own attempt/retake policy and must not
+        # consume the institutional exam's attempt limit.
         completed_count = user_attempts.filter(
-            status__in=[
-                ExamAttempt.AttemptStatus.SUBMITTED,
-                ExamAttempt.AttemptStatus.EVALUATED,
-                ExamAttempt.AttemptStatus.TIMED_OUT,
-            ]
+            classroom_session__isnull=True, status__in=ExamAttempt.FINAL_STATUSES,
         ).count()
 
         # Eligibility checks
@@ -229,13 +227,8 @@ class ExamStartView(ActiveUserRequiredMixin, View):
 
         # 3. Attempt limit validation
         completed_count = ExamAttempt.objects.filter(
-            exam=exam,
-            student=user,
-            status__in=[
-                ExamAttempt.AttemptStatus.SUBMITTED,
-                ExamAttempt.AttemptStatus.EVALUATED,
-                ExamAttempt.AttemptStatus.TIMED_OUT,
-            ],
+            exam=exam, student=user, classroom_session__isnull=True,
+            status__in=ExamAttempt.FINAL_STATUSES,
         ).count()
 
         if exam.max_attempts > 0 and completed_count >= exam.max_attempts:
@@ -455,9 +448,15 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
                     }
                 )
 
-            # Non-crop figures (actual diagrams) remain available; for image-first
-            # they are already inside the crop, so the template shows the crop only.
-            diagram_figures = [f for f in all_q_figures if f.option_id is None and f.source != "question_crop"]
+            # Label original source snapshots separately from diagrams. They can
+            # include continuation or another language even in image-first mode;
+            # private files must continue to use the owner-checked stream.
+            snapshot_order = {"stem-source": 0, "table-source": 1, "parallel-source": 2, "option-source": 3}
+            question_figures = [f for f in all_q_figures if f.option_id is None and f.source != "question_crop"]
+            diagram_figures = [f for f in question_figures if f.source not in snapshot_order]
+            source_figures = [f for f in question_figures if f.source in snapshot_order and figure_url(f)]
+            source_figures.sort(key=lambda f: (snapshot_order[f.source], f.page_number, f.order, f.pk))
+            source_images = [{"url": figure_url(f), "kind": f.source} for f in source_figures]
             if exam.is_private_practice:
                 question_images = ([reverse("questions:practice_bank_image", args=[q.pk])] if q.private_image else []) + [
                     u for u in (figure_url(f) for f in diagram_figures) if u
@@ -480,6 +479,7 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
                     "crop_urls": crop_urls,
                     "image_url": question_images[0] if question_images else None,
                     "image_urls": question_images,
+                    "source_images": source_images,
                     "positive_marks": float(eq.positive_marks),
                     "negative_marks": float(eq.negative_marks),
                     "selected_option_id": resp.selected_option_id,
@@ -898,7 +898,8 @@ class ExamCompletedView(ActiveUserRequiredMixin, DetailView):
 
     def get(self, request, *args, **kwargs):
         attempt = self.get_object()
-        if attempt.exam.is_private_practice and attempt.status == ExamAttempt.AttemptStatus.IN_PROGRESS:
+        if attempt.status == ExamAttempt.AttemptStatus.IN_PROGRESS:
+            # Never show a successful-submission screen for a live attempt.
             return redirect("exams:exam_session", attempt_uuid=attempt.attempt_uuid)
         response = super().get(request, *args, **kwargs)
         if attempt.exam.is_private_practice:
@@ -921,5 +922,8 @@ class ExamCompletedView(ActiveUserRequiredMixin, DetailView):
                 "show_results": exam.show_result_immediately and not exam.is_private_practice,
             }
         )
+        if attempt.classroom_session_id and context["show_results"]:
+            from .classroom_results import classroom_result_summary
+            context["classroom_summary"] = classroom_result_summary(attempt)
         return context
 

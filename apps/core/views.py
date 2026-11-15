@@ -17,25 +17,9 @@ from apps.exams.models import Category, Exam, ExamAttempt
 
 
 class HomeView(TemplateView):
-    """
-    Commercial landing page showcasing real dynamic examination categories,
-    CBT engine security features, and institutional scale.
-    """
+    """Public landing page; examples are illustrative, not platform metrics."""
 
     template_name = "core/home.html"
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        # Dynamically load active categories from database
-        context["categories"] = Category.objects.filter(is_active=True).order_by("display_order")
-        context["total_categories"] = context["categories"].count()
-        context["stats"] = [
-            {"value": "99.98%", "label": "Engine Reliability"},
-            {"value": "Zero", "label": "Client-Side Leakage"},
-            {"value": "50K+", "label": "Concurrent Exam Capacity"},
-            {"value": "Multi-Lingual", "label": "English & Hindi Support"},
-        ]
-        return context
 
 
 class AboutView(TemplateView):
@@ -224,18 +208,23 @@ class StudentDashboardView(StudentRequiredMixin, TemplateView):
         context = super().get_context_data(**kwargs)
         student = self.request.user
 
-        # Real student attempt metrics from database
-        student_attempts = ExamAttempt.objects.filter(student=student, exam__is_private_practice=False)
+        # Institutional metrics exclude private practice. Do not leak scores or
+        # pass/fail outcomes from exams whose results have not been released.
+        all_exam_attempts = ExamAttempt.objects.filter(student=student, exam__is_private_practice=False)
+        student_attempts = all_exam_attempts.filter(classroom_session__isnull=True)
+        visible_results = student_attempts.filter(
+            status__in=ExamAttempt.FINAL_STATUSES, exam__show_result_immediately=True,
+        )
         context["total_attempts"] = student_attempts.count()
-        context["passed_attempts"] = student_attempts.filter(is_passed=True).count()
-
-        # Average accuracy percentage
-        avg_res = student_attempts.aggregate(Avg("percentage"))["percentage__avg"]
-        context["avg_percentage"] = round(avg_res, 1) if avg_res is not None else 0.0
+        context["passed_attempts"] = visible_results.filter(is_passed=True).count()
+        context["released_result_count"] = visible_results.count()
+        avg_res = visible_results.aggregate(Avg("percentage"))["percentage__avg"]
+        context["avg_percentage"] = round(avg_res, 1) if avg_res is not None else None
 
         # Attempt history
+        context["recent_test_count"] = all_exam_attempts.count()
         context["recent_attempts"] = (
-            student_attempts.select_related("exam", "exam__category")
+            all_exam_attempts.select_related("exam", "exam__category", "classroom_session")
             .order_by("-started_at")[:5]
         )
 

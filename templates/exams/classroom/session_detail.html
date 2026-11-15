@@ -21,9 +21,10 @@
         <div class="small text-uppercase text-muted fw-bold mb-1">Join code</div>
         <div class="display-5 fw-bold" style="letter-spacing:.15em" id="join-code">{{ session.code }}</div>
         <div class="d-flex justify-content-center gap-2 my-3">
-          <button class="btn btn-sm btn-primary" type="button" onclick="copyText('{{ session.code }}', this)"><i class="bi bi-clipboard me-1"></i>Copy code</button>
-          <button class="btn btn-sm btn-outline-secondary" type="button" onclick="copyText('{{ join_url }}', this)"><i class="bi bi-link-45deg me-1"></i>Copy link</button>
+          <button class="btn btn-sm btn-primary" type="button" onclick="copyText('{{ session.code|escapejs }}', this)"><i class="bi bi-clipboard me-1"></i>Copy code</button>
+          <button class="btn btn-sm btn-outline-secondary" type="button" onclick="copyText('{{ join_url|escapejs }}', this)"><i class="bi bi-link-45deg me-1"></i>Copy link</button>
         </div>
+        <div id="copy-status" class="small text-muted" role="status" aria-live="polite"></div>
         <img src="{% url 'exams:classroom_qr' session.pk %}" alt="Join QR code" class="img-fluid mx-auto d-block" style="max-width:180px"
              onerror="this.style.display='none';document.getElementById('qr-missing').style.display='block';">
         <div id="qr-missing" class="small text-muted" style="display:none">QR codes need the optional <code>segno</code> package. Share the code or link instead.</div>
@@ -65,8 +66,9 @@
 
     <div class="card border shadow-sm rounded-4">
       <div class="card-body p-3">
-        <div class="d-flex justify-content-between align-items-center mb-2">
+        <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-2">
           <h6 class="fw-bold mb-0">Participants (<span data-count="joined">{{ counts.joined }}</span>)</h6>
+          <label class="visually-hidden" for="participant-filter">Filter participants on this page</label>
           <input type="search" id="participant-filter" class="form-control form-control-sm w-auto" placeholder="Filter by name…">
         </div>
         <div class="table-responsive">
@@ -76,11 +78,11 @@
               {% for r in rows %}
               <tr data-name="{{ r.name|lower }} {{ r.username|lower }}">
                 <td><div class="fw-semibold">{{ r.name }}</div><div class="small text-muted">{{ r.username }}</div></td>
-                <td><span class="badge bg-light text-dark border text-capitalize">{{ r.status }}</span></td>
+                <td><span class="badge bg-light text-dark border">{{ r.status_display }}</span></td>
                 <td class="small">{{ r.started_at|date:"H:i:s"|default:"—" }}</td>
                 <td class="small">{{ r.submitted_at|date:"H:i:s"|default:"—" }}</td>
                 <td class="text-end">{% if r.score != None %}{{ r.score }}{% else %}<span class="text-muted small">—</span>{% endif %}</td>
-                <td class="text-end">{% if r.attempt_uuid %}<a class="small" href="{% url 'exams:student_result_detail' r.attempt_uuid %}">View</a>{% endif %}</td>
+                <td class="text-end">{% if r.result_url %}<a class="small" href="{{ r.result_url }}">View</a>{% endif %}</td>
               </tr>
               {% empty %}
               <tr><td colspan="6" class="text-center text-muted py-3">No students have joined yet. Share the code above.</td></tr>
@@ -88,38 +90,96 @@
             </tbody>
           </table>
         </div>
-        {% if page_obj.paginator.num_pages > 1 %}
-        <nav class="mt-2"><ul class="pagination pagination-sm mb-0">
-          {% if page_obj.has_previous %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}">Prev</a></li>{% endif %}
-          <li class="page-item disabled"><span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
-          {% if page_obj.has_next %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a></li>{% endif %}
-        </ul></nav>
-        {% endif %}
+        <nav id="participant-pagination" class="mt-2" aria-label="Participant pages" {% if page_obj.paginator.num_pages <= 1 %}hidden{% endif %}>
+          <ul class="pagination pagination-sm mb-0">
+            <li class="page-item" data-page-prev {% if not page_obj.has_previous %}hidden{% endif %}><a class="page-link" href="{% if page_obj.has_previous %}?page={{ page_obj.previous_page_number }}{% else %}#{% endif %}">Previous</a></li>
+            <li class="page-item disabled"><span class="page-link" data-page-label>Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
+            <li class="page-item" data-page-next {% if not page_obj.has_next %}hidden{% endif %}><a class="page-link" href="{% if page_obj.has_next %}?page={{ page_obj.next_page_number }}{% else %}#{% endif %}">Next</a></li>
+          </ul>
+        </nav>
       </div>
     </div>
   </div>
 </div>
 
 <script>
-function copyText(text, btn){ navigator.clipboard.writeText(text).then(()=>{ const o=btn.innerHTML; btn.innerHTML='<i class="bi bi-check2 me-1"></i>Copied'; setTimeout(()=>btn.innerHTML=o,1500); }).catch(()=>{}); }
+async function copyText(text, btn){
+  const status = document.getElementById('copy-status');
+  try {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error('Clipboard unavailable');
+    await navigator.clipboard.writeText(text);
+    status.textContent = 'Copied to clipboard.';
+  } catch(e){ status.textContent = 'Copy unavailable here. Select and copy the code or link shown above.'; }
+}
 (function(){
   const monitorUrl = "{% url 'exams:classroom_monitor' session.pk %}";
   const filter = document.getElementById('participant-filter');
-  filter && filter.addEventListener('input', () => {
+  const body = document.getElementById('participant-body');
+  const dot = document.getElementById('live-dot');
+  const pagination = document.getElementById('participant-pagination');
+  function applyFilter(){
     const q = filter.value.toLowerCase();
-    document.querySelectorAll('#participant-body tr[data-name]').forEach(tr => {
-      tr.style.display = tr.dataset.name.includes(q) ? '' : 'none';
+    body.querySelectorAll('tr[data-name]').forEach(tr => { tr.hidden = !tr.dataset.name.includes(q); });
+  }
+  filter.addEventListener('input', applyFilter);
+  function cell(tr, text, className){
+    const td = document.createElement('td');
+    td.textContent = text;
+    if(className) td.className = className;
+    tr.appendChild(td);
+    return td;
+  }
+  function localTime(value){
+    if(!value) return '—';
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? '—' : date.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+  }
+  function renderRows(rows){
+    const fragment = document.createDocumentFragment();
+    if(!rows.length){
+      const tr = document.createElement('tr');
+      const td = cell(tr, 'No students have joined yet. Share the code above.', 'text-center text-muted py-3');
+      td.colSpan = 6; fragment.appendChild(tr);
+    }
+    rows.forEach(row => {
+      const tr = document.createElement('tr');
+      tr.dataset.name = (row.name + ' ' + row.username).toLowerCase();
+      const name = document.createElement('td');
+      const strong = document.createElement('div'); strong.className = 'fw-semibold'; strong.textContent = row.name;
+      const username = document.createElement('div'); username.className = 'small text-muted'; username.textContent = row.username;
+      name.append(strong, username); tr.appendChild(name);
+      const status = document.createElement('td');
+      const badge = document.createElement('span'); badge.className = 'badge bg-light text-dark border'; badge.textContent = row.status_display;
+      status.appendChild(badge); tr.appendChild(status);
+      cell(tr, localTime(row.started_at), 'small');
+      cell(tr, localTime(row.submitted_at), 'small');
+      cell(tr, row.score === null ? '—' : String(row.score), 'text-end');
+      const action = cell(tr, '', 'text-end');
+      if(row.result_url){ const link = document.createElement('a'); link.className = 'small'; link.href = row.result_url; link.textContent = 'View'; action.appendChild(link); }
+      fragment.appendChild(tr);
     });
-  });
+    body.replaceChildren(fragment);
+    applyFilter();
+  }
+  function renderPagination(d){
+    pagination.hidden = d.num_pages <= 1;
+    pagination.querySelector('[data-page-label]').textContent = `Page ${d.page} of ${d.num_pages}`;
+    [['prev', d.page - 1, d.page > 1], ['next', d.page + 1, d.page < d.num_pages]].forEach(([key, page, visible]) => {
+      const item = pagination.querySelector(`[data-page-${key}]`); item.hidden = !visible;
+      const url = new URL(location.href); url.searchParams.set('page', page);
+      item.querySelector('a').href = url.pathname + url.search;
+    });
+  }
   async function poll(){
     try {
-      const r = await fetch(monitorUrl + (new URL(location.href)).search, {headers:{'X-Requested-With':'XMLHttpRequest'}});
-      if(!r.ok) return;
+      const r = await fetch(monitorUrl + (new URL(location.href)).search, {headers:{'X-Requested-With':'XMLHttpRequest'}, cache:'no-store'});
+      if(!r.ok) throw new Error('Monitor unavailable');
       const d = await r.json();
       Object.entries(d.counts).forEach(([k,v]) => document.querySelectorAll(`[data-count="${k}"]`).forEach(el => el.textContent = v));
-      const dot = document.getElementById('live-dot');
-      if(d.is_ended){ dot.className='badge bg-secondary'; dot.textContent='● ended'; }
-    } catch(e){}
+      renderRows(d.rows); renderPagination(d);
+      dot.className = d.is_ended ? 'badge bg-secondary' : 'badge bg-success';
+      dot.textContent = d.is_ended ? '● ended' : '● live';
+    } catch(e){ dot.className='badge bg-warning text-dark'; dot.textContent='● reconnecting'; }
   }
   setInterval(poll, 5000);
 })();

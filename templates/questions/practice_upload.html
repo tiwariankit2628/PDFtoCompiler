@@ -1,18 +1,22 @@
 {% extends 'dashboard_base.html' %}
-{% block title %}Create PDF practice | {{ PLATFORM_NAME }}{% endblock %}
+{% block title %}Create PDF practice{% endblock %}
 {% block dashboard_content %}
-<a href="{% url 'questions:practice_list' %}" class="small text-decoration-none">← My PDF practice</a>
-<div class="card border shadow-sm p-4 p-md-5 mt-3" style="max-width: 760px;">
-  <h2 class="fw-bold">Turn a PDF into practice</h2>
-  <p class="text-muted">Upload a question paper, review the extracted questions and diagrams, then choose your test duration.</p>
-  <div class="alert alert-info small"><strong>Local extraction only:</strong> your PDF stays on this server and is never sent to external providers. Extraction can be incomplete or inaccurate, so review every question before you start.</div>
-  <form method="post" enctype="multipart/form-data" novalidate>{% csrf_token %}
-    {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors|striptags }}</div>{% endif %}
-    {% for field in form %}<div class="mb-3 {% if field.field.widget.input_type == 'checkbox' %}form-check{% endif %}">
-      {% if field.field.widget.input_type == 'checkbox' %}{{ field }}<label class="form-check-label" for="{{ field.id_for_label }}">{{ field.label }}</label>{% if field.help_text %}<small class="text-muted d-block">{{ field.help_text }}</small>{% endif %}{% else %}<label class="form-label fw-semibold" for="{{ field.id_for_label }}">{{ field.label }}{% if field.field.required %} *{% endif %}</label>{{ field }}{% if field.help_text %}<small class="text-muted d-block mt-1">{{ field.help_text }}</small>{% endif %}{% endif %}
-      {% for error in field.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}</div>{% endfor %}
-    <p class="small text-muted">PDF only · up to 25 MB and {{ max_pages }} pages · no password-protected PDFs. If a submission fails, select the PDF again.</p>
-    <button class="btn btn-primary px-4"><i class="bi bi-file-earmark-arrow-up me-1"></i> Upload & extract</button>
-  </form>
+<a href="{% url 'questions:practice_list' %}" class="small fw-bold text-decoration-none"><i class="bi bi-arrow-left me-1" aria-hidden="true"></i> My PDF practice</a>
+<div class="upload-heading"><div><span class="eyebrow">YOUR PAPER / YOUR PACE</span><h2>Let's make it practice.</h2><p>Bring a question paper. We'll help you review the extraction before you make a test.</p></div></div>
+{% include 'questions/_upload_steps.html' %}
+<div class="upload-layout">
+    <div class="upload-form-card">
+        <form method="post" enctype="multipart/form-data" novalidate data-upload-form>{% csrf_token %}
+            {% if form.non_field_errors %}<div class="alert alert-danger" role="alert">{{ form.non_field_errors|striptags }}</div>{% endif %}
+            <div class="mb-3"><label class="form-label" for="{{ form.title.id_for_label }}">Practice test title <span aria-hidden="true">*</span></label>{{ form.title }}{% for error in form.title.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}</div>
+            <div class="mb-4"><label class="form-label" for="{{ form.subject.id_for_label }}">Subject <span class="text-muted fw-normal">(optional)</span></label>{{ form.subject }}{% for error in form.subject.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}</div>
+            <div class="mb-4"><label class="form-label" for="{{ form.pdf_file.id_for_label }}">Your question paper <span aria-hidden="true">*</span></label><div class="file-drop" data-file-drop><div class="file-drop-icon"><i class="bi bi-file-earmark-arrow-up" aria-hidden="true"></i></div><strong class="d-block mb-2">Choose a PDF or drop it here</strong>{{ form.pdf_file }}<span data-file-name>PDF only · up to 25 MB and {{ max_pages }} pages</span></div>{% for error in form.pdf_file.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}</div>
+            <div class="mb-3"><label class="form-label" for="{{ form.extraction_mode.id_for_label }}">Extraction method</label>{{ form.extraction_mode }}{% for error in form.extraction_mode.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}</div>
+            <div class="form-check mb-4">{{ form.image_first }}<label class="form-check-label fw-bold" for="{{ form.image_first.id_for_label }}">{{ form.image_first.label }}</label><small class="text-muted d-block mt-1">{{ form.image_first.help_text }}</small>{% for error in form.image_first.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}</div>
+            <button type="submit" class="btn btn-cbt-primary px-4 py-3">Upload &amp; extract <i class="bi bi-arrow-up-right ms-1" aria-hidden="true"></i></button>
+            <div class="upload-status" data-upload-status role="status" aria-live="polite"></div>
+        </form>
+    </div>
+    <aside class="upload-help-card"><div class="icon-box sm mb-3"><i class="bi bi-shield-check" aria-hidden="true"></i></div><h3>A little care goes a long way.</h3><p><strong>Local extraction only.</strong> It runs on this server and does not send your PDF to an external provider.</p><ul><li>Review every question against the original.</li><li>Scans, formulas and diagrams can need extra attention.</li><li>If submission fails, select the PDF again.</li></ul></aside>
 </div>
 {% endblock %}

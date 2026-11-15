@@ -1,256 +1,98 @@
 {% extends 'base.html' %}
 {% load static %}
-
-{% block title %}Commercial CBT Platform & Online Examination System{% endblock %}
+{% block title %}Make practice count{% endblock %}
+{% block extra_head %}<meta name="description" content="Turn question papers into thoughtful practice and create assessments with {{ PLATFORM_NAME }}.">{% endblock %}
 
 {% block content %}
-<!-- Hero Section -->
-<section class="hero-gradient">
-    <div class="container position-relative" style="z-index: 2;">
-        <div class="row align-items-center g-4 g-lg-5">
-            <div class="col-lg-7 text-center text-lg-start">
-                <div class="d-inline-flex align-items-center gap-2 px-3 py-1 rounded-pill hero-chip text-white mb-3 small">
-                    <span class="badge bg-primary">NEW</span>
-                    <span>High-Stakes Online CBT Engine &amp; PDF Question Compiler</span>
+<div class="landing-page">
+    <section class="landing-hero" aria-labelledby="hero-title">
+        <div class="container hero-layout">
+            <div class="hero-copy">
+                <div class="eyebrow hero-eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span> A BETTER WAY TO PREPARE</div>
+                <h1 id="hero-title">Big goals.<br><span>Better practice.</span></h1>
+                <p>From a paper on your desk to a test on your screen. Make space for the kind of practice that moves you forward.</p>
+                <div class="hero-actions">
+                    {% if user.is_authenticated %}<a href="{% url 'core:dashboard_router' %}" class="button-primary">Open your workspace <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>{% else %}<a href="{% url 'accounts:register' %}?role=STUDENT" class="button-primary">Start practising <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>{% endif %}
+                    <a href="#how-it-works" class="button-text"><span class="play-icon"><i class="bi bi-play-fill" aria-hidden="true"></i></span> See how it works</a>
                 </div>
-                <h1 class="display-4 fw-extrabold text-white mb-3 lh-sm">
-                    The Modern Standard for <span class="hero-highlight">Computer-Based Testing</span>
-                </h1>
-                <p class="lead text-light text-opacity-75 mb-4">
-                    Host competitive, university, entrance, coding, and government examinations with millisecond-grade timer accuracy, zero client-side answer leakage, and an automated PDF-to-exam compiler.
-                </p>
-                <div class="d-flex flex-column flex-sm-row gap-3 justify-content-center justify-content-lg-start">
-                    {% if user.is_authenticated %}
-                        <a href="{% url 'core:dashboard_router' %}" class="btn btn-cbt-primary btn-lg px-4 py-3 fw-bold">
-                            <i class="bi bi-speedometer2 me-2"></i> Go to Dashboard
-                        </a>
-                    {% else %}
-                        <a href="{% url 'accounts:register' %}" class="btn btn-cbt-primary btn-lg px-4 py-3 fw-bold">
-                            <i class="bi bi-play-circle-fill me-2"></i> Take Free Trial Exam
-                        </a>
-                        <a href="{% url 'accounts:login' %}" class="btn btn-outline-light btn-lg px-4 py-3">
-                            <i class="bi bi-box-arrow-in-right me-2"></i> Teacher / Admin Sign In
-                        </a>
-                    {% endif %}
-                </div>
-                
-                <div class="mt-4 pt-3 border-top border-white border-opacity-10 d-flex flex-wrap gap-4 text-white text-opacity-75 small">
-                    <div><i class="bi bi-check-circle-fill me-1" style="color:#ffb37a;"></i> No Credit Card Required</div>
-                    <div><i class="bi bi-check-circle-fill me-1" style="color:#ffb37a;"></i> 1st Exam 100% Free</div>
-                    <div><i class="bi bi-check-circle-fill me-1" style="color:#ffb37a;"></i> Anti-Tamper Secured</div>
-                </div>
+                <div class="hero-footnote"><span><i class="bi bi-check2-circle" aria-hidden="true"></i> Your paper, your practice</span><span><i class="bi bi-check2-circle" aria-hidden="true"></i> Made for students &amp; teachers</span></div>
             </div>
+            <div class="hero-art" aria-label="Interactive sample question">
+                <div class="hero-orbit hero-orbit-one" aria-hidden="true"></div><div class="hero-orbit hero-orbit-two" aria-hidden="true"></div>
+                <div class="demo-window">
+                    <div class="demo-topbar"><span class="demo-lights" aria-hidden="true"><i></i><i></i><i></i></span><span>PRACTICE PREVIEW</span><span class="demo-label">DEMO</span></div>
+                    <div class="demo-body">
+                        <div class="demo-meta"><span><i class="bi bi-lightning-charge-fill" aria-hidden="true"></i> A LITTLE PRACTICE</span><span>QUESTION 01</span></div>
+                        <h2>Which of these is a renewable source of energy?</h2>
+                        <p class="demo-instruction">Try selecting an option below.</p>
+                        <div class="demo-options" aria-label="Sample answer options">
+                            <button type="button" class="demo-option" data-demo-option aria-pressed="false"><span>A</span> Solar energy</button>
+                            <button type="button" class="demo-option" data-demo-option aria-pressed="false"><span>B</span> Coal</button>
+                            <button type="button" class="demo-option" data-demo-option aria-pressed="false"><span>C</span> Natural gas</button>
+                            <button type="button" class="demo-option" data-demo-option aria-pressed="false"><span>D</span> Petroleum</button>
+                        </div>
+                        <div class="demo-bottom"><span data-demo-status aria-live="polite"><span class="demo-status-dot"></span> This is an interactive demo</span><span class="demo-next">YOUR NEXT STEP <i class="bi bi-arrow-right" aria-hidden="true"></i></span></div>
+                    </div>
+                </div>
+                <div class="floating-note floating-note-top" aria-hidden="true"><span class="floating-icon"><i class="bi bi-file-earmark-pdf"></i></span><span><small>START WITH A PAPER</small><strong>Make it practice.</strong></span></div>
+                <div class="floating-note floating-note-bottom" aria-hidden="true"><span class="floating-icon dark"><i class="bi bi-stars"></i></span><span><small>ONE STEP AT A TIME</small><strong>Progress, your way.</strong></span></div>
+                <div class="hero-art-caption" aria-hidden="true">A LITTLE MORE READY, EVERY DAY <span>✳</span></div>
+            </div>
+        </div>
+        <div class="container hero-edge"><span>MADE FOR THE WORK AHEAD</span><span>SCROLL TO EXPLORE <i class="bi bi-arrow-down" aria-hidden="true"></i></span></div>
+    </section>
 
-            <div class="col-lg-5">
-                <!-- Interactive Preview Card -->
-                <div class="card bg-white text-dark shadow-lg border-0 rounded-4 overflow-hidden">
-                    <div class="bg-dark text-white px-3 py-2 d-flex justify-content-between align-items-center small">
-                        <span class="fw-semibold"><i class="bi bi-laptop me-1"></i> Live CBT Interface Simulation</span>
-                        <span class="badge text-bg-warning"><i class="bi bi-clock me-1"></i> 01:59:45</span>
-                    </div>
-                    <div class="p-4">
-                        <div class="d-flex justify-content-between align-items-center mb-3">
-                            <span class="badge text-bg-light border text-uppercase">Section: Physics / Mechanics</span>
-                            <span class="text-muted small">Question 14 of 90</span>
-                        </div>
-                        <h6 class="fw-bold mb-3">
-                            A block of mass 2 kg is placed on an inclined plane of angle 30°. What is the minimum coefficient of static friction to prevent slipping?
-                        </h6>
-                        <div class="d-flex flex-column gap-2 mb-4">
-                            <div class="p-2 border rounded d-flex align-items-center gap-2 bg-light">
-                                <span class="badge bg-secondary">A</span>
-                                <span>tan(30°) = 0.577</span>
-                            </div>
-                            <div class="p-2 border rounded d-flex align-items-center gap-2 border-primary bg-primary bg-opacity-10">
-                                <span class="badge bg-primary">B</span>
-                                <span class="fw-bold text-primary">sin(30°) / cos(30°) = 0.577 (Selected)</span>
-                            </div>
-                            <div class="p-2 border rounded d-flex align-items-center gap-2 bg-light">
-                                <span class="badge bg-secondary">C</span>
-                                <span>cos(30°) = 0.866</span>
-                            </div>
-                            <div class="p-2 border rounded d-flex align-items-center gap-2 bg-light">
-                                <span class="badge bg-secondary">D</span>
-                                <span>None of the above</span>
-                            </div>
-                        </div>
-                        <div class="d-flex justify-content-between gap-2">
-                            <button class="btn btn-sm btn-outline-secondary" disabled>Clear Response</button>
-                            <button class="btn btn-sm btn-outline-warning" disabled>Mark for Review</button>
-                            <button class="btn btn-sm btn-success" disabled>Save & Next <i class="bi bi-arrow-right"></i></button>
-                        </div>
-                    </div>
-                    <div class="card-footer bg-light border-0 py-2 text-center text-muted small">
-                        <i class="bi bi-shield-lock-fill text-success me-1"></i> Answers securely recorded & encrypted server-side
-                    </div>
+    <div class="benefit-strip" aria-label="Platform highlights"><div class="container benefit-strip-inner"><span><i class="bi bi-file-earmark-text" aria-hidden="true"></i> From paper to practice</span><span><i class="bi bi-window-stack" aria-hidden="true"></i> A focused test experience</span><span><i class="bi bi-people" aria-hidden="true"></i> Built for classrooms too</span><span><i class="bi bi-check2-square" aria-hidden="true"></i> Review before you begin</span></div></div>
+
+    <section class="section-space showcase-section" id="showcase" aria-labelledby="showcase-heading">
+        <div class="container">
+            <div class="section-heading section-heading-split"><div><span class="eyebrow">01 / THE EXPERIENCE</span><h2 id="showcase-heading">The work is yours.<br><em>The tools are here.</em></h2></div><p>Every great attempt starts somewhere. Find a more thoughtful way to prepare, teach and grow.</p></div>
+            <div class="showcase" data-carousel aria-roledescription="carousel" aria-label="Explore the platform">
+                <div class="showcase-slides" aria-live="off">
+                    <article class="showcase-slide" data-slide aria-roledescription="slide" aria-label="1 of 3">
+                        <img src="{% static 'images/marketing/pdf-workflow.webp' %}" width="1672" height="941" alt="" loading="lazy">
+                        <div class="showcase-content"><span class="slide-kicker">01 / START WITH A PAPER</span><h3>That PDF has<br>potential.</h3><p>Bring a question paper in, review what was extracted, and make it your own practice set.</p>{% if user.is_student %}<a href="{% url 'questions:practice_upload' %}">Create PDF practice <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>{% elif user.is_authenticated %}<a href="{% url 'core:dashboard_router' %}">Open your workspace <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>{% else %}<a href="{% url 'accounts:register' %}?role=STUDENT">Start practising <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>{% endif %}</div>
+                    </article>
+                    <article class="showcase-slide" data-slide aria-roledescription="slide" aria-label="2 of 3">
+                        <img src="{% static 'images/marketing/cbt-experience.webp' %}" width="1672" height="941" alt="" loading="lazy">
+                        <div class="showcase-content"><span class="slide-kicker">02 / FIND YOUR FOCUS</span><h3>Practice like<br>it matters.</h3><p>A familiar question palette and a focused, timed interface help you settle into the work.</p><a href="{% url 'exams:exam_catalog' %}">Explore available exams <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a></div>
+                    </article>
+                    <article class="showcase-slide" data-slide aria-roledescription="slide" aria-label="3 of 3">
+                        <img src="{% static 'images/marketing/classroom.webp' %}" width="1672" height="941" alt="" loading="lazy">
+                        <div class="showcase-content"><span class="slide-kicker">03 / LEARN TOGETHER</span><h3>Better practice<br>is a team effort.</h3><p>Teachers can create classroom sessions and invite students to join with a code.</p>{% if user.is_teacher or user.is_admin_role %}<a href="{% url 'exams:classroom_hub' %}">Open classroom tests <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>{% elif user.is_authenticated %}<a href="{% url 'core:contact' %}">Talk to us <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>{% else %}<a href="{% url 'accounts:register' %}?role=TEACHER">Explore as a teacher <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>{% endif %}</div>
+                    </article>
+                </div>
+                <div class="showcase-controls" data-carousel-controls hidden>
+                    <div class="carousel-count"><span data-carousel-current>01</span><span class="carousel-count-line"></span><span>03</span></div>
+                    <div class="carousel-dots" aria-label="Choose a slide"><button type="button" data-carousel-dot aria-label="Show slide 1" aria-pressed="true"></button><button type="button" data-carousel-dot aria-label="Show slide 2" aria-pressed="false"></button><button type="button" data-carousel-dot aria-label="Show slide 3" aria-pressed="false"></button></div>
+                    <div class="carousel-actions"><button type="button" data-carousel-pause aria-label="Pause automatic slides"><i class="bi bi-pause-fill" aria-hidden="true"></i><span class="visually-hidden">Pause automatic slides</span></button><button type="button" data-carousel-prev aria-label="Previous slide"><i class="bi bi-arrow-left" aria-hidden="true"></i></button><button type="button" data-carousel-next aria-label="Next slide"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></div>
                 </div>
             </div>
         </div>
-    </div>
-</section>
+    </section>
 
-<!-- Stats Metrics Bar -->
-<section class="py-4 border-bottom" style="background-color:var(--ivory-2,#efe7db);">
-    <div class="container">
-        <div class="row g-4 text-center">
-            {% for stat in stats %}
-            <div class="col-6 col-md-3">
-                <div class="p-3 rounded-3 surface-card">
-                    <h3 class="fw-bolder text-primary mb-1">{{ stat.value }}</h3>
-                    <p class="text-muted mb-0 small fw-medium">{{ stat.label }}</p>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-    </div>
-</section>
-
-<!-- Examination Categories Section -->
-<section class="py-5" id="categories">
-    <div class="container py-4">
-        <div class="text-center max-w-700 mx-auto mb-5">
-            <span class="badge text-bg-primary-subtle text-primary border border-primary-subtle mb-2 px-3 py-1">Versatile & Scalable</span>
-            <h2 class="fw-bold">Dynamic Examination Categories</h2>
-            <p class="text-muted">Configurable by administrators to cater to schools, universities, state commissions, and corporate technical assessments.</p>
-        </div>
-
-        <div class="row g-4">
-            {% for cat in categories %}
-            <div class="col-md-6 col-lg-4">
-                <div class="card h-100 card-hover-effect p-4">
-                    <div class="d-flex justify-content-between align-items-start mb-3">
-                        <div class="icon-box-primary">
-                            <i class="bi {{ cat.icon }}"></i>
-                        </div>
-                        <span class="badge bg-light text-dark border">{{ cat.exams.count }} Tests</span>
-                    </div>
-                    <h5 class="fw-bold mb-2">{{ cat.name }}</h5>
-                    <p class="text-muted small mb-3 flex-grow-1">{{ cat.description }}</p>
-                    <a href="{% url 'accounts:register' %}" class="fw-semibold text-primary text-decoration-none small">
-                        Explore Category <i class="bi bi-chevron-right ms-1"></i>
-                    </a>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-    </div>
-</section>
-
-<!-- CBT Engine Showcase Section -->
-<section class="py-5 bg-white border-top border-bottom" id="features">
-    <div class="container py-4">
-        <div class="row align-items-center g-4 g-lg-5">
-            <div class="col-lg-6">
-                <span class="badge text-bg-success-subtle text-success border border-success-subtle mb-2 px-3 py-1">Engine Specification</span>
-                <h2 class="fw-bold mb-3">Engineered for Realistic High-Stakes Assessments</h2>
-                <p class="text-muted mb-4">
-                    Modeled after national examination portals (NTA, TCS iON, UPSC). Gives students an authentic test environment while providing administrators iron-clad security.
-                </p>
-
-                <div class="d-flex flex-column gap-3">
-                    <div class="d-flex gap-3">
-                        <div class="icon-box ink flex-shrink-0" style="width: 42px; height: 42px;">
-                            <i class="bi bi-shield-lock-fill"></i>
-                        </div>
-                        <div>
-                            <h6 class="fw-bold mb-1">Zero Client-Side Answer Leakage</h6>
-                            <p class="text-muted small mb-0">Correct answers, explanations, and scoring matrices remain strictly isolated on the backend. No browser developer tools or API packet sniffer can inspect answers during an active session.</p>
-                        </div>
-                    </div>
-
-                    <div class="d-flex gap-3">
-                        <div class="icon-box amber flex-shrink-0" style="width: 42px; height: 42px;">
-                            <i class="bi bi-clock-history"></i>
-                        </div>
-                        <div>
-                            <h6 class="fw-bold mb-1">Server-Synced Countdown &amp; Automatic Submission</h6>
-                            <p class="text-muted small mb-0">Exam time is verified continuously against server timestamps. When time expires, answers are automatically committed without student intervention.</p>
-                        </div>
-                    </div>
-
-                    <div class="d-flex gap-3">
-                        <div class="icon-box teal flex-shrink-0" style="width: 42px; height: 42px;">
-                            <i class="bi bi-wifi-off"></i>
-                        </div>
-                        <div>
-                            <h6 class="fw-bold mb-1">Network Interruption &amp; Power Failure Resilience</h6>
-                            <p class="text-muted small mb-0">Every choice is committed instantly to session state. If internet drops or the machine reboots, the student can resume from the exact state with remaining time intact.</p>
-                        </div>
-                    </div>
-
-                    <div class="d-flex gap-3">
-                        <div class="icon-box plum flex-shrink-0" style="width: 42px; height: 42px;">
-                            <i class="bi bi-file-earmark-pdf"></i>
-                        </div>
-                        <div>
-                            <h6 class="fw-bold mb-1">Advanced PDF Question Paper Compiler</h6>
-                            <p class="text-muted small mb-0">Upload paper PDFs, extract bilingual text, formula equations, and diagrams with PyMuPDF & OCR, verify in an editable workspace, and instantly create test papers.</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="col-lg-6">
-                <div class="p-4 bg-light rounded-4 border">
-                    <h5 class="fw-bold mb-3"><i class="bi bi-palette text-primary me-2"></i> National Exam Palette Legend</h5>
-                    <div class="row g-2 mb-4">
-                        <div class="col-6">
-                            <div class="p-2 bg-white rounded border d-flex align-items-center gap-2 small">
-                                <span class="badge bg-success">12</span>
-                                <span>Answered</span>
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="p-2 bg-white rounded border d-flex align-items-center gap-2 small">
-                                <span class="badge bg-danger">08</span>
-                                <span>Not Answered</span>
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="p-2 bg-white rounded border d-flex align-items-center gap-2 small">
-                                <span class="badge bg-secondary">35</span>
-                                <span>Not Visited</span>
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="p-2 bg-white rounded border d-flex align-items-center gap-2 small">
-                                <span class="badge bg-warning text-dark">05</span>
-                                <span>Marked for Review</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <h6 class="fw-bold mb-2">Dynamic Question Navigation Grid</h6>
-                    <div class="d-flex flex-wrap gap-2 p-3 bg-white rounded border mb-3">
-                        {% for i in "12345678901234567890" %}
-                        <div class="d-flex align-items-center justify-content-center border rounded fw-bold small text-muted" style="width: 34px; height: 34px; font-size: 0.75rem;">
-                            {{ forloop.counter }}
-                        </div>
-                        {% endfor %}
-                    </div>
-                    <p class="text-muted small mb-0"><i class="bi bi-info-circle me-1"></i> Instant 1-click jump to any question across sections.</p>
-                </div>
+    <section class="section-space process-section" id="how-it-works" aria-labelledby="process-heading">
+        <div class="container">
+            <div class="section-heading section-heading-split"><div><span class="eyebrow">02 / FROM PAPER TO PRACTICE</span><h2 id="process-heading">Less friction.<br><em>More momentum.</em></h2></div><p>Start with what you have. Take it one thoughtful step at a time.</p></div>
+            <div class="process-grid" id="features">
+                <article class="process-card"><div class="process-card-top"><span>01</span><i class="bi bi-file-earmark-arrow-up" aria-hidden="true"></i></div><h3>Bring your paper.</h3><p>Upload a PDF to your workspace. Extraction runs locally on the server.</p><span class="process-tag">YOUR STARTING POINT <i class="bi bi-arrow-up-right" aria-hidden="true"></i></span></article>
+                <article class="process-card process-card-accent"><div class="process-card-top"><span>02</span><i class="bi bi-bounding-box-circles" aria-hidden="true"></i></div><h3>Make it yours.</h3><p>Compare questions with the original, review images and fix anything that needs attention.</p><span class="process-tag">A HUMAN IN THE LOOP <i class="bi bi-arrow-up-right" aria-hidden="true"></i></span></article>
+                <article class="process-card"><div class="process-card-top"><span>03</span><i class="bi bi-check2-square" aria-hidden="true"></i></div><h3>Show up ready.</h3><p>Create a test, practise at your pace and revisit the work when you're done.</p><span class="process-tag">PRACTICE WITH PURPOSE <i class="bi bi-arrow-up-right" aria-hidden="true"></i></span></article>
             </div>
         </div>
-    </div>
-</section>
+    </section>
 
-<!-- Call to Action Banner -->
-<section class="py-5 bg-dark text-white text-center">
-    <div class="container py-4">
-        <h2 class="display-6 fw-bold mb-3">Ready to Experience Commercial-Grade CBT?</h2>
-        <p class="lead text-light text-opacity-75 mb-4 mx-auto" style="max-width: 650px;">
-            Join thousands of students and educators taking competitive tests, university mock examinations, and assessments today.
-        </p>
-        <div class="d-flex gap-3 justify-content-center">
-            <a href="{% url 'accounts:register' %}" class="btn btn-cbt-primary btn-lg px-4 fw-bold">
-                Create Free Account
-            </a>
-            <a href="{% url 'core:contact' %}" class="btn btn-outline-light btn-lg px-4">
-                Institutional Inquiry
-            </a>
+    <section class="section-space audience-section" aria-labelledby="audience-heading">
+        <div class="container audience-layout">
+            <div class="audience-copy"><span class="eyebrow">03 / YOUR SPACE TO GROW</span><h2 id="audience-heading">Different goals.<br><em>One good place.</em></h2><p>Whether you're preparing for the next exam or helping a room full of learners, there's a workspace for you.</p><div class="audience-tabs" data-role-tabs role="tablist" aria-label="Choose an experience" hidden><button type="button" id="role-student-tab" role="tab" aria-selected="true" aria-controls="role-student" data-role-tab="student">I'm a student <i class="bi bi-arrow-up-right" aria-hidden="true"></i></button><button type="button" id="role-teacher-tab" role="tab" aria-selected="false" aria-controls="role-teacher" data-role-tab="teacher">I'm a teacher <i class="bi bi-arrow-up-right" aria-hidden="true"></i></button></div></div>
+            <div class="audience-panels">
+                <div class="audience-panel" id="role-student" data-role-panel="student" role="tabpanel" aria-labelledby="role-student-tab"><div class="audience-panel-icon"><i class="bi bi-mortarboard" aria-hidden="true"></i></div><span class="audience-label">FOR THE STUDENT</span><h3>Make room<br>for progress.</h3><p>Turn your own papers into private practice, come back to your attempts and keep your questions close.</p><ul><li><i class="bi bi-check2" aria-hidden="true"></i> A workspace for your PDFs</li><li><i class="bi bi-check2" aria-hidden="true"></i> Review and practise at your pace</li><li><i class="bi bi-check2" aria-hidden="true"></i> Join classroom tests with a code</li></ul>{% if user.is_student %}<a href="{% url 'questions:practice_list' %}" class="audience-link">Go to my practice <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>{% elif user.is_authenticated %}<a href="{% url 'core:dashboard_router' %}" class="audience-link">Open your workspace <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>{% else %}<a href="{% url 'accounts:register' %}?role=STUDENT" class="audience-link">Start as a student <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>{% endif %}</div>
+                <div class="audience-panel audience-panel-teacher" id="role-teacher" data-role-panel="teacher" role="tabpanel" aria-labelledby="role-teacher-tab"><div class="audience-panel-icon"><i class="bi bi-easel2" aria-hidden="true"></i></div><span class="audience-label">FOR THE TEACHER</span><h3>Give good work<br>room to happen.</h3><p>Build question banks, organise assessments and bring students together for a classroom test.</p><ul><li><i class="bi bi-check2" aria-hidden="true"></i> Review papers before publishing</li><li><i class="bi bi-check2" aria-hidden="true"></i> Create and manage tests</li><li><i class="bi bi-check2" aria-hidden="true"></i> Invite students with a join code</li></ul>{% if user.is_teacher or user.is_admin_role %}<a href="{% url 'exams:classroom_hub' %}" class="audience-link">Explore classroom tests <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>{% elif user.is_authenticated %}<a href="{% url 'core:contact' %}" class="audience-link">Talk to us <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>{% else %}<a href="{% url 'accounts:register' %}?role=TEACHER" class="audience-link">Start as a teacher <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>{% endif %}</div>
+            </div>
         </div>
-    </div>
-</section>
+    </section>
+
+    <section class="closing-section"><div class="container"><div class="closing-card"><div><span class="eyebrow">THE NEXT STEP IS YOURS</span><h2>Ready when<br><em>you are.</em></h2><p>Bring the ambition. We'll make room for the practice.</p></div>{% if user.is_authenticated %}<a href="{% url 'core:dashboard_router' %}" class="button-primary">Go to your workspace <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>{% else %}<a href="{% url 'accounts:register' %}" class="button-primary">Create your account <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>{% endif %}<span class="closing-spark" aria-hidden="true">✳</span></div></div></section>
+</div>
 {% endblock %}
-
+{% block extra_js %}<script src="{% static 'js/home.js' %}" defer></script>{% endblock %}

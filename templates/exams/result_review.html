@@ -88,7 +88,7 @@
     <!-- Filter Buttons Bar -->
     <div class="card border-0 shadow-sm rounded-4 p-3 mb-4">
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-            <div class="btn-group" role="group">
+            <div class="btn-group flex-wrap" role="group" aria-label="Filter questions by outcome">
                 <button type="button" class="btn btn-sm btn-outline-dark active filter-btn" data-filter="all">
                     All Questions ({{ total_reviewed }})
                 </button>
@@ -101,12 +101,16 @@
                 <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="unattempted">
                     Unattempted ({{ unattempted_total }})
                 </button>
+                {% if attempt.classroom_session_id %}<button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="ungraded">Ungraded ({{ ungraded_total }})</button>{% endif %}
             </div>
             <div class="small text-muted">
-                Score: <strong class="text-dark">{{ attempt.score_obtained }} / {{ attempt.total_marks }}</strong> ({{ attempt.percentage }}%)
+                {% if attempt.classroom_session_id %}Score on confirmed keys: <strong class="text-dark">{% if classroom_summary.score_available %}{{ attempt.score_obtained }}{% else %}Not available{% endif %}</strong>{% if not classroom_summary.fully_keyed %} · incomplete{% endif %}
+                {% else %}Score: <strong class="text-dark">{{ attempt.score_obtained }} / {{ attempt.total_marks }}</strong> ({{ attempt.percentage }}%){% endif %}
             </div>
         </div>
     </div>
+
+    {% if attempt.classroom_session_id %}<div class="alert alert-light border small">Outcomes and saved key labels reflect grading when the attempt ended. Question text, options and explanations below are the current version and may have changed since then. Older attempts may not have a saved key label.</div>{% endif %}
 
     <!-- Questions Review Feed -->
     <div class="d-flex flex-column gap-4" id="questions-feed">
@@ -123,9 +127,11 @@
                     <span class="text-muted"><i class="bi bi-clock me-1"></i> {{ q_data.time_spent }}s spent</span>
                     <span class="badge bg-{{ q_data.badge_class }} px-2.5 py-1.5 fw-bold">
                         {% if q_data.status == 'correct' %}
-                            <i class="bi bi-check-circle-fill me-1"></i> Correct (+{{ q_data.positive_marks }})
+                            <i class="bi bi-check-circle-fill me-1"></i> Correct ({% if attempt.classroom_session_id %}{{ q_data.marks_awarded }}{% else %}+{{ q_data.positive_marks }}{% endif %})
                         {% elif q_data.status == 'incorrect' %}
-                            <i class="bi bi-x-circle-fill me-1"></i> Incorrect (-{{ q_data.negative_marks }})
+                            <i class="bi bi-x-circle-fill me-1"></i> Incorrect ({% if attempt.classroom_session_id %}{{ q_data.marks_awarded }}{% else %}-{{ q_data.negative_marks }}{% endif %})
+                        {% elif q_data.status == 'ungraded' %}
+                            <i class="bi bi-clock me-1"></i> Answered, ungraded
                         {% else %}
                             <i class="bi bi-dash-circle me-1"></i> Unattempted (0.00)
                         {% endif %}
@@ -147,11 +153,18 @@
 
             {% for figure in q_data.question.figures.all %}{% if not figure.option_id %}<div class="mb-3 text-center">{% if figure.source == 'option-source' %}<div class="small text-muted">Original choices in printed order (1=A, 2=B, etc.).</div>{% elif figure.source == 'parallel-source' %}<div class="small text-muted">Other original-language region — verify that choices match the printed labels (1=A, 2=B, etc.).</div>{% elif figure.source == 'stem-source' or figure.source == 'table-source' %}<div class="small text-muted">Original question or table region.</div>{% endif %}<img src="{{ figure.image.url }}" alt="Question figure" class="img-fluid rounded border" style="max-height:280px;"></div>{% endif %}{% endfor %}
 
+            {% if attempt.classroom_session_id %}
+            <div class="small text-muted mb-3">
+                {% if q_data.saved_choice != None %}Choice when graded: <strong>{{ q_data.saved_choice }}</strong>.{% elif q_data.status != 'unattempted' %}Original choice label was not recorded.{% endif %}
+                {% if q_data.saved_key != None %} Key when graded: <strong>{{ q_data.saved_key }}</strong>.{% elif q_data.response.key_confirmed_at_grading == False %} No confirmed key when graded.{% else %} Original key status was not recorded.{% endif %}
+            </div>
+            {% endif %}
+
             <!-- Options Review Grid -->
             <div class="mb-3">
                 {% for opt in q_data.options %}
-                <div class="review-opt-card {% if opt.is_correct %}review-opt-correct{% elif q_data.selected_option.id == opt.id and not opt.is_correct %}review-opt-incorrect{% endif %}">
-                    <span class="review-badge-circle {% if opt.is_correct %}bg-success text-white{% elif q_data.selected_option.id == opt.id and not opt.is_correct %}bg-danger text-white{% else %}bg-light text-dark border{% endif %}">
+                <div class="review-opt-card {% if q_data.correct_option.id == opt.id or not attempt.classroom_session_id and opt.is_correct %}review-opt-correct{% elif q_data.selected_option.id == opt.id and q_data.status == 'incorrect' %}review-opt-incorrect{% endif %}">
+                    <span class="review-badge-circle {% if q_data.correct_option.id == opt.id or not attempt.classroom_session_id and opt.is_correct %}bg-success text-white{% elif q_data.selected_option.id == opt.id and q_data.status == 'incorrect' %}bg-danger text-white{% else %}bg-light text-dark border{% endif %}">
                         {{ opt.option_key }}
                     </span>
                     <div class="flex-grow-1 text-dark">
@@ -162,12 +175,16 @@
                         {% for figure in opt.figures.all %}<img src="{{ figure.image.url }}" alt="Option image" class="img-fluid d-block mt-2 rounded border" style="max-height:120px;">{% endfor %}
                     </div>
                     <div>
-                        {% if opt.is_correct and q_data.selected_option.id == opt.id %}
+                        {% if q_data.correct_option.id == opt.id and q_data.selected_option.id == opt.id and q_data.status == 'correct' %}
                             <span class="badge bg-success"><i class="bi bi-check2 me-1"></i> Your Answer (Correct)</span>
-                        {% elif opt.is_correct %}
-                            <span class="badge bg-success bg-opacity-25 text-success border border-success"><i class="bi bi-check2 me-1"></i> Correct Answer</span>
-                        {% elif q_data.selected_option.id == opt.id %}
+                        {% elif q_data.correct_option.id == opt.id or not attempt.classroom_session_id and opt.is_correct %}
+                            <span class="badge bg-success bg-opacity-25 text-success border border-success"><i class="bi bi-check2 me-1"></i> {% if attempt.classroom_session_id %}Key at grading{% else %}Correct Answer{% endif %}</span>
+                        {% elif q_data.selected_option.id == opt.id and q_data.status == 'ungraded' %}
+                            <span class="badge text-bg-light border">Your answer · ungraded</span>
+                        {% elif q_data.selected_option.id == opt.id and q_data.status == 'incorrect' %}
                             <span class="badge bg-danger"><i class="bi bi-x me-1"></i> Your Answer</span>
+                        {% elif q_data.selected_option.id == opt.id %}
+                            <span class="badge text-bg-light border">Your answer</span>
                         {% endif %}
                     </div>
                 </div>
@@ -183,7 +200,7 @@
                     {% if q_data.explanation %}
                         {{ q_data.explanation|linebreaksbr }}
                     {% else %}
-                        <span class="text-muted fst-italic">Standard direct conceptual formulation. Refer to course syllabus.</span>
+                        <span class="text-muted fst-italic">No confirmed explanation is available.</span>
                     {% endif %}
                 </div>
             </div>

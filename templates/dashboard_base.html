@@ -24,7 +24,7 @@
                 <div class="card-body p-3">
                 {% with active_key=request.resolver_match|sidebar_key %}
                     <div class="d-flex align-items-center gap-2 pb-3 mb-3 border-bottom">
-                        <div class="icon-box-primary mb-0" style="width: 38px; height: 38px; font-size: 1.1rem;">
+                        <div class="icon-box-primary mb-0 flex-shrink-0" style="width: 38px; height: 38px; font-size: 1.1rem;">
                             {% if user.is_super_admin %}
                                 <i class="bi bi-shield-lock-fill text-danger"></i>
                             {% elif user.is_admin_user %}
@@ -35,7 +35,7 @@
                                 <i class="bi bi-mortarboard-fill" style="color:var(--plum);"></i>
                             {% endif %}
                         </div>
-                        <div class="overflow-hidden">
+                        <div class="sidebar-user-info">
                             <h6 class="fw-bold mb-0 text-truncate">{{ user.first_name|default:user.username }}</h6>
                             <span class="badge {% if user.is_super_admin %}role-badge-super{% elif user.is_admin_user %}role-badge-admin{% elif user.is_teacher %}role-badge-teacher{% else %}role-badge-student{% endif %} text-uppercase" style="font-size: 0.65rem;">
                                 {{ user.get_role_display }}

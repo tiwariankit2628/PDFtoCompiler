@@ -26,7 +26,11 @@ class UserRegisterView(View):
     def get(self, request):
         if request.user.is_authenticated:
             return redirect("core:dashboard_router")
-        form = PublicRegistrationForm()
+        # A public landing-page link may preselect a role, but only the two
+        # public choices are accepted. The POST form remains authoritative.
+        requested_role = request.GET.get("role", "").strip().upper()
+        role = requested_role if requested_role in (User.Roles.STUDENT, User.Roles.TEACHER) else User.Roles.STUDENT
+        form = PublicRegistrationForm(initial={"role": role})
         return render(request, self.template_name, {"form": form})
 
     def post(self, request):

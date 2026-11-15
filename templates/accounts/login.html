@@ -1,67 +1,30 @@
 {% extends 'base.html' %}
 {% load static %}
-
-{% block title %}Sign In | {{ PLATFORM_NAME }}{% endblock %}
-
+{% block title %}Sign in{% endblock %}
 {% block content %}
 <div class="auth-wrapper">
     <div class="auth-shell">
         <aside class="auth-aside">
             <div>
-                <a href="{% url 'core:home' %}" class="d-inline-flex align-items-center gap-2 text-decoration-none text-white mb-4">
-                    <span class="brand-mark"><i class="bi bi-fire"></i></span>
-                    <span class="fw-bold fs-5">{{ PLATFORM_NAME }}</span>
-                </a>
-                <h2 class="fw-bold mb-3">Welcome back.</h2>
-                <p class="point mb-4">Pick up your practice, review results, or manage your question papers — everything is where you left it.</p>
+                <a href="{% url 'core:home' %}" class="d-inline-flex align-items-center gap-2 text-decoration-none text-white"><span class="brand-mark" aria-hidden="true"><i class="bi bi-fire"></i></span><span class="fw-bold fs-5">{{ PLATFORM_NAME }}</span></a>
+                <span class="auth-aside-kicker">YOUR SPACE IS WAITING</span>
+                <h2>Pick up where<br>you left off.</h2>
+                <p class="point mt-3">Your papers, practice and progress have a place here. Let's get back to it.</p>
             </div>
-            <ul class="list-unstyled d-flex flex-column gap-3 mb-0 small">
-                <li class="point"><i class="bi bi-lightning-charge-fill me-2"></i> Resume interrupted sessions safely</li>
-                <li class="point"><i class="bi bi-graph-up-arrow me-2"></i> Track accuracy across attempts</li>
-                <li class="point"><i class="bi bi-shield-lock-fill me-2"></i> Answers stay encrypted server-side</li>
-            </ul>
+            <div class="auth-aside-footer"><span class="workspace-kicker">A LITTLE MORE READY, EVERY DAY</span><p class="point small mb-0 mt-2">For students finding their rhythm and teachers making room for learning.</p></div>
         </aside>
-
         <div class="auth-body">
-            <div class="mb-4">
-                <h3 class="fw-bold mb-1">Sign in</h3>
-                <p class="text-muted small mb-0">Access your dashboard, assessments and workspace.</p>
-            </div>
-
-            {% if form.non_field_errors %}
-            <div class="alert alert-danger py-2 small">
-                {% for error in form.non_field_errors %}
-                    <div><i class="bi bi-exclamation-circle me-1"></i> {{ error }}</div>
-                {% endfor %}
-            </div>
-            {% endif %}
-
-            <form method="post" action="{% url 'accounts:login' %}{% if request.GET.next %}?next={{ request.GET.next }}{% endif %}" novalidate>
+            <span class="eyebrow">WELCOME BACK</span>
+            <h3 class="fw-bold mt-2 mb-1">Sign in to your space.</h3>
+            <p class="text-muted small mb-4">Your next step is right where you left it.</p>
+            {% if form.non_field_errors %}<div class="alert alert-danger py-2 small" role="alert">{% for error in form.non_field_errors %}<div><i class="bi bi-exclamation-circle me-1" aria-hidden="true"></i> {{ error }}</div>{% endfor %}</div>{% endif %}
+            <form method="post" action="{% url 'accounts:login' %}{% if request.GET.next %}?next={{ request.GET.next|urlencode }}{% endif %}" novalidate>
                 {% csrf_token %}
-                <div class="mb-3">
-                    <label class="form-label fw-semibold small" for="{{ form.username.id_for_label }}">Username or Email</label>
-                    {{ form.username }}
-                    {% if form.username.errors %}<div class="text-danger small mt-1">{{ form.username.errors.0 }}</div>{% endif %}
-                </div>
-
-                <div class="mb-3">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <label class="form-label fw-semibold small" for="{{ form.password.id_for_label }}">Password</label>
-                        <a href="{% url 'accounts:password_reset' %}" class="small text-decoration-none">Forgot Password?</a>
-                    </div>
-                    {{ form.password }}
-                    {% if form.password.errors %}<div class="text-danger small mt-1">{{ form.password.errors.0 }}</div>{% endif %}
-                </div>
-
-                <button type="submit" class="btn btn-cbt-primary w-100 py-2 fw-bold mt-2">
-                    <i class="bi bi-box-arrow-in-right me-1"></i> Sign In
-                </button>
+                <div class="mb-3"><label class="form-label fw-semibold" for="{{ form.username.id_for_label }}">Username or email</label>{{ form.username }}{% if form.username.errors %}<div class="text-danger small mt-1">{{ form.username.errors.0 }}</div>{% endif %}</div>
+                <div class="mb-3"><div class="d-flex justify-content-between align-items-center gap-2"><label class="form-label fw-semibold" for="{{ form.password.id_for_label }}">Password</label><a href="{% url 'accounts:password_reset' %}" class="small text-decoration-none">Forgot password?</a></div><div class="password-field">{{ form.password }}<button type="button" class="password-toggle" data-password-toggle="{{ form.password.id_for_label }}" aria-label="Show password" aria-pressed="false" hidden>Show</button></div>{% if form.password.errors %}<div class="text-danger small mt-1">{{ form.password.errors.0 }}</div>{% endif %}</div>
+                <button type="submit" class="btn btn-cbt-primary w-100 py-3 fw-bold mt-2">Sign in <i class="bi bi-arrow-up-right ms-1" aria-hidden="true"></i></button>
             </form>
-
-            <div class="text-center mt-4 pt-3 border-top small text-muted">
-                Don't have an account yet?
-                <a href="{% url 'accounts:register' %}" class="fw-semibold text-decoration-none">Register Free &rarr;</a>
-            </div>
+            <div class="text-center mt-4 pt-3 border-top small text-muted">New around here? <a href="{% url 'accounts:register' %}" class="fw-bold text-decoration-none">Create an account <i class="bi bi-arrow-right" aria-hidden="true"></i></a></div>
         </div>
     </div>
 </div>

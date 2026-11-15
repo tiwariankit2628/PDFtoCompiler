@@ -886,6 +886,34 @@ class ResultEvaluationAndAnalyticsTests(TestCase):
         self.assertEqual(res_teacher.status_code, 200)
         self.assertContains(res_teacher, "Marks Obtained")
 
+    def test_hidden_results_are_not_available_via_pdf_or_leaderboard(self):
+        self.exam.show_result_immediately = False
+        self.exam.save(update_fields=["show_result_immediately"])
+        attempt = self._create_submitted_attempt(self.student_1, q1_key="A")
+        self.client.force_login(self.student_1)
+        self.assertEqual(self.client.get(reverse("exams:student_result_pdf", args=[attempt.attempt_uuid])).status_code, 403)
+        self.assertEqual(self.client.get(reverse("exams:exam_leaderboard", args=[self.exam.slug])).status_code, 404)
+        self.client.force_login(self.teacher)
+        self.assertEqual(self.client.get(reverse("exams:student_result_pdf", args=[attempt.attempt_uuid])).status_code, 200)
+        self.assertEqual(self.client.get(reverse("exams:exam_leaderboard", args=[self.exam.slug])).status_code, 200)
+
+    def test_current_or_previous_results_cannot_reveal_answers_during_a_reattempt(self):
+        previous = self._create_submitted_attempt(self.student_1, q1_key="A")
+        active = ExamAttempt.objects.create(exam=self.exam, student=self.student_1,
+            expires_at=timezone.now() + timedelta(minutes=30))
+        expiry = active.expires_at
+        self.client.force_login(self.student_1)
+        for target in (previous, active):
+            for view in ("student_result_detail", "student_result_review", "student_result_pdf"):
+                response = self.client.get(reverse("exams:" + view, args=[target.attempt_uuid]))
+                self.assertRedirects(response, reverse("exams:exam_session", args=[active.attempt_uuid]), fetch_redirect_response=False)
+        active.refresh_from_db()
+        self.assertEqual(active.expires_at, expiry)
+        self.assertEqual(active.status, ExamAttempt.AttemptStatus.IN_PROGRESS)
+        # Another student cannot use the new guard to view the attempt either.
+        self.client.force_login(self.student_2)
+        self.assertEqual(self.client.get(reverse("exams:student_result_review", args=[previous.attempt_uuid])).status_code, 403)
+
     def test_solution_review_permitted_and_answers_revealed(self):
         attempt = self._create_submitted_attempt(self.student_1, q1_key="A", q2_key="B", time_taken=60)
 

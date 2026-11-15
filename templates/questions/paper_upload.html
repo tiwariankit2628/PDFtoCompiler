@@ -1,109 +1,23 @@
 {% extends 'dashboard_base.html' %}
-
-{% block title %}Upload PDF Question Paper | {{ PLATFORM_NAME }}{% endblock %}
-
+{% block title %}Upload PDF question paper{% endblock %}
 {% block dashboard_content %}
-<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom">
-    <div>
-        <h2 class="fw-bold mb-1">Upload Question Paper PDF</h2>
-        <p class="text-muted mb-0">Local extraction only. All results require review against the original PDF.</p>
+<a href="{% url 'questions:paper_list' %}" class="small fw-bold text-decoration-none"><i class="bi bi-arrow-left me-1" aria-hidden="true"></i> Back to papers</a>
+<div class="upload-heading"><div><span class="eyebrow">YOUR PAPER / YOUR CLASSROOM</span><h2>Let's prepare your paper.</h2><p>Import a question paper, then review the original content before you publish anything.</p></div></div>
+{% include 'questions/_upload_steps.html' %}
+<div class="upload-layout">
+    <div class="upload-form-card">
+        <form method="post" enctype="multipart/form-data" data-upload-form>{% csrf_token %}
+            {% if form.non_field_errors %}<div class="alert alert-danger" role="alert">{% for error in form.non_field_errors %}<div>{{ error }}</div>{% endfor %}</div>{% endif %}
+            <div class="mb-3"><label class="form-label" for="{{ form.title.id_for_label }}">Paper title <span aria-hidden="true">*</span></label>{{ form.title }}{% for error in form.title.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}</div>
+            <div class="row g-3 mb-3"><div class="col-md-6"><label class="form-label" for="{{ form.category.id_for_label }}">Examination category <span aria-hidden="true">*</span></label>{{ form.category }}{% for error in form.category.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}</div><div class="col-md-6"><label class="form-label" for="{{ form.subject.id_for_label }}">Subject or section</label>{{ form.subject }}{% for error in form.subject.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}</div></div>
+            <div class="mb-4"><label class="form-label" for="{{ form.target_exam.id_for_label }}">Target exam or standard <span class="text-muted fw-normal">(optional)</span></label>{{ form.target_exam }}{% for error in form.target_exam.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}</div>
+            <div class="mb-4"><label class="form-label" for="{{ form.pdf_file.id_for_label }}">Your question paper <span aria-hidden="true">*</span></label><div class="file-drop" data-file-drop><div class="file-drop-icon"><i class="bi bi-file-earmark-arrow-up" aria-hidden="true"></i></div><strong class="d-block mb-2">Choose a PDF or drop it here</strong>{{ form.pdf_file }}<span data-file-name>PDF only · up to 25 MB</span></div>{% for error in form.pdf_file.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}</div>
+            <div class="mb-3"><label class="form-label" for="{{ form.extraction_mode.id_for_label }}">Extraction method</label>{{ form.extraction_mode }}{% for error in form.extraction_mode.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}</div>
+            <div class="form-check mb-4">{{ form.image_first }}<label class="form-check-label fw-bold" for="{{ form.image_first.id_for_label }}">{{ form.image_first.label }}</label><small class="text-muted d-block mt-1">{{ form.image_first.help_text }}</small>{% for error in form.image_first.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}</div>
+            <div class="d-flex flex-wrap gap-2"><button type="submit" class="btn btn-cbt-primary px-4 py-3">Upload &amp; start extraction <i class="bi bi-arrow-up-right ms-1" aria-hidden="true"></i></button><a href="{% url 'questions:paper_list' %}" class="btn btn-cbt-outline py-3">Cancel</a></div>
+            <div class="upload-status" data-upload-status role="status" aria-live="polite"></div>
+        </form>
     </div>
-    <div class="mt-3 mt-md-0">
-        <a href="{% url 'questions:paper_list' %}" class="btn btn-sm btn-cbt-outline">
-            <i class="bi bi-arrow-left me-1"></i> Back to Papers
-        </a>
-    </div>
-</div>
-
-<div class="row justify-content-center">
-    <div class="col-lg-8">
-        <div class="card border shadow-sm rounded-4 p-4 mb-4">
-            <form method="post" enctype="multipart/form-data">
-                {% csrf_token %}
-
-                {% if form.non_field_errors %}
-                <div class="alert alert-danger py-2 small mb-3">
-                    {% for err in form.non_field_errors %}
-                        <div><i class="bi bi-exclamation-triangle-fill me-1"></i> {{ err }}</div>
-                    {% endfor %}
-                </div>
-                {% endif %}
-
-                <h5 class="fw-bold mb-3 border-bottom pb-2">Paper Classification</h5>
-                <div class="row g-3 mb-4">
-                    <div class="col-md-12">
-                        <label class="form-label fw-semibold small" for="{{ form.title.id_for_label }}">Paper Title *</label>
-                        {{ form.title }}
-                        {% if form.title.errors %}
-                            <div class="text-danger small mt-1">{{ form.title.errors.0 }}</div>
-                        {% endif %}
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label fw-semibold small" for="{{ form.category.id_for_label }}">Examination Category *</label>
-                        {{ form.category }}
-                        {% if form.category.errors %}
-                            <div class="text-danger small mt-1">{{ form.category.errors.0 }}</div>
-                        {% endif %}
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label fw-semibold small" for="{{ form.subject.id_for_label }}">Subject / Section</label>
-                        {{ form.subject }}
-                        {% if form.subject.errors %}
-                            <div class="text-danger small mt-1">{{ form.subject.errors.0 }}</div>
-                        {% endif %}
-                    </div>
-                    <div class="col-md-12">
-                        <label class="form-label fw-semibold small" for="{{ form.target_exam.id_for_label }}">Target Exam / Standard</label>
-                        {{ form.target_exam }}
-                        {% if form.target_exam.errors %}
-                            <div class="text-danger small mt-1">{{ form.target_exam.errors.0 }}</div>
-                        {% endif %}
-                    </div>
-                </div>
-
-                <h5 class="fw-bold mb-3 border-bottom pb-2">PDF Document File</h5>
-                <div class="mb-4">
-                    <label class="form-label fw-semibold small" for="{{ form.pdf_file.id_for_label }}">Select Question Paper PDF *</label>
-                    <div class="p-3 border-2 border-dashed rounded-3 bg-light text-center">
-                        <i class="bi bi-file-earmark-pdf text-danger fs-1 d-block mb-2"></i>
-                        {{ form.pdf_file }}
-                        <small class="text-muted d-block mt-2">
-                            Maximum file size: 25MB. Supports digital and scanned PDFs with English, Hindi, and mathematical symbols.
-                        </small>
-                    </div>
-                    {% if form.pdf_file.errors %}
-                        <div class="text-danger small mt-1">{{ form.pdf_file.errors.0 }}</div>
-                    {% endif %}
-                </div>
-
-                <h5 class="fw-bold mb-3 border-bottom pb-2">Extraction</h5>
-                <div class="mb-3">
-                    <label for="{{ form.extraction_mode.id_for_label }}" class="form-label fw-semibold">Extraction method</label>
-                    {{ form.extraction_mode }}
-                    {% if form.extraction_mode.errors %}<div class="text-danger small">{{ form.extraction_mode.errors.0 }}</div>{% endif %}
-                    <small class="text-muted d-block mt-1">Extraction runs locally on this server — your PDF is not sent to any external service. Always review results against the original PDF.</small>
-                </div>
-                <div class="form-check mb-4">
-                    {{ form.image_first }}
-                    <label class="form-check-label fw-semibold" for="{{ form.image_first.id_for_label }}">{{ form.image_first.label }}</label>
-                    <small class="text-muted d-block">{{ form.image_first.help_text }}</small>
-                    {% if form.image_first.errors %}<div class="text-danger small">{{ form.image_first.errors.0 }}</div>{% endif %}
-                </div>
-
-                <div class="d-flex justify-content-end gap-2 pt-2 border-top">
-                    <a href="{% url 'questions:paper_list' %}" class="btn btn-outline-secondary">Cancel</a>
-                    <button type="submit" class="btn btn-cbt-primary fw-bold px-4">
-                        <i class="bi bi-cpu-fill me-1"></i> Upload & Start Extraction
-                    </button>
-                </div>
-            </form>
-        </div>
-
-        <div class="card border-0 p-3 rounded-3 small text-muted" style="background-color:var(--ivory-2,#efe7db);">
-            <i class="bi bi-info-circle me-1"></i>
-            Extraction is local and never 100% accurate. Every question opens in an editable review workspace — with the
-            original-PDF image — before anything is published.
-        </div>
-    </div>
+    <aside class="upload-help-card"><div class="icon-box sm mb-3"><i class="bi bi-shield-check" aria-hidden="true"></i></div><h3>Review is part of the process.</h3><p>This method runs locally on this server and does not send the PDF to an external provider.</p><ul><li>Check the original questions and options.</li><li>Review formulas, tables and diagrams carefully.</li><li>Nothing is published just by uploading.</li></ul></aside>
 </div>
 {% endblock %}

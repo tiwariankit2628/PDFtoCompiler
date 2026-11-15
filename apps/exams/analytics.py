@@ -203,6 +203,7 @@ def compute_student_attempt_analytics(attempt):
     # Total cohort size for percentile and rank context
     exam = attempt.exam
     submitted_attempts = exam.attempts.filter(
+        classroom_session__isnull=True,
         status__in=[
             attempt.AttemptStatus.SUBMITTED,
             attempt.AttemptStatus.EVALUATED,
@@ -251,7 +252,10 @@ def compute_exam_institutional_analytics(exam):
     - Question-wise discrimination & difficulty index
     - Ranked leaderboard of students
     """
+    # Classroom sessions have their own participation and visibility policy;
+    # never mix their results into the public institutional cohort.
     attempts_qs = exam.attempts.filter(
+        classroom_session__isnull=True,
         status__in=[
             "submitted", "evaluated", "timed_out"
         ]
@@ -284,9 +288,7 @@ def compute_exam_institutional_analytics(exam):
 
     # Score distribution histogram bins
     dist = {"<30%": 0, "30-50%": 0, "50-70%": 0, "70-90%": 0, ">90%": 0}
-    percentages = exam.attempts.filter(
-        status__in=["submitted", "evaluated", "timed_out"]
-    ).values_list("percentage", flat=True)
+    percentages = attempts_qs.values_list("percentage", flat=True)
     for pct_val in percentages:
         pct = float(pct_val)
         if pct < 30.0:
@@ -309,6 +311,7 @@ def compute_exam_institutional_analytics(exam):
         # All candidate responses for this specific exam question across submitted attempts
         responses = ExamResponse.objects.filter(
             exam_question=eq,
+            attempt__classroom_session__isnull=True,
             attempt__status__in=["submitted", "evaluated", "timed_out"],
         ).select_related("selected_option")
 
