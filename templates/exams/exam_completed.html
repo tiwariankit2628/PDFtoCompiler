@@ -39,25 +39,25 @@
                 <!-- Statistics Grid -->
                 <div class="row g-3 mb-4">
                     <div class="col-6 col-sm-3">
-                        <div class="bg-light p-3 rounded-3 border">
+                        <div class="tile-3d p-3 rounded-3">
                             <span class="text-muted small d-block mb-1">Total Questions</span>
                             <h4 class="fw-bold text-dark mb-0">{{ total_questions }}</h4>
                         </div>
                     </div>
                     <div class="col-6 col-sm-3">
-                        <div class="bg-light p-3 rounded-3 border">
+                        <div class="tile-3d p-3 rounded-3">
                             <span class="text-muted small d-block mb-1">Answered</span>
-                            <h4 class="fw-bold text-success mb-0">{{ answered_count }}</h4>
+                            <h4 class="fw-bold mb-0" style="color:var(--teal);">{{ answered_count }}</h4>
                         </div>
                     </div>
                     <div class="col-6 col-sm-3">
-                        <div class="bg-light p-3 rounded-3 border">
+                        <div class="tile-3d p-3 rounded-3">
                             <span class="text-muted small d-block mb-1">Unanswered</span>
                             <h4 class="fw-bold text-danger mb-0">{{ unanswered_count }}</h4>
                         </div>
                     </div>
                     <div class="col-6 col-sm-3">
-                        <div class="bg-light p-3 rounded-3 border">
+                        <div class="tile-3d p-3 rounded-3">
                             <span class="text-muted small d-block mb-1">Time Taken</span>
                             <h4 class="fw-bold text-primary mb-0">{{ time_taken_minutes }}m</h4>
                         </div>
@@ -89,8 +89,9 @@
                             <span class="text-muted small d-block">Passing Benchmark</span>
                             <h3 class="fw-bold text-muted mb-0">{{ exam.passing_percentage }}%</h3>
                         </div>
+                    </div>
                     <div class="d-flex flex-wrap justify-content-center gap-2 mt-3 pt-3 border-top">
-                        <a href="{% url 'exams:student_result_detail' attempt.attempt_uuid %}" class="btn btn-primary btn-sm fw-bold px-3">
+                        <a href="{% url 'exams:student_result_detail' attempt.attempt_uuid %}" class="btn btn-cbt-primary btn-sm fw-bold px-3">
                             <i class="bi bi-graph-up-arrow me-1"></i> View Detailed Scorecard & Analytics
                         </a>
                         {% if exam.allow_review_answers %}
@@ -122,7 +123,7 @@
 
                 <!-- Actions -->
                 <div class="d-flex flex-column flex-sm-row justify-content-center gap-2">
-                    <a href="{% url 'core:dashboard_router' %}" class="btn btn-primary px-4 py-2 fw-bold">
+                    <a href="{% url 'core:dashboard_router' %}" class="btn btn-cbt-primary px-4 py-2 fw-bold">
                         <i class="bi bi-speedometer2 me-1"></i> Return to Dashboard
                     </a>
                     <a href="{% url 'exams:exam_catalog' %}" class="btn btn-outline-secondary px-4 py-2">

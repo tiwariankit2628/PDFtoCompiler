@@ -373,3 +373,25 @@ a:focus-visible, button:focus-visible,
   .card-hover-effect, .tile-3d, .btn-cbt-primary, .btn-cbt-outline, .btn-primary, .navbar-cbt { transition: none !important; }
   .card-hover-effect:hover, .tile-3d:hover, .btn-cbt-primary:hover, .btn-cbt-outline:hover { transform: none !important; }
 }
+
+/* ---- Ember overrides for Bootstrap utilities ---- */
+.text-primary   { color: var(--coral) !important; }
+.text-success   { color: var(--teal) !important; }
+.text-warning   { color: var(--amber) !important; }
+.text-info      { color: var(--plum) !important; }
+.bg-primary     { background-color: var(--coral) !important; }
+
+/* Pagination */
+.page-link              { color: var(--coral); }
+.page-link:hover        { color: var(--coral-strong); background-color: var(--coral-soft); border-color: var(--line); }
+.page-item.active .page-link { background-color: var(--coral); border-color: var(--coral); color: #fff; }
+
+/* Breadcrumbs */
+.breadcrumb-item a       { color: var(--coral); }
+.breadcrumb-item a:hover { color: var(--coral-strong); }
+
+/* Review-hero banner (practice_settings) */
+.review-hero          { background: linear-gradient(135deg, var(--ink) 0%, #3a302a 100%); color: #fff; padding: 2rem; border-radius: 1rem; }
+.review-hero-subtitle { color: rgba(255,255,255,.65); }
+.review-hero-link     { color: var(--amber); text-decoration: underline; }
+.review-hero-link:hover { color: #fff; }

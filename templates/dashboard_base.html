@@ -88,7 +88,7 @@
                         {% if user.is_admin_role or user.is_teacher %}
                         <li class="nav-item">
                             <a class="nav-link text-dark {% if active_key == 'classroom' %}active bg-primary text-white fw-semibold{% endif %}"{% if active_key == 'classroom' %} aria-current="page"{% endif %} href="{% url 'exams:classroom_hub' %}">
-                                <i class="bi bi-easel2-fill me-2 {% if active_key == 'classroom' %}text-white{% else %}text-success{% endif %}"></i> Classroom Tests
+                                <i class="bi bi-easel2-fill me-2 {% if active_key == 'classroom' %}text-white{% endif %}" {% if active_key != 'classroom' %}style="color:var(--teal);"{% endif %}></i> Classroom Tests
                             </a>
                         </li>
                         <li class="nav-item">
@@ -119,7 +119,7 @@
                         {% if user.is_student %}
                         <li class="nav-item">
                             <a class="nav-link text-dark {% if active_key == 'join' %}active bg-primary text-white fw-semibold{% endif %}"{% if active_key == 'join' %} aria-current="page"{% endif %} href="{% url 'exams:classroom_join' %}">
-                                <i class="bi bi-qr-code-scan me-2 {% if active_key == 'join' %}text-white{% else %}text-success{% endif %}"></i> Join Test with Code
+                                <i class="bi bi-qr-code-scan me-2 {% if active_key == 'join' %}text-white{% endif %}" {% if active_key != 'join' %}style="color:var(--amber);"{% endif %}></i> Join Test with Code
                             </a>
                         </li>
                         <li class="nav-item">
@@ -129,7 +129,7 @@
                         </li>
                         <li class="nav-item">
                             <a class="nav-link text-dark {% if active_key == 'question_bank' %}active bg-primary text-white fw-semibold{% endif %}"{% if active_key == 'question_bank' %} aria-current="page"{% endif %} href="{% url 'questions:practice_bank' %}">
-                                <i class="bi bi-collection me-2 {% if active_key == 'question_bank' %}text-white{% else %}text-success{% endif %}"></i> My Question Bank
+                                <i class="bi bi-collection me-2 {% if active_key == 'question_bank' %}text-white{% endif %}" {% if active_key != 'question_bank' %}style="color:var(--teal);"{% endif %}></i> My Question Bank
                             </a>
                         </li>
                         <li class="nav-item">

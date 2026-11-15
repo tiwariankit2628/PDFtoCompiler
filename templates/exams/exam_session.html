@@ -12,6 +12,7 @@
     <link rel="stylesheet" href="{% static 'vendor/bootstrap-icons/bootstrap-icons.min.css' %}">
 
     <link rel="stylesheet" href="{% static 'css/question-content.css' %}">
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
 
     <!-- KaTeX CSS -->
     <link rel="stylesheet" href="{% static 'vendor/katex/katex.min.css' %}">
@@ -19,14 +20,14 @@
     <style>
         @font-face { font-family: "CBT Devanagari"; src: url("{% static 'fonts/NotoSansDevanagari.ttf' %}") format("truetype"); font-weight: 100 900; font-display: swap; }
         :root {
-            --cbt-primary: #0d6efd;
+            --cbt-primary: #e24b23;
             --cbt-answered: #198754;
             --cbt-unanswered: #dc3545;
             --cbt-review: #6f42c1;
             --cbt-notvisited: #6c757d;
         }
         body {
-            background-color: #f4f6f9;
+            background-color: var(--ivory, #f6f1e9);
             user-select: none;
             -webkit-user-select: none;
             -moz-user-select: none;
@@ -36,7 +37,7 @@
         .cbt-topbar {
             height: 60px;
             background-color: #ffffff;
-            border-bottom: 2px solid #e2e8f0;
+            border-bottom: 2px solid #efe7db;
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -66,7 +67,7 @@
         }
         .palette-btn.active-q {
             border: 2px solid #000000 !important;
-            box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.4) !important;
+            box-shadow: 0 0 0 3px rgba(226, 75, 35, 0.4) !important;
         }
         .palette-not_visited {
             background-color: #e9ecef;
@@ -102,7 +103,7 @@
         }
         /* Option Cards */
         .option-card {
-            border: 1.5px solid #e2e8f0;
+            border: 1.5px solid #efe7db;
             border-radius: 8px;
             padding: 0.85rem 1.15rem;
             cursor: pointer;
@@ -114,13 +115,13 @@
             gap: 0.75rem;
         }
         .option-card:hover {
-            border-color: #0d6efd;
-            background-color: #f8faff;
+            border-color: var(--cbt-primary);
+            background-color: var(--coral-soft, #fbe7df);
         }
         .option-card.selected {
-            border-color: #0d6efd;
-            background-color: #eef4ff;
-            box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.25);
+            border-color: var(--cbt-primary);
+            background-color: var(--coral-soft, #fbe7df);
+            box-shadow: 0 0 0 2px rgba(226, 75, 35, 0.25);
         }
         .option-badge {
             width: 28px;
@@ -137,7 +138,7 @@
             margin-top: 1px;
         }
         .option-card.selected .option-badge {
-            background-color: #0d6efd;
+            background-color: var(--cbt-primary);
             color: #ffffff;
         }
         /* Image-first: present A/B/C/D as a clear, equal-width button row. */
@@ -193,7 +194,7 @@
         .palette-pane {
             height: calc(100vh - 125px);
             overflow-y: auto;
-            border-left: 2px solid #e2e8f0;
+            border-left: 2px solid #efe7db;
             background-color: #ffffff;
             padding: 1rem;
         }
@@ -201,7 +202,7 @@
         .cbt-footer {
             height: 65px;
             background-color: #ffffff;
-            border-top: 2px solid #e2e8f0;
+            border-top: 2px solid #efe7db;
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -231,7 +232,7 @@
             .cbt-topbar .bi-clock-history { display: none; }
             #btn-open-submit-modal { padding: .35rem .6rem !important; }
             .question-pane, .palette-pane { height: auto; overflow: visible; padding: 1rem; }
-            .palette-pane { border-left: 0; border-top: 2px solid #e2e8f0; }
+            .palette-pane { border-left: 0; border-top: 2px solid #efe7db; }
             .cbt-footer { height: auto; flex-direction: column; gap: .5rem; padding: .65rem .75rem; }
             .cbt-footer > div { width: 100%; }
             .cbt-footer button { flex: 1 1 0; min-width: 0; padding-inline: .5rem !important; }
