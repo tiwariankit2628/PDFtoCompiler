@@ -77,7 +77,7 @@ def _equivalent_bank_question(question):
     correct = question.correct_option.strip().upper()
     staged = [(o["key"].strip().upper(), o.get("text", ""), o["key"].strip().upper() == correct and bool(correct))
               for o in question.options]
-    for existing in Question.objects.filter(is_private_practice=False, category=question.paper.category, question_text__iexact=question.question_text.strip()):
+    for existing in Question.objects.filter(is_private_practice=False, is_classroom_snapshot=False, category=question.paper.category, question_text__iexact=question.question_text.strip()):
         if (existing.image or existing.figures.exists()
                 or existing.question_type != _bank_question_type(question)
                 or existing.explanation != question.explanation
@@ -137,7 +137,7 @@ class QuestionPaperListView(TeacherRequiredMixin, ListView):
             else:
                 qs = QuestionPaperUpload.objects.filter(uploaded_by=user)
 
-        qs = qs.filter(is_student_private=False).select_related("category", "uploaded_by").annotate(
+        qs = qs.filter(is_student_private=False, is_classroom_private=False).select_related("category", "uploaded_by").annotate(
             total_extracted=Count("extracted_questions")
         ).order_by("-created_at")
 
@@ -218,7 +218,7 @@ class QuestionPaperReviewView(TeacherRequiredMixin, DetailView):
 
     def get_object(self, queryset=None):
         paper = super().get_object(queryset)
-        if paper.is_student_private:
+        if paper.uses_private_storage:
             raise Http404()
         user = self.request.user
         # Authorization check: Admin or paper uploader or permitted category
@@ -267,7 +267,7 @@ class QuestionPaperDownloadView(TeacherRequiredMixin, View):
     """
 
     def get(self, request, pk):
-        paper = get_object_or_404(QuestionPaperUpload, pk=pk, is_student_private=False)
+        paper = get_object_or_404(QuestionPaperUpload, pk=pk, is_student_private=False, is_classroom_private=False)
         user = request.user
         if not user.is_admin_role and paper.uploaded_by != user:
             if not user.assigned_categories.filter(pk=paper.category_id).exists():
@@ -299,7 +299,7 @@ class ExtractedQuestionEditView(TeacherRequiredMixin, UpdateView):
 
     def get_object(self, queryset=None):
         q = super().get_object(queryset)
-        if (isinstance(q, ExtractedQuestion) and q.paper.is_student_private) or (isinstance(q, Question) and q.is_private_practice):
+        if (isinstance(q, ExtractedQuestion) and q.paper.uses_private_storage) or (isinstance(q, Question) and (q.is_private_practice or q.is_classroom_snapshot)):
             raise Http404()
         user = self.request.user
         if not user.is_admin_role and q.paper.uploaded_by != user:
@@ -344,7 +344,7 @@ class ExtractedQuestionDeleteView(TeacherRequiredMixin, View):
     """Deletes an incorrectly extracted question from the staging workspace."""
 
     def post(self, request, pk):
-        q = get_object_or_404(ExtractedQuestion, pk=pk, paper__is_student_private=False)
+        q = get_object_or_404(ExtractedQuestion, pk=pk, paper__is_student_private=False, paper__is_classroom_private=False)
         paper = q.paper
         if not request.user.is_admin_role and paper.uploaded_by != request.user:
             raise PermissionDenied("You cannot delete questions from this paper.")
@@ -366,7 +366,7 @@ class ExtractedQuestionFlagToggleView(TeacherRequiredMixin, View):
     """Flags or unflags a question for manual inspection."""
 
     def post(self, request, pk):
-        q = get_object_or_404(ExtractedQuestion, pk=pk, paper__is_student_private=False)
+        q = get_object_or_404(ExtractedQuestion, pk=pk, paper__is_student_private=False, paper__is_classroom_private=False)
         if not request.user.is_admin_role and q.paper.uploaded_by != request.user:
             raise PermissionDenied()
 
@@ -391,7 +391,7 @@ class ExtractedQuestionApproveView(TeacherRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        q = get_object_or_404(ExtractedQuestion, pk=pk, paper__is_student_private=False)
+        q = get_object_or_404(ExtractedQuestion, pk=pk, paper__is_student_private=False, paper__is_classroom_private=False)
         paper = q.paper
         if not request.user.is_admin_role and paper.uploaded_by != request.user:
             raise PermissionDenied("You cannot approve questions from this paper.")
@@ -477,7 +477,7 @@ class QuestionPaperBulkApproveView(TeacherRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        paper = get_object_or_404(QuestionPaperUpload, pk=pk, is_student_private=False)
+        paper = get_object_or_404(QuestionPaperUpload, pk=pk, is_student_private=False, is_classroom_private=False)
         if not request.user.is_admin_role and paper.uploaded_by != request.user:
             raise PermissionDenied("You cannot bulk approve this paper.")
 
@@ -570,7 +570,7 @@ class AnswerKeyImportView(TeacherRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        paper = get_object_or_404(QuestionPaperUpload, pk=pk, is_student_private=False)
+        paper = get_object_or_404(QuestionPaperUpload, pk=pk, is_student_private=False, is_classroom_private=False)
         if not request.user.is_admin_role and paper.uploaded_by != request.user:
             raise PermissionDenied("You cannot import answer keys for this paper.")
 
@@ -622,7 +622,7 @@ class QuestionBankListView(TeacherRequiredMixin, ListView):
     paginate_by = 12
 
     def get_queryset(self):
-        qs = Question.objects.filter(is_private_practice=False).select_related("category", "source_paper", "creator").prefetch_related("options")
+        qs = Question.objects.filter(is_private_practice=False, is_classroom_snapshot=False).select_related("category", "source_paper", "creator").prefetch_related("options")
 
         user = self.request.user
         if not user.is_admin_role:
@@ -745,7 +745,7 @@ class QuestionUpdateView(TeacherRequiredMixin, UpdateView):
 
     def get_object(self, queryset=None):
         q = super().get_object(queryset)
-        if (isinstance(q, ExtractedQuestion) and q.paper.is_student_private) or (isinstance(q, Question) and q.is_private_practice):
+        if (isinstance(q, ExtractedQuestion) and q.paper.uses_private_storage) or (isinstance(q, Question) and (q.is_private_practice or q.is_classroom_snapshot)):
             raise Http404()
         user = self.request.user
         if not user.is_admin_role and q.creator != user:
@@ -820,7 +820,7 @@ class QuestionDeleteView(TeacherRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        question = get_object_or_404(Question, pk=pk, is_private_practice=False)
+        question = get_object_or_404(Question, pk=pk, is_private_practice=False, is_classroom_snapshot=False)
         user = request.user
         if not user.is_admin_role and question.creator != user:
             if not user.assigned_categories.filter(pk=question.category_id).exists():
@@ -865,7 +865,7 @@ class QuestionPreviewView(TeacherRequiredMixin, DetailView):
 
     def get_object(self, queryset=None):
         q = super().get_object(queryset)
-        if (isinstance(q, ExtractedQuestion) and q.paper.is_student_private) or (isinstance(q, Question) and q.is_private_practice):
+        if (isinstance(q, ExtractedQuestion) and q.paper.uses_private_storage) or (isinstance(q, Question) and (q.is_private_practice or q.is_classroom_snapshot)):
             raise Http404()
         user = self.request.user
         if not user.is_admin_role and q.creator != user:

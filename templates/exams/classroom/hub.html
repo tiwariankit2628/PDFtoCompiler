@@ -4,9 +4,9 @@
 <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center pb-3 mb-4 border-bottom">
   <div>
     <h2 class="fw-bold mb-1"><i class="bi bi-easel2 me-2 text-primary"></i>Classroom Tests</h2>
-    <p class="text-muted mb-0">Run any of your published tests as a live, join-code session for your class.</p>
+    <p class="text-muted mb-0">Create a code-only test from a PDF or run one of your existing published tests as a classroom session.</p>
   </div>
-  <a href="{% url 'questions:paper_upload' %}" class="btn btn-primary mt-3 mt-md-0"><i class="bi bi-plus-lg me-1"></i> Create Test from PDF</a>
+  <a href="{% url 'questions:classroom_paper_upload' %}" class="btn btn-primary mt-3 mt-md-0"><i class="bi bi-plus-lg me-1"></i> Create Test from PDF</a>
 </div>
 
 <div class="row g-4">
@@ -32,13 +32,13 @@
             <input type="text" class="form-control" id="label" name="label" maxlength="120" placeholder="e.g. Class 10-B, Monday">
           </div>
           <div class="form-check"><input class="form-check-input" type="checkbox" id="retakes" name="allow_retakes">
-            <label class="form-check-label small" for="retakes">Allow retakes (best graded attempt is ranked)</label></div>
+            <label class="form-check-label small" for="retakes">Allow retakes (best fully keyed completed attempt is ranked)</label></div>
           <div class="form-check"><input class="form-check-input" type="checkbox" id="show-lb" name="show_leaderboard_to_students">
             <label class="form-check-label small" for="show-lb">Let students see the leaderboard</label></div>
           <button class="btn btn-success fw-bold"><i class="bi bi-qr-code me-1"></i> Create session &amp; join code</button>
         </form>
         {% else %}
-        <p class="text-muted">You have no tests yet. <a href="{% url 'questions:paper_upload' %}">Create one from a PDF</a> and publish it, then start a session here.</p>
+        <p class="text-muted">You have no tests yet. <a href="{% url 'questions:classroom_paper_upload' %}">Create one from a PDF</a>; the code is ready as soon as you finish reviewing.</p>
         {% endif %}
       </div>
     </div>
@@ -76,4 +76,10 @@
     </div>
   </div>
 </div>
+{% if classroom_papers %}
+<div class="card border shadow-sm rounded-4 mt-4"><div class="card-body p-4">
+  <h5 class="fw-bold">Your classroom papers</h5><p class="small text-muted">Continue reviewing or create another test snapshot from a saved paper.</p>
+  <div class="vstack gap-2">{% for paper in classroom_papers %}<a class="text-decoration-none border rounded-3 p-3 d-flex justify-content-between gap-2" href="{% url 'questions:classroom_paper_review' paper.pk %}"><span class="fw-semibold">{{ paper.title }}</span><span class="small text-muted">{{ paper.get_status_display }} →</span></a>{% endfor %}</div>
+</div></div>
+{% endif %}
 {% endblock %}

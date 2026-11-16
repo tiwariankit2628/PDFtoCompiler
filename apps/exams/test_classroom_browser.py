@@ -53,3 +53,47 @@ class ClassroomBrowserTests(StaticLiveServerTestCase):
         result = subprocess.run(["node", str(script)], env=env, text=True, capture_output=True, timeout=120)
         self.assertEqual(result.returncode, 0, f"Classroom browser test failed:\n{result.stdout}\n{result.stderr}")
         self.assertIn("CLASSROOM_BROWSER_OK", result.stdout)
+
+
+@skipUnless(os.environ.get("RUN_BROWSER_E2E") == "1", "Optional Chromium classroom test")
+@override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"])
+class ClassroomPdfBrowserTests(StaticLiveServerTestCase):
+    def test_pdf_review_join_retry_resume_submit_and_ranked_export(self):
+        import tempfile
+        from apps.exams.test_classroom_workflow import classroom_pdf
+        from apps.exams.models import ExamAttempt
+        from apps.questions.models import QuestionPaperUpload
+
+        if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):
+            self.fail("Set CHROMIUM_PATH and install tests/browser dependencies first.")
+        with tempfile.TemporaryDirectory() as root:
+            override = override_settings(MEDIA_ROOT=os.path.join(root, "media"),
+                STATIC_ROOT=os.path.join(root, "static"), PRIVATE_PRACTICE_ROOT=os.path.join(root, "private"))
+            override.enable()
+            try:
+                password = "ClassroomBrowserPass987!"
+                teacher = User.objects.create_user("pdf_teacher", email="pdf-t@example.test", password=password, role=User.Roles.TEACHER)
+                student_a = User.objects.create_user("pdf_student_a", email="pdf-a@example.test", password=password, role=User.Roles.STUDENT)
+                student_b = User.objects.create_user("pdf_student_b", email="pdf-b@example.test", password=password, role=User.Roles.STUDENT)
+                pdf_path = Path(root) / "two-question-paper.pdf"
+                pdf_path.write_bytes(classroom_pdf())
+                data = {"password": password, "teacher": teacher.username, "studentA": student_a.username,
+                        "studentB": student_b.username, "pdf": str(pdf_path), "login": reverse("accounts:login"),
+                        "hub": reverse("exams:classroom_hub"), "join": reverse("exams:classroom_join")}
+                env = os.environ.copy()
+                env.update(CLASSROOM_TEST_URL=self.live_server_url, CLASSROOM_TEST_DATA=json.dumps(data))
+                script = Path(settings.BASE_DIR) / "tests" / "browser" / "classroom-pdf-flow.cjs"
+                result = subprocess.run(["node", str(script)], env=env, text=True, capture_output=True, timeout=150)
+                self.assertEqual(result.returncode, 0, f"PDF classroom browser test failed:\n{result.stdout}\n{result.stderr}")
+                self.assertIn("CLASSROOM_PDF_FLOW_OK", result.stdout)
+                paper = QuestionPaperUpload.objects.get(uploaded_by=teacher, is_classroom_private=True)
+                self.assertEqual(paper.extracted_questions.count(), 2)
+                session = ClassroomSession.objects.get(teacher=teacher, exam__is_classroom_only=True)
+                self.assertEqual(session.exam.duration_minutes, 23)
+                self.assertTrue(session.results_released)
+                self.assertEqual(session.participants.count(), 2)
+                self.assertEqual(session.attempts.filter(status=ExamAttempt.AttemptStatus.SUBMITTED).count(), 2)
+                self.assertEqual(float(session.attempts.get(student=student_a).score_obtained), 8.0)
+                self.assertEqual(float(session.attempts.get(student=student_b).score_obtained), 3.0)
+            finally:
+                override.disable()

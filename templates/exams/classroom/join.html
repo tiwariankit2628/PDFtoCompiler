@@ -7,7 +7,7 @@
       <div class="card-body p-4 p-md-5 text-center">
         <div class="icon-box-primary mx-auto mb-3" style="width:56px;height:56px;font-size:1.6rem;"><i class="bi bi-qr-code-scan"></i></div>
         <h3 class="fw-bold">Join a classroom test</h3>
-        <p class="text-muted">Enter the code your teacher shared. You’ll be taken straight to the test.</p>
+        <p class="text-muted">Enter the code your teacher shared. You can review the details before starting the timer.</p>
         {% if messages %}{% for m in messages %}<div class="alert alert-{{ m.tags|default:'info' }} small">{{ m }}</div>{% endfor %}{% endif %}
         <form method="post" action="{% url 'exams:classroom_join' %}" class="vstack gap-3 mt-3">{% csrf_token %}
           <input type="text" name="code" value="{{ prefill }}" autocomplete="off" autofocus

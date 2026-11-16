@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.db.models import Q
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from .models import User
 
@@ -6,9 +7,9 @@ from .models import User
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
     def has_delete_permission(self, request, obj=None):
-        if obj and (obj.uploaded_papers.filter(is_student_private=True).exists()
-                    or obj.created_exams.filter(is_private_practice=True).exists()
-                    or obj.exam_attempts.filter(exam__is_private_practice=True).exists()
+        if obj and (obj.uploaded_papers.filter(Q(is_student_private=True) | Q(is_classroom_private=True)).exists()
+                    or obj.created_exams.filter(Q(is_private_practice=True) | Q(is_classroom_only=True)).exists()
+                    or obj.exam_attempts.filter(Q(exam__is_private_practice=True) | Q(classroom_session__isnull=False)).exists()
                     or obj.practice_checkouts.exists()):
             return False
         return super().has_delete_permission(request, obj)

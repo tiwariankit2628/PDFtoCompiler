@@ -166,7 +166,7 @@
                         </div>
                         {% if attempt.status == 'in_progress' %}
                             <a href="{% url 'exams:exam_session' attempt.attempt_uuid %}" class="btn btn-sm btn-cbt-primary flex-shrink-0"><i class="bi bi-play-fill"></i> Resume</a>
-                        {% elif attempt.exam.show_result_immediately %}
+                        {% elif attempt.classroom_session_id and attempt.classroom_session.student_results_visible or not attempt.classroom_session_id and attempt.exam.show_result_immediately %}
                             <a href="{% url 'exams:student_result_detail' attempt.attempt_uuid %}" class="btn btn-sm btn-cbt-outline flex-shrink-0">Scorecard</a>
                         {% else %}
                             <span class="badge text-bg-light border flex-shrink-0">Under evaluation</span>

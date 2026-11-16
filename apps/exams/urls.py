@@ -2,7 +2,7 @@ from django.urls import path
 from . import views
 from . import views_candidate
 from . import views_analytics
-from . import classroom
+from . import classroom, classroom_assets
 
 app_name = "exams"
 
@@ -19,6 +19,8 @@ urlpatterns = [
     path("classroom/sessions/<int:pk>/export/", classroom.ClassroomExportView.as_view(), name="classroom_export"),
     path("classroom/join/", classroom.ClassroomJoinView.as_view(), name="classroom_join"),
     path("classroom/take/<int:pk>/", classroom.ClassroomTakeView.as_view(), name="classroom_take"),
+    path("classroom/attempts/<uuid:attempt_uuid>/figures/<int:pk>/", classroom_assets.ClassroomAttemptFigureView.as_view(), name="classroom_attempt_figure"),
+    path("classroom/attempts/<uuid:attempt_uuid>/images/<int:pk>/", classroom_assets.ClassroomAttemptImageView.as_view(), name="classroom_attempt_image"),
 
     # Candidate CBT Examination Interface
     path("catalog/", views_candidate.ExamCatalogView.as_view(), name="exam_catalog"),

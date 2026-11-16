@@ -13,15 +13,15 @@ class PublicDataAdminMixin:
 
         model = db_field.remote_field.model
         if model is Exam:
-            kwargs["queryset"] = Exam.objects.filter(is_private_practice=False)
+            kwargs["queryset"] = Exam.objects.filter(is_private_practice=False, is_classroom_only=False)
         elif model is ExamAttempt:
-            kwargs["queryset"] = ExamAttempt.objects.filter(exam__is_private_practice=False)
+            kwargs["queryset"] = ExamAttempt.objects.filter(exam__is_private_practice=False, exam__is_classroom_only=False)
         elif model is ExamQuestion:
-            kwargs["queryset"] = ExamQuestion.objects.filter(exam__is_private_practice=False, question__is_private_practice=False)
+            kwargs["queryset"] = ExamQuestion.objects.filter(exam__is_private_practice=False, exam__is_classroom_only=False, question__is_private_practice=False, question__is_classroom_snapshot=False)
         elif model is Question:
-            kwargs["queryset"] = Question.objects.filter(is_private_practice=False)
+            kwargs["queryset"] = Question.objects.filter(is_private_practice=False, is_classroom_snapshot=False)
         elif model is QuestionOption:
-            kwargs["queryset"] = QuestionOption.objects.filter(question__is_private_practice=False)
+            kwargs["queryset"] = QuestionOption.objects.filter(question__is_private_practice=False, question__is_classroom_snapshot=False)
         elif model is QuestionPaperUpload:
-            kwargs["queryset"] = QuestionPaperUpload.objects.filter(is_student_private=False)
+            kwargs["queryset"] = QuestionPaperUpload.objects.filter(is_student_private=False, is_classroom_private=False)
         return super().formfield_for_foreignkey(db_field, request, **kwargs)

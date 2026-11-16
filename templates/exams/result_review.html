@@ -145,13 +145,15 @@
             </div>
 
             <!-- Diagram Image if present -->
-            {% if q_data.question.image %}
+            {% if q_data.question.private_image and attempt.classroom_session_id %}
+            <div class="mb-3 text-center"><img src="{% url 'exams:classroom_attempt_image' attempt.attempt_uuid q_data.question.pk %}" alt="Question diagram" class="img-fluid rounded border shadow-sm" style="max-height:280px;"></div>
+            {% elif q_data.question.image %}
             <div class="mb-3 text-center">
                 <img src="{{ q_data.question.image.url }}" alt="Question Diagram" class="img-fluid rounded border shadow-sm" style="max-height: 280px;">
             </div>
             {% endif %}
 
-            {% for figure in q_data.question.figures.all %}{% if not figure.option_id %}<div class="mb-3 text-center">{% if figure.source == 'option-source' %}<div class="small text-muted">Original choices in printed order (1=A, 2=B, etc.).</div>{% elif figure.source == 'parallel-source' %}<div class="small text-muted">Other original-language region — verify that choices match the printed labels (1=A, 2=B, etc.).</div>{% elif figure.source == 'stem-source' or figure.source == 'table-source' %}<div class="small text-muted">Original question or table region.</div>{% endif %}<img src="{{ figure.image.url }}" alt="Question figure" class="img-fluid rounded border" style="max-height:280px;"></div>{% endif %}{% endfor %}
+            {% for figure in q_data.question.figures.all %}{% if not figure.option_id %}<div class="mb-3 text-center">{% if figure.source == 'option-source' %}<div class="small text-muted">Original choices in printed order (1=A, 2=B, etc.).</div>{% elif figure.source == 'parallel-source' %}<div class="small text-muted">Other original-language region — verify that choices match the printed labels (1=A, 2=B, etc.).</div>{% elif figure.source == 'stem-source' or figure.source == 'table-source' %}<div class="small text-muted">Original question or table region.</div>{% endif %}<img src="{% if figure.private_image and attempt.classroom_session_id %}{% url 'exams:classroom_attempt_figure' attempt.attempt_uuid figure.pk %}{% elif figure.image %}{{ figure.image.url }}{% endif %}" alt="Question figure" class="img-fluid rounded border" style="max-height:280px;"></div>{% endif %}{% endfor %}
 
             {% if attempt.classroom_session_id %}
             <div class="small text-muted mb-3">
@@ -172,7 +174,7 @@
                         {% if opt.image %}
                         <img src="{{ opt.image.url }}" alt="Option Image" class="img-fluid d-block mt-2 rounded border" style="max-height: 120px;">
                         {% endif %}
-                        {% for figure in opt.figures.all %}<img src="{{ figure.image.url }}" alt="Option image" class="img-fluid d-block mt-2 rounded border" style="max-height:120px;">{% endfor %}
+                        {% for figure in opt.figures.all %}<img src="{% if figure.private_image and attempt.classroom_session_id %}{% url 'exams:classroom_attempt_figure' attempt.attempt_uuid figure.pk %}{% elif figure.image %}{{ figure.image.url }}{% endif %}" alt="Option image" class="img-fluid d-block mt-2 rounded border" style="max-height:120px;">{% endfor %}
                     </div>
                     <div>
                         {% if q_data.correct_option.id == opt.id and q_data.selected_option.id == opt.id and q_data.status == 'correct' %}

@@ -34,7 +34,7 @@ class CategoryListView(AdminRequiredMixin, ListView):
     def get_queryset(self):
         qs = (
             Category.objects.annotate(
-                total_exams=Count("exams", filter=Q(exams__is_private_practice=False)),
+                total_exams=Count("exams", filter=Q(exams__is_private_practice=False, exams__is_classroom_only=False)),
             )
             .order_by("display_order", "name")
         )
@@ -129,8 +129,8 @@ class CategoryDeleteView(AdminRequiredMixin, View):
 
         # Do not cascade private student papers/questions or disclose their
         # titles or counts through a category deletion error.
-        if (category.exams.exists() or category.uploaded_papers.filter(is_student_private=True).exists()
-                or category.questions.filter(is_private_practice=True).exists()):
+        if (category.exams.exists() or category.uploaded_papers.filter(Q(is_student_private=True) | Q(is_classroom_private=True)).exists()
+                or category.questions.filter(Q(is_private_practice=True) | Q(is_classroom_snapshot=True)).exists()):
             messages.error(
                 request,
                 f"Cannot delete category '{category.name}' while associated content exists.",
@@ -173,7 +173,7 @@ class ExamListView(TeacherRequiredMixin, ListView):
 
     def get_queryset(self):
         user = self.request.user
-        qs = Exam.objects.filter(is_private_practice=False).select_related("category", "creator").annotate(
+        qs = Exam.objects.filter(is_private_practice=False, is_classroom_only=False).select_related("category", "creator").annotate(
             total_q_count=Count("exam_questions", distinct=True),
             total_att_count=Count("attempts", distinct=True),
         )
@@ -220,7 +220,7 @@ class ExamListView(TeacherRequiredMixin, ListView):
         context = super().get_context_data(**kwargs)
         user = self.request.user
 
-        base_qs = Exam.objects.filter(is_private_practice=False)
+        base_qs = Exam.objects.filter(is_private_practice=False, is_classroom_only=False)
         if not user.is_admin_role:
             assigned = user.assigned_categories.all()
             if assigned.exists():
@@ -296,7 +296,7 @@ class ExamUpdateView(TeacherRequiredMixin, UpdateView):
 
     def get_object(self, queryset=None):
         exam = super().get_object(queryset)
-        if exam.is_private_practice:
+        if exam.is_private_practice or exam.is_classroom_only:
             from django.http import Http404
             raise Http404()
         user = self.request.user
@@ -335,7 +335,7 @@ class ExamDeleteView(TeacherRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False)
+        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False)
         user = request.user
         if not user.is_admin_role and exam.creator != user:
             if not user.assigned_categories.filter(pk=exam.category_id).exists():
@@ -368,7 +368,7 @@ class ExamDuplicateView(TeacherRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        source_exam = get_object_or_404(Exam, pk=pk, is_private_practice=False)
+        source_exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False)
         user = request.user
         if not user.is_admin_role and source_exam.creator != user:
             if not user.assigned_categories.filter(pk=source_exam.category_id).exists():
@@ -433,7 +433,7 @@ class ExamTogglePublishView(TeacherRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False)
+        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False)
         user = request.user
         if not user.is_admin_role and exam.creator != user:
             if not user.assigned_categories.filter(pk=exam.category_id).exists():
@@ -502,7 +502,7 @@ class ExamQuestionManageView(TeacherRequiredMixin, DetailView):
 
     def get_object(self, queryset=None):
         exam = super().get_object(queryset)
-        if exam.is_private_practice:
+        if exam.is_private_practice or exam.is_classroom_only:
             from django.http import Http404
             raise Http404()
         user = self.request.user
@@ -523,7 +523,7 @@ class ExamQuestionManageView(TeacherRequiredMixin, DetailView):
         )
 
         assigned_q_ids = exam.exam_questions.values_list("question_id", flat=True)
-        available_qs = Question.objects.filter(category=exam.category, is_private_practice=False).exclude(id__in=assigned_q_ids)
+        available_qs = Question.objects.filter(category=exam.category, is_private_practice=False, is_classroom_snapshot=False).exclude(id__in=assigned_q_ids)
 
         if not user.is_admin_role:
             assigned_cats = user.assigned_categories.all()
@@ -564,7 +564,7 @@ class ExamAddQuestionsBulkView(TeacherRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False)
+        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False)
         user = request.user
         if not user.is_admin_role and exam.creator != user:
             if not user.assigned_categories.filter(pk=exam.category_id).exists():
@@ -591,7 +591,7 @@ class ExamAddQuestionsBulkView(TeacherRequiredMixin, View):
 
             for q_id in selected_ids:
                 try:
-                    q = Question.objects.get(pk=int(q_id), category=exam.category, is_private_practice=False)
+                    q = Question.objects.get(pk=int(q_id), category=exam.category, is_private_practice=False, is_classroom_snapshot=False)
                     if not exam.exam_questions.filter(question=q).exists():
                         current_max_order += 1
                         ExamQuestion.objects.create(
@@ -625,7 +625,7 @@ class ExamAddRandomQuestionsView(TeacherRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False)
+        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False)
         user = request.user
         if not user.is_admin_role and exam.creator != user:
             if not user.assigned_categories.filter(pk=exam.category_id).exists():
@@ -652,7 +652,7 @@ class ExamAddRandomQuestionsView(TeacherRequiredMixin, View):
         neg_marks = form.cleaned_data.get("negative_marks", exam.default_negative_marks)
 
         assigned_q_ids = exam.exam_questions.values_list("question_id", flat=True)
-        pool = Question.objects.filter(category=exam.category, is_private_practice=False).exclude(id__in=assigned_q_ids)
+        pool = Question.objects.filter(category=exam.category, is_private_practice=False, is_classroom_snapshot=False).exclude(id__in=assigned_q_ids)
 
         if subject:
             pool = pool.filter(subject__icontains=subject)
@@ -710,7 +710,7 @@ class ExamRemoveQuestionView(TeacherRequiredMixin, View):
     """
 
     def post(self, request, pk, question_pk):
-        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False)
+        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False)
         user = request.user
         if not user.is_admin_role and exam.creator != user:
             if not user.assigned_categories.filter(pk=exam.category_id).exists():
@@ -744,7 +744,7 @@ class ExamPreviewView(TeacherRequiredMixin, DetailView):
 
     def get_object(self, queryset=None):
         exam = super().get_object(queryset)
-        if exam.is_private_practice:
+        if exam.is_private_practice or exam.is_classroom_only:
             from django.http import Http404
             raise Http404()
         user = self.request.user

@@ -175,10 +175,10 @@ class PDFQuestionExtractor:
         self._log(f"Starting extraction for paper: '{self.paper.title}'")
         saved_count = 0
         try:
-            source = self.paper.private_pdf_file if self.paper.is_student_private else self.paper.pdf_file
+            source = self.paper.private_pdf_file if self.paper.uses_private_storage else self.paper.pdf_file
             source.open("rb")
             try:
-                pdf_bytes = source.read(25 * 1024 * 1024 + 1) if self.paper.is_student_private else source.read()
+                pdf_bytes = source.read(25 * 1024 * 1024 + 1) if self.paper.uses_private_storage else source.read()
             finally:
                 source.close()
             with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
@@ -221,7 +221,7 @@ class PDFQuestionExtractor:
             self.paper.status = previous_status
         except Exception as exc:
             saved_count = 0
-            if self.paper.is_student_private:
+            if self.paper.uses_private_storage:
                 from .private_storage import private_practice_storage
                 for name in self._private_files_written:
                     private_practice_storage.delete(name)
@@ -283,9 +283,9 @@ class PDFQuestionExtractor:
         if item.image:
             page_number, data = item.image
             filename = f"paper_{self.paper.pk}_q{item.number}_p{page_number}.png"
-            target = extracted.private_image if self.paper.is_student_private else extracted.image
+            target = extracted.private_image if self.paper.uses_private_storage else extracted.image
             target.save(filename, ContentFile(data), save=False)
-            if self.paper.is_student_private:
+            if self.paper.uses_private_storage:
                 self._private_files_written.append(target.name)
         extracted.save()
         # Every extra is an original page crop. Uncertain ownership goes to the
@@ -298,9 +298,9 @@ class PDFQuestionExtractor:
                 option_key=target_key or "", page_number=candidate["page"],
                 bounding_box=candidate["box"], source=candidate.get("source", "embedded"), order=index,
             )
-            target = figure.private_image if self.paper.is_student_private else figure.image
+            target = figure.private_image if self.paper.uses_private_storage else figure.image
             target.save(f"paper_{self.paper.pk}_q{item.number}_extra_{index}.png", ContentFile(candidate["data"]), save=False)
-            if self.paper.is_student_private:
+            if self.paper.uses_private_storage:
                 self._private_files_written.append(target.name)
             figure.save()
 
@@ -338,9 +338,9 @@ class PDFQuestionExtractor:
                 page_number=page_number, bounding_box=box,
                 source="question_crop", order=1000 + order,
             )
-            target = figure.private_image if self.paper.is_student_private else figure.image
+            target = figure.private_image if self.paper.uses_private_storage else figure.image
             target.save(f"paper_{self.paper.pk}_q{extracted.question_number}_crop_{order}.png", ContentFile(data), save=False)
-            if self.paper.is_student_private:
+            if self.paper.uses_private_storage:
                 self._private_files_written.append(target.name)
             figure.save()
 

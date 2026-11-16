@@ -35,8 +35,10 @@ class QuestionPaperUpload(models.Model):
         "Image-first practice", default=True,
         help_text="Show the original PDF question image in the test, with A/B/C/D buttons below.",
     )
-    # Private student material is stored separately from the teacher media tree.
+    # Student practice and teacher classroom papers have separate, owner-only
+    # workspaces. Both use non-public storage; neither is a public bank paper.
     is_student_private = models.BooleanField(default=False, db_index=True)
+    is_classroom_private = models.BooleanField(default=False, db_index=True)
     practice_exam = models.OneToOneField(
         "exams.Exam", on_delete=models.SET_NULL, null=True, blank=True,
         related_name="private_source_paper",
@@ -93,6 +95,10 @@ class QuestionPaperUpload(models.Model):
         return f"{self.title} ({self.get_status_display()})"
 
     @property
+    def uses_private_storage(self):
+        return self.is_student_private or self.is_classroom_private
+
+    @property
     def pending_review_count(self):
         return self.extracted_questions.filter(status=ExtractedQuestion.Status.EXTRACTED).count()
 
@@ -122,6 +128,9 @@ class Question(models.Model):
         NUMERICAL = "numerical", "Numerical / Integer Value"
 
     is_private_practice = models.BooleanField(default=False, db_index=True)
+    # An immutable, privately stored snapshot used only by a code-only classroom
+    # test. It must never enter the shared teacher question bank.
+    is_classroom_snapshot = models.BooleanField(default=False, db_index=True)
     # When set, the CBT shows this question's original-PDF crop(s) as the primary
     # content; option text is optional because the printed choices are in the image.
     is_image_first = models.BooleanField(default=False)

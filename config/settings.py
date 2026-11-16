@@ -219,6 +219,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.exams.tasks.expire_private_practice_attempts",
         "schedule": 30.0,
     },
+    "expire-classroom-attempts": {
+        "task": "apps.exams.tasks.expire_classroom_attempts",
+        "schedule": 30.0,
+    },
 }
 
 # ------------------------------------------------------------------------------

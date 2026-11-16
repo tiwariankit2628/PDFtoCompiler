@@ -1,9 +1,22 @@
 from django.urls import path
-from . import views, figure_views, practice_views, practice_bank, answer_views, practice_estimate_views
+from . import views, figure_views, practice_views, practice_bank, answer_views, practice_estimate_views, classroom_views
 
 app_name = "questions"
 
 urlpatterns = [
+    # Teacher-owned classroom paper workspace (private storage, local extraction).
+    path("classroom/upload/", classroom_views.ClassroomPaperUploadView.as_view(), name="classroom_paper_upload"),
+    path("classroom/papers/<int:pk>/review/", classroom_views.ClassroomPaperReviewView.as_view(), name="classroom_paper_review"),
+    path("classroom/papers/<int:pk>/pdf/", classroom_views.ClassroomPdfView.as_view(), name="classroom_paper_pdf"),
+    path("classroom/papers/<int:pk>/questions/add/", classroom_views.ClassroomQuestionAddView.as_view(), name="classroom_question_add"),
+    path("classroom/papers/<int:pk>/figures/", classroom_views.ClassroomFigurePoolView.as_view(), name="classroom_figure_pool"),
+    path("classroom/questions/<int:pk>/edit/", classroom_views.ClassroomQuestionEditView.as_view(), name="classroom_question_edit"),
+    path("classroom/questions/<int:pk>/include/", classroom_views.ClassroomQuestionIncludeView.as_view(), name="classroom_question_include"),
+    path("classroom/questions/<int:pk>/figures/", classroom_views.ClassroomFigureManageView.as_view(), name="classroom_figures"),
+    path("classroom/questions/<int:pk>/source-page/<int:page_number>/", classroom_views.ClassroomSourcePageView.as_view(), name="classroom_source_page"),
+    path("classroom/questions/<int:pk>/image/", classroom_views.ClassroomExtractedImageView.as_view(), name="classroom_extracted_image"),
+    path("classroom/figures/<int:pk>/file/", classroom_views.ClassroomFigureFileView.as_view(), name="classroom_figure_file"),
+
     # Owner-only student PDF practice workflow
     path("practice/", practice_views.PracticeListView.as_view(), name="practice_list"),
     path("practice/upload/", practice_views.PracticeUploadView.as_view(), name="practice_upload"),

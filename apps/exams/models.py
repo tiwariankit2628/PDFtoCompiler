@@ -50,11 +50,11 @@ class Category(models.Model):
 
     @property
     def exam_count(self):
-        return self.exams.filter(is_private_practice=False).count()
+        return self.exams.filter(is_private_practice=False, is_classroom_only=False).count()
 
     @property
     def active_exam_count(self):
-        return self.exams.filter(status=Exam.ExamStatus.PUBLISHED, is_private_practice=False).count()
+        return self.exams.filter(status=Exam.ExamStatus.PUBLISHED, is_private_practice=False, is_classroom_only=False).count()
 
 
 class Exam(models.Model):
@@ -70,6 +70,9 @@ class Exam(models.Model):
         ARCHIVED = "archived", "Archived"
 
     is_private_practice = models.BooleanField(default=False, db_index=True)
+    # Dedicated classroom tests are available only through a session join code,
+    # never through the public/institutional catalog or ordinary start route.
+    is_classroom_only = models.BooleanField(default=False, db_index=True)
     title = models.CharField("Examination Title", max_length=255)
     slug = models.SlugField("URL Slug", max_length=260, unique=True)
     category = models.ForeignKey(
@@ -525,7 +528,7 @@ class ExamAttempt(models.Model):
         self.submitted_at = now
         if not self.time_taken_seconds and self.started_at:
             end = (min(now, self.expires_at)
-                   if self.exam.is_private_practice and is_timeout and self.expires_at else now)
+                   if (self.exam.is_private_practice or self.classroom_session_id) and is_timeout and self.expires_at else now)
             self.time_taken_seconds = max(0, int((end - self.started_at).total_seconds()))
         self.evaluate_attempt()
         self.save()
@@ -553,13 +556,21 @@ class ExamAttempt(models.Model):
         return True
 
     def auto_timeout_if_expired(self):
-        """Auto-submit once; serialize private timeout with answer saves."""
+        """Auto-submit once; serialize private/classroom timeout with answer saves."""
         if self.status != self.AttemptStatus.IN_PROGRESS or not self.is_expired:
             return False
-        if not self.exam.is_private_practice:
+        if not self.exam.is_private_practice and not self.classroom_session_id:
             return self.submit_attempt(is_timeout=True)
         with transaction.atomic():
-            locked = type(self).objects.select_for_update().select_related("exam").filter(pk=self.pk).first()
+            from django.db import connection
+            from django.db.models import F
+            if self.classroom_session_id and connection.vendor == "sqlite":
+                type(self).objects.filter(pk=self.pk).update(id=F("id"))
+            # Session controls acquire session then attempt locks. Do not also
+            # lock the joined exam for a classroom attempt: that would invert
+            # the lock order against concurrent end-now on PostgreSQL.
+            lock_scope = ("self",) if self.classroom_session_id else ()
+            locked = type(self).objects.select_for_update(of=lock_scope).select_related("exam").filter(pk=self.pk).first()
             if not locked:  # The owner may have deleted the practice test.
                 return False
             changed = (locked.status == self.AttemptStatus.IN_PROGRESS and locked.is_expired
@@ -683,12 +694,19 @@ class ClassroomSession(models.Model):
     teacher = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="classroom_sessions")
     label = models.CharField("Session label", max_length=120, blank=True, help_text="e.g. 'Class 10-B, Monday'.")
     code = models.CharField(max_length=12, unique=True, db_index=True)
+    # An optional one-shot form token makes a retried PDF-to-session POST
+    # idempotent without limiting the number of sessions created from a paper.
+    creation_token = models.UUIDField(null=True, blank=True, unique=True, editable=False)
     is_open = models.BooleanField("Joining open", default=True)
     allow_retakes = models.BooleanField(
         "Allow retakes", default=False,
         help_text="If on, a student may take this session more than once; only their best graded attempt is ranked.",
     )
     show_leaderboard_to_students = models.BooleanField("Students can see leaderboard", default=False)
+    results_released = models.BooleanField(
+        "Release results and answer review to participants", default=False,
+        help_text="Per-session release; does not change the underlying examination or other sessions.",
+    )
     ended_at = models.DateTimeField(null=True, blank=True, help_text="Set when the teacher ends the session.")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -724,6 +742,8 @@ class ClassroomSession(models.Model):
         from django.db import IntegrityError
         for _ in range(12):
             new_code = self.generate_code()
+            if new_code == self.code:
+                continue
             try:
                 with transaction.atomic():
                     self.code = new_code
@@ -738,38 +758,54 @@ class ClassroomSession(models.Model):
         return self.ended_at is not None
 
     @property
+    def student_results_visible(self):
+        return bool(self.results_released or self.exam.show_result_immediately)
+
+    @property
+    def student_answers_visible(self):
+        return bool(self.results_released or (self.exam.allow_review_answers and self.exam.show_result_immediately))
+
+    @property
     def joining_allowed(self):
         """Whether NEW students may join. Existing attempts are unaffected by this."""
         return self.is_open and not self.is_ended and self.exam.status == Exam.ExamStatus.PUBLISHED
 
     def end_now(self):
-        """Close the session and time out any still-in-progress attempts (explicit,
-        teacher-confirmed action). Saved answers are preserved and evaluated."""
-        if self.is_ended:
-            return False
-        self.ended_at = timezone.now()
-        self.is_open = False
-        self.save(update_fields=["ended_at", "is_open", "updated_at"])
-        for attempt in self.attempts.filter(status=ExamAttempt.AttemptStatus.IN_PROGRESS):
-            attempt.submit_attempt(is_timeout=True)
+        """Atomically close the session and finalize saved active attempts.
+
+        Starts and end-now lock the same session first, so an attempt cannot be
+        created after the teacher has ended the session.
+        """
+        from django.db import connection
+        from django.db.models import F
+        with transaction.atomic():
+            if connection.vendor == "sqlite":
+                type(self).objects.filter(pk=self.pk).update(id=F("id"))
+            session = type(self).objects.select_for_update().get(pk=self.pk)
+            if session.is_ended:
+                self.ended_at, self.is_open = session.ended_at, session.is_open
+                return False
+            session.ended_at = timezone.now()
+            session.is_open = False
+            session.save(update_fields=["ended_at", "is_open", "updated_at"])
+            for attempt in session.attempts.select_for_update(of=("self",)).select_related("exam").filter(status=ExamAttempt.AttemptStatus.IN_PROGRESS):
+                attempt.submit_attempt(is_timeout=True)
+            self.ended_at, self.is_open = session.ended_at, session.is_open
         return True
 
     def counts(self):
         """Distinct, server-truthful participation counts for live monitoring.
 
-        joined     - students who entered the code (registered, timer not started)
-        started    - distinct students who began an attempt
-        in_progress- attempts currently running
-        submitted  - attempts submitted/evaluated
-        timed_out  - attempts auto-ended by the timer or End-Test-Now
-        These stay distinct; "joined" >= "started".
+        All counts are distinct students, not attempts. Retake statuses can
+        overlap: someone may have submitted and then started another attempt.
         """
         from django.db.models import Count, Q as _Q
         agg = self.attempts.aggregate(
-            in_progress=Count("id", filter=_Q(status=ExamAttempt.AttemptStatus.IN_PROGRESS)),
-            submitted=Count("id", filter=_Q(status__in=[ExamAttempt.AttemptStatus.SUBMITTED,
+            in_progress=Count("student_id", distinct=True, filter=_Q(status=ExamAttempt.AttemptStatus.IN_PROGRESS)),
+            submitted=Count("student_id", distinct=True, filter=_Q(status__in=[ExamAttempt.AttemptStatus.SUBMITTED,
                                                         ExamAttempt.AttemptStatus.EVALUATED])),
-            timed_out=Count("id", filter=_Q(status=ExamAttempt.AttemptStatus.TIMED_OUT)),
+            timed_out=Count("student_id", distinct=True, filter=_Q(status=ExamAttempt.AttemptStatus.TIMED_OUT)),
+            terminated=Count("student_id", distinct=True, filter=_Q(status=ExamAttempt.AttemptStatus.TERMINATED)),
         )
         agg["joined"] = self.participants.count()
         agg["started"] = self.attempts.values("student").distinct().count()

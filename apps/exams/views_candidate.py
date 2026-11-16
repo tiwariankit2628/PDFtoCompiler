@@ -13,7 +13,7 @@ from decimal import Decimal
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, OperationalError, connection, transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -40,7 +40,7 @@ class ExamCatalogView(ActiveUserRequiredMixin, ListView):
     def get_queryset(self):
         now = timezone.now()
         qs = (
-            Exam.objects.filter(status=Exam.ExamStatus.PUBLISHED, is_private_practice=False)
+            Exam.objects.filter(status=Exam.ExamStatus.PUBLISHED, is_private_practice=False, is_classroom_only=False)
             .filter(Q(start_time__isnull=True) | Q(start_time__lte=now))
             .filter(Q(end_time__isnull=True) | Q(end_time__gte=now))
             .select_related("category")
@@ -91,7 +91,7 @@ class ExamInstructionsView(ActiveUserRequiredMixin, DetailView):
     slug_url_kwarg = "slug"
 
     def get_queryset(self):
-        return super().get_queryset().filter(Q(is_private_practice=False) | Q(is_private_practice=True, creator=self.request.user))
+        return super().get_queryset().filter(is_classroom_only=False).filter(Q(is_private_practice=False) | Q(is_private_practice=True, creator=self.request.user))
 
     def get(self, request, *args, **kwargs):
         response = super().get(request, *args, **kwargs)
@@ -191,7 +191,7 @@ class ExamStartView(ActiveUserRequiredMixin, View):
     def post(self, request, slug):
         user = request.user
         exam = get_object_or_404(
-            Exam.objects.filter(Q(is_private_practice=False) | Q(is_private_practice=True, creator=user)),
+            Exam.objects.filter(is_classroom_only=False).filter(Q(is_private_practice=False) | Q(is_private_practice=True, creator=user)),
             slug=slug,
         )
         if exam.is_private_practice:
@@ -412,6 +412,8 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
         def figure_url(fig):
             if exam.is_private_practice:
                 return reverse("questions:practice_bank_figure", args=[fig.pk]) if fig.private_image else None
+            if exam.is_classroom_only:
+                return reverse("exams:classroom_attempt_figure", args=[attempt.attempt_uuid, fig.pk]) if fig.private_image else None
             return fig.image.url if fig.image else None
 
         for resp in responses_qs:
@@ -459,6 +461,10 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
             source_images = [{"url": figure_url(f), "kind": f.source} for f in source_figures]
             if exam.is_private_practice:
                 question_images = ([reverse("questions:practice_bank_image", args=[q.pk])] if q.private_image else []) + [
+                    u for u in (figure_url(f) for f in diagram_figures) if u
+                ]
+            elif exam.is_classroom_only:
+                question_images = ([reverse("exams:classroom_attempt_image", args=[attempt.attempt_uuid, q.pk])] if q.private_image else []) + [
                     u for u in (figure_url(f) for f in diagram_figures) if u
                 ]
             else:
@@ -519,7 +525,7 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
             "tab_switch_limit": STRICT_TAB_SWITCH_LIMIT,
         }
         response = render(request, "exams/exam_session.html", context)
-        if exam.is_private_practice:
+        if exam.is_private_practice or attempt.classroom_session_id:
             patch_cache_control(response, private=True, no_store=True)
         return response
 
@@ -532,7 +538,10 @@ class ExamSaveAnswerView(ActiveUserRequiredMixin, View):
     """
 
     def post(self, request, attempt_uuid):
-        attempt = get_object_or_404(ExamAttempt, attempt_uuid=attempt_uuid)
+        # Load the exam outside the write transaction. On SQLite a lazy exam
+        # read inside that transaction would create a read snapshot before the
+        # writer lock and can make a concurrent save/submit fail immediately.
+        attempt = get_object_or_404(ExamAttempt.objects.select_related("exam"), attempt_uuid=attempt_uuid)
 
         # Strict security check
         if attempt.student != request.user:
@@ -570,8 +579,14 @@ class ExamSaveAnswerView(ActiveUserRequiredMixin, View):
         is_marked = data.get("is_marked_for_review", False)
 
         with transaction.atomic():
-            if attempt.exam.is_private_practice:
-                attempt = ExamAttempt.objects.select_for_update().select_related("exam").get(pk=attempt.pk)
+            if attempt.exam.is_private_practice or attempt.classroom_session_id:
+                if attempt.classroom_session_id and connection.vendor == "sqlite":
+                    ExamAttempt.objects.filter(pk=attempt.pk).update(id=F("id"))
+                # Classroom controls lock the session and then an attempt.
+                # Lock only this attempt on PostgreSQL, not the joined exam row,
+                # so end-now and an answer save cannot deadlock in reverse order.
+                lock_scope = ("self",) if attempt.classroom_session_id else ()
+                attempt = ExamAttempt.objects.select_for_update(of=lock_scope).select_related("exam").get(pk=attempt.pk)
                 if attempt.is_expired or attempt.status != ExamAttempt.AttemptStatus.IN_PROGRESS:
                     if attempt.status == ExamAttempt.AttemptStatus.IN_PROGRESS and attempt.is_expired:
                         attempt.submit_attempt(is_timeout=True)
@@ -604,7 +619,7 @@ class ExamSaveAnswerView(ActiveUserRequiredMixin, View):
                 resp.is_marked_for_review = False
             elif action == "mark_review":
                 resp.is_marked_for_review = True
-                if selected_option_id is not None:
+                if selected_option_id is not None or attempt.exam.is_private_practice or attempt.classroom_session_id:
                     resp.selected_option = valid_opt
             else:
                 # Normal save or navigate
@@ -715,6 +730,8 @@ class ExamSecurityLogView(ActiveUserRequiredMixin, View):
             data = json.loads(request.body)
         except (ValueError, TypeError):
             return JsonResponse({"error": "Invalid payload"}, status=400)
+        if not isinstance(data, dict):
+            return JsonResponse({"error": "Invalid payload"}, status=400)
 
         event_type = data.get("event_type", "WINDOW_BLUR")
         details = str(data.get("details", ""))[:250]
@@ -729,7 +746,11 @@ class ExamSecurityLogView(ActiveUserRequiredMixin, View):
 
         # Non-counting deterrent telemetry (blur, fullscreen exit, copy, etc.).
         with transaction.atomic():
-            locked = ExamAttempt.objects.select_for_update().get(pk=attempt.pk)
+            if attempt.classroom_session_id and connection.vendor == "sqlite":
+                ExamAttempt.objects.filter(pk=attempt.pk).update(id=F("id"))
+            locked = ExamAttempt.objects.select_for_update(of=("self",)).select_related("exam").get(pk=attempt.pk)
+            if locked.status == ExamAttempt.AttemptStatus.IN_PROGRESS and locked.is_expired:
+                locked.submit_attempt(is_timeout=True)
             if locked.status != ExamAttempt.AttemptStatus.IN_PROGRESS:
                 return JsonResponse({"status": "ignored", "attempt_status": locked.status}, status=200)
             locked.anti_cheat_warnings += 1
@@ -741,7 +762,11 @@ class ExamSecurityLogView(ActiveUserRequiredMixin, View):
     def _handle_tab_switch(self, attempt, client_event_id, details):
         strict = attempt.exam.strict_exam_mode
         with transaction.atomic():
-            locked = ExamAttempt.objects.select_for_update().select_related("exam").get(pk=attempt.pk)
+            if attempt.classroom_session_id and connection.vendor == "sqlite":
+                ExamAttempt.objects.filter(pk=attempt.pk).update(id=F("id"))
+            locked = ExamAttempt.objects.select_for_update(of=("self",)).select_related("exam").get(pk=attempt.pk)
+            if locked.status == ExamAttempt.AttemptStatus.IN_PROGRESS and locked.is_expired:
+                locked.submit_attempt(is_timeout=True)
             if locked.status != ExamAttempt.AttemptStatus.IN_PROGRESS:
                 return JsonResponse({"status": "ignored", "attempt_status": locked.status}, status=200)
 
@@ -811,19 +836,35 @@ class ExamSubmitView(ActiveUserRequiredMixin, View):
         if request.content_type == "application/json":
             try:
                 parsed = json.loads(request.body)
-                if isinstance(parsed, dict):
-                    data = parsed
-                    is_timeout = bool(data.get("is_timeout", False))
             except (ValueError, TypeError):
-                pass
+                parsed = None
+            if not isinstance(parsed, dict):
+                if attempt.classroom_session_id or attempt.exam.is_private_practice:
+                    # Never turn a malformed final-answer payload into a
+                    # successful submission with missing data.
+                    return JsonResponse({"error": "Invalid submission payload."}, status=400)
+            else:
+                data = parsed
+                if ((attempt.classroom_session_id or attempt.exam.is_private_practice)
+                        and not isinstance(data.get("is_timeout", False), bool)):
+                    return JsonResponse({"error": "Invalid timeout flag."}, status=400)
+                is_timeout = bool(data.get("is_timeout", False))
         else:
             is_timeout = request.POST.get("is_timeout") == "true"
 
         with transaction.atomic():
-            # Lock attempt record
-            locked_attempt = ExamAttempt.objects.select_for_update().get(id=attempt.id)
+            # Serialize classroom answer saves, final submit and timeouts even on
+            # SQLite, which otherwise ignores SELECT FOR UPDATE.
+            if attempt.classroom_session_id and connection.vendor == "sqlite":
+                ExamAttempt.objects.filter(pk=attempt.pk).update(id=F("id"))
+            locked_attempt = ExamAttempt.objects.select_for_update(of=("self",)).select_related("exam").get(id=attempt.id)
             if locked_attempt.status == ExamAttempt.AttemptStatus.IN_PROGRESS:
-                if locked_attempt.exam.is_private_practice and not is_timeout and not locked_attempt.is_expired and "last_response" in data:
+                reliable = locked_attempt.exam.is_private_practice or locked_attempt.classroom_session_id is not None
+                if reliable and is_timeout and not locked_attempt.is_expired:
+                    # The browser timer may round down or run fast. Only the
+                    # server deadline can turn an active attempt into a timeout.
+                    return JsonResponse({"status": "active", "remaining_seconds": max(1, locked_attempt.remaining_seconds)})
+                if reliable and not is_timeout and not locked_attempt.is_expired and "last_response" in data:
                     # Save the final visible answer and its time atomically with
                     # submission; a browser callback after expiry is never accepted.
                     from apps.questions.models import QuestionOption
@@ -854,9 +895,12 @@ class ExamSubmitView(ActiveUserRequiredMixin, View):
                     response.is_visited = True
                     response.is_marked_for_review = bool(last.get("is_marked_for_review", False))
                     response.save(update_fields=["selected_option", "time_spent_seconds", "is_visited", "is_marked_for_review"])
-                locked_attempt.submit_attempt(is_timeout=is_timeout or (locked_attempt.exam.is_private_practice and locked_attempt.is_expired))
+                locked_attempt.submit_attempt(is_timeout=is_timeout or (reliable and locked_attempt.is_expired))
 
-                if not locked_attempt.exam.is_private_practice:
+                if locked_attempt.classroom_session_id:
+                    log_audit(request.user, "CLASSROOM_ATTEMPT_SUBMITTED",
+                              f"Submitted classroom attempt #{locked_attempt.pk}.", request=request)
+                elif not locked_attempt.exam.is_private_practice:
                     log_audit(
                         request.user,
                         "EXAM_SESSION_SUBMITTED",
@@ -902,7 +946,7 @@ class ExamCompletedView(ActiveUserRequiredMixin, DetailView):
             # Never show a successful-submission screen for a live attempt.
             return redirect("exams:exam_session", attempt_uuid=attempt.attempt_uuid)
         response = super().get(request, *args, **kwargs)
-        if attempt.exam.is_private_practice:
+        if attempt.exam.is_private_practice or attempt.classroom_session_id:
             patch_cache_control(response, private=True, no_store=True)
         return response
 
@@ -919,7 +963,8 @@ class ExamCompletedView(ActiveUserRequiredMixin, DetailView):
                 "unanswered_count": attempt.total_questions_count - attempt.answered_count,
                 "marked_review_count": attempt.marked_review_count,
                 "time_taken_minutes": round(attempt.time_taken_seconds / 60, 1),
-                "show_results": exam.show_result_immediately and not exam.is_private_practice,
+                "show_results": (attempt.classroom_session.student_results_visible if attempt.classroom_session_id
+                                 else exam.show_result_immediately and not exam.is_private_practice),
             }
         )
         if attempt.classroom_session_id and context["show_results"]:

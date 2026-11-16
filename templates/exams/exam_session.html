@@ -245,10 +245,12 @@
         /* At phone widths the full palette follows the question, and every
            action remains visible rather than being clipped off-screen. */
         @media (max-width: 767.98px) {
-            .cbt-topbar { height: auto; min-height: 60px; padding: .5rem .75rem; gap: .5rem; }
-            .cbt-topbar > div:first-child { flex: 1 1 auto; }
-            .cbt-topbar > div:last-child { flex-shrink: 0; gap: .5rem !important; }
-            #active-section-badge { white-space: normal; overflow-wrap: anywhere; text-align: left; }
+            .cbt-topbar { height: auto; min-height: 60px; padding: .5rem .75rem; gap: .5rem; flex-wrap: wrap; }
+            .cbt-topbar > div:first-child { flex: 1 1 100%; min-width: 0; flex-wrap: wrap; }
+            .cbt-topbar > div:last-child { flex: 1 1 100%; justify-content: space-between; gap: .5rem !important; }
+            #active-section-badge { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+            #sync-indicator { white-space: normal; text-align: left; }
+            #retry-unsaved { flex-shrink: 0; }
             .timer-box { font-size: 1rem; letter-spacing: 0; padding: .3rem .45rem; }
             .cbt-topbar .bi-clock-history { display: none; }
             #btn-open-submit-modal { padding: .35rem .6rem !important; }
@@ -267,9 +269,10 @@
         <div class="d-flex align-items-center gap-2">
             <span class="fw-bold text-dark fs-6 d-none d-md-inline exam-title">{{ exam.title|truncatechars:45 }}</span>
             <span class="badge bg-primary text-uppercase px-2 py-1" id="active-section-badge">Section: General</span>
-            <span class="badge bg-light text-muted border d-none d-sm-inline" id="sync-indicator">
+            <span class="badge bg-light text-muted border" id="sync-indicator" role="status" aria-live="polite">
                 <i class="bi bi-circle-fill text-success me-1" style="font-size: 8px;"></i> Connected
             </span>
+            <button type="button" class="btn btn-sm btn-outline-danger" id="retry-unsaved" hidden>Retry saves</button>
         </div>
 
         <div class="d-flex align-items-center gap-3">
@@ -560,7 +563,9 @@
             let questionStartTime = Date.now();
             let isSubmitting = false;
             const IS_PRIVATE_PRACTICE = {% if exam.is_private_practice %}true{% else %}false{% endif %};
+            const RELIABLE_SAVE = IS_PRIVATE_PRACTICE || {% if attempt.classroom_session_id %}true{% else %}false{% endif %};
             let saveQueue = Promise.resolve();
+            let pendingSaves = 0;
             const failedSaves = new Set();
 
             // DOM Elements
@@ -836,6 +841,7 @@
 
             // 3. Option Selection
             function selectOption(optionId) {
+                if (isSubmitting) return;
                 const q = questions[currentIndex];
                 q.selected_option_id = optionId;
 
@@ -847,11 +853,12 @@
                     card.setAttribute('aria-checked', String(selected));
                     card.tabIndex = selected ? 0 : -1;
                 });
-                if (IS_PRIVATE_PRACTICE) saveAndNavigate(null, 'navigate');
+                if (RELIABLE_SAVE) saveAndNavigate(null, 'navigate');
             }
 
             // 4. Save and Navigate
             function saveAndNavigate(targetIndex, action = 'navigate') {
+                if (isSubmitting) return;
                 const q = questions[currentIndex];
                 const timeSpentDelta = Math.round((Date.now() - questionStartTime) / 1000);
                 questionStartTime = Date.now();
@@ -879,43 +886,78 @@
                 }
                 if (targetIndex === null) updateCounters();
 
-                // Queue private saves so a quick submit cannot overtake an
-                // earlier navigation save. The payload is frozen at the click.
-                showSyncStatus('Saving...', 'text-warning');
-                const responseId = q.response_id;
-                const saveBody = JSON.stringify({
-                    response_id: responseId, action: action,
-                    selected_option_id: q.selected_option_id,
-                    is_marked_for_review: q.is_marked_for_review,
-                    time_spent_delta: timeSpentDelta
-                });
-                const sendSave = () => fetch(SAVE_URL, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN,
-                              'X-Requested-With': 'XMLHttpRequest'},
-                    body: saveBody
-                }).then(res => res.json()).then(data => {
-                    if (data.status === 'expired') {
-                        window.location.href = data.redirect_url || COMPLETED_URL;
-                        return;
-                    }
-                    if (data.status !== 'success') throw new Error('Save was rejected');
-                    failedSaves.delete(responseId);
-                    showSyncStatus('Connected', 'text-success');
-                    if (typeof data.remaining_seconds === 'number') remainingSeconds = data.remaining_seconds;
-                }).catch(err => {
-                    console.error('Save failed:', err);
-                    if (IS_PRIVATE_PRACTICE) failedSaves.add(responseId);
-                    showSyncStatus('Save failed — retry this question', 'text-danger');
-                });
-                if (IS_PRIVATE_PRACTICE) saveQueue = saveQueue.then(sendSave);
-                else sendSave();
+                // Freeze each payload at the interaction, then serialize private
+                // and classroom saves so a quick submit cannot overtake them.
+                queueResponseSave(q, action, timeSpentDelta);
 
                 // Advance to target question
                 if (targetIndex !== null && targetIndex >= 0 && targetIndex < questions.length) {
                     renderQuestion(targetIndex);
                 }
             }
+
+            function queueResponseSave(q, action, timeSpentDelta) {
+                showSyncStatus('Saving…', 'text-warning');
+                const responseId = q.response_id;
+                const saveBody = JSON.stringify({response_id: responseId, action,
+                    selected_option_id: q.selected_option_id, is_marked_for_review: q.is_marked_for_review,
+                    time_spent_delta: timeSpentDelta});
+                if (RELIABLE_SAVE) pendingSaves++;
+                let saved = false;
+                const sendSave = () => fetch(SAVE_URL, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN,
+                              'X-Requested-With': 'XMLHttpRequest'},
+                    body: saveBody
+                }).then(async res => {
+                    if (!res.ok) throw new Error('Save was rejected');
+                    return res.json();
+                }).then(data => {
+                    if (data.status === 'expired') {
+                        isSubmitting = true;
+                        window.location.href = data.redirect_url || COMPLETED_URL;
+                        return;
+                    }
+                    if (data.status !== 'success') throw new Error('Save was rejected');
+                    saved = true;
+                    failedSaves.delete(responseId);
+                    if (typeof data.remaining_seconds === 'number') remainingSeconds = data.remaining_seconds;
+                }).catch(err => {
+                    console.error('Save failed:', err);
+                    if (RELIABLE_SAVE) failedSaves.add(responseId);
+                    else showSyncStatus('Save failed — retry this question', 'text-danger');
+                }).finally(() => {
+                    if (RELIABLE_SAVE) {
+                        pendingSaves--;
+                        document.getElementById('retry-unsaved').hidden = !failedSaves.size;
+                        if (failedSaves.size) showSyncStatus('Unsaved answers — retry', 'text-danger');
+                        else if (pendingSaves) showSyncStatus('Saving…', 'text-warning');
+                        else showSyncStatus('Saved', 'text-success');
+                    } else if (saved) showSyncStatus('Connected', 'text-success');
+                });
+                if (RELIABLE_SAVE) saveQueue = saveQueue.then(sendSave);
+                else sendSave();
+            }
+
+            function retryFailedSaves() {
+                if (isSubmitting) return;
+                // Re-send the *current* selection, not an older failed payload.
+                // A clear must remain a clear; retrying must not resurrect a choice.
+                [...failedSaves].forEach(id => {
+                    const q = questions.find(item => item.response_id === id);
+                    if (!q) return;
+                    const action = q.is_marked_for_review ? 'mark_review' : (q.selected_option_id ? 'navigate' : 'clear');
+                    queueResponseSave(q, action, 0);
+                });
+            }
+            document.getElementById('retry-unsaved').addEventListener('click', retryFailedSaves);
+            window.addEventListener('online', () => { if (RELIABLE_SAVE && !isSubmitting) retryFailedSaves(); });
+            window.addEventListener('beforeunload', event => {
+                if (RELIABLE_SAVE && !isSubmitting && (pendingSaves || failedSaves.size)) {
+                    event.preventDefault();
+                    event.returnValue = '';
+                }
+            });
 
             // Sync Status Indicator Helper
             function showSyncStatus(text, colorClass) {
@@ -975,6 +1017,7 @@
             });
 
             document.getElementById('btn-clear-response').addEventListener('click', () => {
+                if (isSubmitting) return;
                 const q = questions[currentIndex];
                 q.selected_option_id = null;
                 document.querySelectorAll('.option-card').forEach((card, index) => {
@@ -1039,7 +1082,7 @@
                             // Sync client timer with authoritative server time
                             remainingSeconds = data.remaining_seconds;
                         }
-                        if (IS_PRIVATE_PRACTICE && !isSubmitting) saveAndNavigate(null, 'navigate');
+                        if (RELIABLE_SAVE && !isSubmitting) saveAndNavigate(null, 'navigate');
                     })
                     .catch(() => {});
                 }, 30000);
@@ -1206,7 +1249,7 @@
 
                 const submitRequest = () => {
                     const payload = {is_timeout: isTimeout};
-                    if (IS_PRIVATE_PRACTICE && !isTimeout && questions[currentIndex]) {
+                    if (RELIABLE_SAVE && !isTimeout && questions[currentIndex]) {
                         const q = questions[currentIndex];
                         payload.last_response = {response_id:q.response_id, selected_option_id:q.selected_option_id,
                             is_marked_for_review:q.is_marked_for_review,
@@ -1220,6 +1263,15 @@
                     }).then(async res => {
                         const data = await res.json();
                         if (!res.ok) throw new Error(data.error || 'Submission failed');
+                        if (data.status === 'active') {
+                            // The server's deadline has not arrived yet.
+                            isSubmitting = false;
+                            if (submitBtn) submitBtn.disabled = false;
+                            remainingSeconds = Math.max(1, data.remaining_seconds || 1);
+                            startCountdown();
+                            showSyncStatus('Connected', 'text-success');
+                            return;
+                        }
                         window.location.href = data.redirect_url || COMPLETED_URL;
                     }).catch(() => {
                         // Do not claim a submission or navigate away on a network error.
@@ -1229,7 +1281,7 @@
                         showSyncStatus('Submission failed — retry', 'text-danger');
                     });
                 };
-                if (IS_PRIVATE_PRACTICE && !isTimeout) {
+                if (RELIABLE_SAVE && !isTimeout) {
                     saveQueue.then(() => {
                         if (failedSaves.size) {
                             const numbers = questions.filter(q => failedSaves.has(q.response_id)).map(q => q.order).join(', ');

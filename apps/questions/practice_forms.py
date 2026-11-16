@@ -58,9 +58,16 @@ class PracticeUploadForm(BootstrapFormMixin, forms.Form):
         return cleaned
 
 
-def practice_question_error(question):
-    """Return a human-readable error instead of silently dropping a question."""
+def practice_question_error(question, *, allow_confirmed_crop_choices=False):
+    """Return a human-readable error instead of silently dropping a question.
+
+    Classroom teachers may explicitly confirm labels visible in a whole-question
+    crop. Never infer labels merely because a crop exists; private practice keeps
+    its existing stricter validation.
+    """
     figures = list(question.figures.all())
+    has_crop = (allow_confirmed_crop_choices and question.paper.image_first and question.is_image_first
+                and any(f.source == "question_crop" and not f.option_key and f.private_image for f in figures))
     if not question.question_text.strip() and not question.private_image and not any(not f.option_key and f.private_image for f in figures):
         return "Add a question statement or question image."
     options = question.options if isinstance(question.options, list) else []
@@ -71,7 +78,11 @@ def practice_question_error(question):
         key = str(opt.get("key", "")).upper().strip()
         if key not in "ABCDE" or len(key) != 1 or key in keys:
             return "Options must have unique labels A–E."
-        if not str(opt.get("text", "")).strip() and not any(f.option_key == key and f.private_image for f in figures):
+        if (not str(opt.get("text", "")).strip()
+                and not any(f.option_key == key and f.private_image for f in figures)
+                and not (has_crop and opt.get("visible_in_crop") is True)):
+            if allow_confirmed_crop_choices:
+                return f"Option {key} needs text, an image or a teacher-confirmed label in the original crop."
             return f"Option {key} needs text or an image."
         keys.append(key)
     if len(keys) < 2:
@@ -165,6 +176,7 @@ class PracticeSettingsForm(BootstrapFormMixin, forms.Form):
 
 
 class PracticeQuestionForm(BootstrapFormMixin, forms.Form):
+    option_error_message = "At least two options need text or an attached image."
     question_text = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 4}))
     option_A = forms.CharField(label="Option A", required=False, widget=forms.Textarea(attrs={"rows": 2}))
     option_B = forms.CharField(label="Option B", required=False, widget=forms.Textarea(attrs={"rows": 2}))
@@ -193,14 +205,18 @@ class PracticeQuestionForm(BootstrapFormMixin, forms.Form):
         super().__init__(*args, **kwargs)
         add_tables_editor(self, question)
 
+    def available_option_keys(self, cleaned, figures):
+        return [k for k in "ABCDE" if cleaned.get(f"option_{k}", "").strip()
+                or any(f.option_key == k and f.private_image for f in figures)]
+
     def clean(self):
         cleaned = clean_tables_editor(self, super().clean())
         figures = list(self.question.figures.all())
         if not cleaned.get("question_text", "").strip() and not self.question.private_image and not any(not f.option_key and f.private_image for f in figures):
             self.add_error("question_text", "Add a question statement or attach a question image.")
-        keys = [k for k in "ABCDE" if cleaned.get(f"option_{k}", "").strip() or any(f.option_key == k and f.private_image for f in figures)]
+        keys = self.available_option_keys(cleaned, figures)
         if len(keys) < 2:
-            raise ValidationError("At least two options need text or an attached image.")
+            raise ValidationError(self.option_error_message)
         if cleaned.get("correct_option") and cleaned["correct_option"] not in keys:
             self.add_error("correct_option", "Select an existing option, or leave the answer key blank.")
         return cleaned

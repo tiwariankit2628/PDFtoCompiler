@@ -44,8 +44,12 @@ class ClassroomReportingTests(ClassroomBase):
         self.assertContains(detail, "had no confirmed key when graded")
         self.assertContains(detail, "Answered, ungraded")
         self.assertNotContains(detail, "FAILED")
+        self.assertIn("private", detail["Cache-Control"])
+        self.assertIn("no-store", detail["Cache-Control"])
         review = self.client.get(reverse("exams:student_result_review", args=[attempt.attempt_uuid]))
         self.assertEqual(review.status_code, 200)
+        self.assertIn("private", review["Cache-Control"])
+        self.assertIn("no-store", review["Cache-Control"])
         cards = {q["response"].exam_question.order: q for q in review.context["reviewed_questions"]}
         self.assertEqual([cards[i]["status"] for i in (1, 2, 3)], ["incorrect", "ungraded", "unattempted"])
         self.assertIsNone(cards[2]["correct_option"])
@@ -126,18 +130,20 @@ class ClassroomReportingTests(ClassroomBase):
         self.assertEqual(row["Percentage (confirmed keys)"], "")
         self.assertEqual(str(attempt.attempt_uuid), rows[0]["attempt_uuid"])
 
-    def test_monitor_and_csv_use_latest_retake(self):
+    def test_monitor_csv_and_leaderboard_use_best_retake(self):
         session = self.session_for(exam=self.make_exam(keyed=2, questions=2), allow_retakes=True)
         older = self.take(session, {1: "A", 2: "A"})
         newer = self.take(session, {1: "A", 2: "B"})
         self.assertNotEqual(older.score_obtained, newer.score_obtained)
         self.client.force_login(self.teacher)
         row = self.client.get(reverse("exams:classroom_monitor", args=[session.pk])).json()["rows"][0]
-        self.assertEqual(row["attempt_uuid"], str(newer.attempt_uuid))
-        self.assertEqual(row["score"], float(newer.score_obtained))
+        # Status tracks the latest participation; score and result link use
+        # the same best completed result as the leaderboard and export.
+        self.assertEqual(row["attempt_uuid"], str(older.attempt_uuid))
+        self.assertEqual(row["score"], float(older.score_obtained))
         exported = self.client.get(reverse("exams:classroom_export", args=[session.pk]))
         csv_row = list(csv.DictReader(io.StringIO(exported.content.decode())))[0]
-        self.assertEqual(Decimal(csv_row["Score (confirmed keys)"]), newer.score_obtained)
+        self.assertEqual(Decimal(csv_row["Score (confirmed keys)"]), older.score_obtained)
         self.assertEqual(Decimal(_session_leaderboard(session)[0]["score"]), older.score_obtained)
 
     def test_security_events_and_unreleased_results_respect_permissions(self):
@@ -168,6 +174,8 @@ class ClassroomReportingTests(ClassroomBase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "image/svg+xml")
         self.assertIn(b"<svg", response.content)
+        self.assertIn("private", response["Cache-Control"])
+        self.assertIn("no-store", response["Cache-Control"])
         self.client.force_login(self.other_teacher)
         self.assertEqual(self.client.get(reverse("exams:classroom_qr", args=[session.pk])).status_code, 403)
 

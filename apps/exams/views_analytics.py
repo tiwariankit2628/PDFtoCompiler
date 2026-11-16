@@ -32,6 +32,17 @@ def _ensure_final_for_results(attempt):
         raise PermissionDenied("Results are available after this attempt ends.")
 
 
+def _can_access_attempt_result(user, attempt):
+    if attempt.student_id == user.pk or user.is_admin_role:
+        return True
+    if not user.is_teacher:
+        return False
+    if attempt.classroom_session_id:
+        return attempt.classroom_session.teacher_id == user.pk
+    return (attempt.exam.creator_id == user.pk
+            or user.assigned_categories.filter(pk=attempt.exam.category_id).exists())
+
+
 class PrivateResultRedirectMixin:
     """Keep private results separate and protect an active institutional test.
 
@@ -54,7 +65,12 @@ class PrivateResultRedirectMixin:
                     active.auto_timeout_if_expired()
                 else:
                     return redirect("exams:exam_session", attempt_uuid=active.attempt_uuid)
-        return super().dispatch(request, *args, **kwargs)
+        response = super().dispatch(request, *args, **kwargs)
+        if attempt.classroom_session_id:
+            # Results and answer reviews are private to this attempt even after
+            # the session's teacher has released them to its participants.
+            patch_cache_control(response, private=True, no_store=True)
+        return response
 
 
 class StudentResultDetailView(ActiveUserRequiredMixin, PrivateResultRedirectMixin, DetailView):
@@ -80,9 +96,8 @@ class StudentResultDetailView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
         user = self.request.user
 
         # Access Control: Only the candidate or authorized teachers/admins can view this result
-        if attempt.student != user and not user.is_admin_role:
-            if not (user.is_teacher and (attempt.exam.creator == user or user.assigned_categories.filter(pk=attempt.exam.category_id).exists())):
-                raise PermissionDenied("You do not have permission to view this student's result.")
+        if not _can_access_attempt_result(user, attempt):
+            raise PermissionDenied("You do not have permission to view this student's result.")
 
         _ensure_final_for_results(attempt)
         return attempt
@@ -98,7 +113,9 @@ class StudentResultDetailView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
             attempt.auto_timeout_if_expired()
 
         # Check Result Visibility Settings
-        can_view_scores = bool(exam.show_result_immediately or user.is_admin_role or user.is_teacher)
+        student_scores_visible = (attempt.classroom_session.student_results_visible if attempt.classroom_session_id
+                                  else exam.show_result_immediately)
+        can_view_scores = bool(student_scores_visible or user.is_admin_role or user.is_teacher)
         context["can_view_scores"] = can_view_scores
         context["exam"] = exam
 
@@ -108,9 +125,8 @@ class StudentResultDetailView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
             if can_view_scores:
                 from .classroom_results import classroom_result_summary
                 context["classroom_summary"] = classroom_result_summary(attempt)
-                context["can_review"] = bool(exam.allow_review_answers or user.is_admin_role or user.is_teacher)
-            is_reviewer = bool(user.is_admin_role or (user.is_teacher and (
-                exam.creator_id == user.pk or user.assigned_categories.filter(pk=exam.category_id).exists())))
+                context["can_review"] = bool(attempt.classroom_session.student_answers_visible or user.is_admin_role or user.is_teacher)
+            is_reviewer = bool(user.is_admin_role or (user.is_teacher and attempt.classroom_session.teacher_id == user.pk))
             context["is_security_reviewer"] = is_reviewer
             if is_reviewer:
                 context["security_logs"] = attempt.security_logs.all()[:200]
@@ -176,9 +192,8 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
         attempt = super().get_object(queryset)
         user = self.request.user
 
-        if attempt.student != user and not user.is_admin_role:
-            if not (user.is_teacher and (attempt.exam.creator == user or user.assigned_categories.filter(pk=attempt.exam.category_id).exists())):
-                raise PermissionDenied("You do not have permission to review these answers.")
+        if not _can_access_attempt_result(user, attempt):
+            raise PermissionDenied("You do not have permission to review these answers.")
 
         _ensure_final_for_results(attempt)
         return attempt
@@ -190,11 +205,9 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
         user = self.request.user
 
         # Security & Policy Verification
-        can_review = bool(
-            (exam.allow_review_answers and (exam.show_result_immediately or exam.is_expired))
-            or user.is_admin_role
-            or user.is_teacher
-        )
+        student_can_review = (attempt.classroom_session.student_answers_visible if attempt.classroom_session_id
+                              else exam.allow_review_answers and (exam.show_result_immediately or exam.is_expired))
+        can_review = bool(student_can_review or user.is_admin_role or user.is_teacher)
         context["can_review"] = can_review
         context["exam"] = exam
 
@@ -300,12 +313,13 @@ class StudentResultPdfView(ActiveUserRequiredMixin, PrivateResultRedirectMixin, 
             return redirect("questions:practice_result", attempt_uuid=attempt.attempt_uuid)
 
         # Access Control
-        if attempt.student != user and not user.is_admin_role:
-            if not (user.is_teacher and (attempt.exam.creator == user or user.assigned_categories.filter(pk=attempt.exam.category_id).exists())):
-                raise PermissionDenied("You do not have permission to download this scorecard.")
+        if not _can_access_attempt_result(user, attempt):
+            raise PermissionDenied("You do not have permission to download this scorecard.")
 
         # A PDF must obey the same release setting as the web scorecard.
-        if user.is_student and not attempt.exam.show_result_immediately:
+        visible = (attempt.classroom_session.student_results_visible if attempt.classroom_session_id
+                   else attempt.exam.show_result_immediately)
+        if user.is_student and not visible:
             raise PermissionDenied("Results have not been released for this examination.")
 
         _ensure_final_for_results(attempt)
@@ -338,7 +352,7 @@ class ExamLeaderboardView(ActiveUserRequiredMixin, DetailView):
     slug_url_kwarg = "slug"
 
     def get_queryset(self):
-        queryset = super().get_queryset().filter(is_private_practice=False)
+        queryset = super().get_queryset().filter(is_private_practice=False, is_classroom_only=False)
         # Do not reveal unpublished scores through the leaderboard.
         if self.request.user.is_student:
             queryset = queryset.filter(show_result_immediately=True)
@@ -387,7 +401,7 @@ class TeacherExamAnalyticsView(TeacherRequiredMixin, DetailView):
 
     def get_object(self, queryset=None):
         exam = super().get_object(queryset)
-        if exam.is_private_practice:
+        if exam.is_private_practice or exam.is_classroom_only:
             raise Http404()
         user = self.request.user
 
@@ -430,7 +444,7 @@ class TeacherExportExamResultsCsvView(TeacherRequiredMixin, View):
     """
 
     def get(self, request, pk):
-        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False)
+        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False)
         user = request.user
 
         if not user.is_admin_role and exam.creator != user:

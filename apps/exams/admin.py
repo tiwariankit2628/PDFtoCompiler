@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.db.models import Q
 from apps.core.admin_privacy import PublicDataAdminMixin
 from .models import Category, Exam, ExamAttempt, ExamResponse, ExamSecurityLog
 
@@ -6,9 +7,9 @@ from .models import Category, Exam, ExamAttempt, ExamResponse, ExamSecurityLog
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
-        if obj and (obj.exams.filter(is_private_practice=True).exists()
-                    or obj.uploaded_papers.filter(is_student_private=True).exists()
-                    or obj.questions.filter(is_private_practice=True).exists()):
+        if obj and (obj.exams.filter(Q(is_private_practice=True) | Q(is_classroom_only=True)).exists()
+                    or obj.uploaded_papers.filter(Q(is_student_private=True) | Q(is_classroom_private=True)).exists()
+                    or obj.questions.filter(Q(is_private_practice=True) | Q(is_classroom_snapshot=True)).exists()):
             return False
         return super().has_delete_permission(request, obj)
 
@@ -27,10 +28,10 @@ class CategoryAdmin(admin.ModelAdmin):
 
 @admin.register(Exam)
 class ExamAdmin(PublicDataAdminMixin, admin.ModelAdmin):
-    exclude = ("is_private_practice",)
+    exclude = ("is_private_practice", "is_classroom_only")
 
     def get_queryset(self, request):
-        return super().get_queryset(request).filter(is_private_practice=False)
+        return super().get_queryset(request).filter(is_private_practice=False, is_classroom_only=False)
 
     list_display = ("title", "category", "creator", "status", "is_free", "duration_minutes", "created_at")
     list_filter = ("status", "is_free", "category")
@@ -41,7 +42,7 @@ class ExamAdmin(PublicDataAdminMixin, admin.ModelAdmin):
 @admin.register(ExamAttempt)
 class ExamAttemptAdmin(PublicDataAdminMixin, admin.ModelAdmin):
     def get_queryset(self, request):
-        return super().get_queryset(request).filter(exam__is_private_practice=False)
+        return super().get_queryset(request).filter(exam__is_private_practice=False, exam__is_classroom_only=False)
 
     list_display = ("student", "exam", "status", "score_obtained", "percentage", "is_passed", "started_at")
     list_filter = ("status", "is_passed")
@@ -51,7 +52,7 @@ class ExamAttemptAdmin(PublicDataAdminMixin, admin.ModelAdmin):
 @admin.register(ExamResponse)
 class ExamResponseAdmin(PublicDataAdminMixin, admin.ModelAdmin):
     def get_queryset(self, request):
-        return super().get_queryset(request).filter(attempt__exam__is_private_practice=False)
+        return super().get_queryset(request).filter(attempt__exam__is_private_practice=False, attempt__exam__is_classroom_only=False)
 
     list_display = ("attempt", "exam_question", "selected_option", "is_marked_for_review", "is_visited", "updated_at")
     list_filter = ("is_marked_for_review", "is_visited")
@@ -60,7 +61,7 @@ class ExamResponseAdmin(PublicDataAdminMixin, admin.ModelAdmin):
 @admin.register(ExamSecurityLog)
 class ExamSecurityLogAdmin(PublicDataAdminMixin, admin.ModelAdmin):
     def get_queryset(self, request):
-        return super().get_queryset(request).filter(attempt__exam__is_private_practice=False)
+        return super().get_queryset(request).filter(attempt__exam__is_private_practice=False, attempt__exam__is_classroom_only=False)
 
     list_display = ("attempt", "event_type", "details", "timestamp")
     list_filter = ("event_type", "timestamp")

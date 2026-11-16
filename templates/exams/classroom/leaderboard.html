@@ -9,7 +9,7 @@
   </div>
 </div>
 
-<div class="alert alert-light border small">Only attempts with at least one graded answer are ranked. Scores and percentages cover confirmed keys only and may be partial. Ties are broken by fewer incorrect answers, then faster completion. Attempts without graded answers are not ranked.</div>
+<div class="alert alert-light border small">Only completed attempts with a fully confirmed key are ranked. Retakes use each student’s best fully keyed attempt. Ties are broken by fewer incorrect answers, then faster completion. Partial, ungraded, active and security-review attempts are not ranked; the teacher’s CSV keeps them clearly separated.</div>
 
 <div class="card border shadow-sm rounded-4">
   <div class="card-body p-3">
@@ -28,7 +28,7 @@
             {% if is_owner %}<td class="text-end"><a class="small" href="{% url 'exams:student_result_detail' r.attempt_uuid %}">View</a></td>{% endif %}
           </tr>
           {% empty %}
-          <tr><td colspan="{% if is_owner %}7{% else %}6{% endif %}" class="text-center text-muted py-4">No graded results yet. Results appear here once students submit and keys are confirmed.</td></tr>
+          <tr><td colspan="{% if is_owner %}7{% else %}6{% endif %}" class="text-center text-muted py-4">No fully keyed completed results yet. Partial or ungraded attempts are not ranked.</td></tr>
           {% endfor %}
         </tbody>
       </table>

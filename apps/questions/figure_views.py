@@ -17,7 +17,7 @@ from .models import ExtractedFigure, ExtractedQuestion, QuestionPaperUpload
 
 
 def _authorize(user, paper):
-    if paper.is_student_private:
+    if paper.uses_private_storage:
         raise Http404()
     if not user.is_admin_role and paper.uploaded_by_id != user.pk:
         if not user.assigned_categories.filter(pk=paper.category_id).exists():
@@ -275,7 +275,7 @@ class ManualQuestionCreateView(TeacherRequiredMixin, View):
 
 
 def _authorize_bank(user, question):
-    if question.is_private_practice:
+    if question.is_private_practice or question.is_classroom_snapshot:
         raise Http404()
     if not user.is_admin_role and question.creator_id != user.pk:
         if not user.assigned_categories.filter(pk=question.category_id).exists():

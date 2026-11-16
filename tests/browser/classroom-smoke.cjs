@@ -57,7 +57,7 @@ const {chromium} = require('playwright-core');
     await student.locator('#btn-open-submit-modal').click();
     await Promise.all([student.waitForURL('**/completed/'), student.locator('#btn-confirm-submit').click()]);
     await row.getByText('Submitted', {exact:true}).waitFor({timeout:15000});
-    assert.strictEqual((await row.locator('td').nth(4).textContent()).trim(), '4');
+    assert.strictEqual((await row.locator('td').nth(4).textContent()).trim(), '4Complete');
     await Promise.all([teacher.waitForURL('**/results/**'), row.getByRole('link', {name:'View'}).click()]);
     assert(await teacher.getByRole('heading', {name:'Classroom result', exact:true}).isVisible());
     assert.deepStrictEqual(errors, [], `Page errors: ${errors.join(', ')}`);

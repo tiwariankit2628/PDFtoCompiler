@@ -1,4 +1,4 @@
-"""Storage for student practice material, deliberately without a public URL."""
+"""Storage for private practice and classroom material, without a public URL."""
 import os
 
 from django.conf import settings
