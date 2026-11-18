@@ -9,8 +9,10 @@ Computes deep diagnostic metrics from real candidate responses:
 from collections import defaultdict
 from decimal import Decimal
 from django.db.models import Avg, Count, Max, Min, Q
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from .models import ExamResponse
+from .classroom_results import classroom_response_status
 
 
 def compute_student_attempt_analytics(attempt):
@@ -30,6 +32,7 @@ def compute_student_attempt_analytics(attempt):
     correct_count = 0
     incorrect_count = 0
     unattempted_count = 0
+    ungraded_count = 0
     total_time_spent = 0
     time_spent_correct = 0
     time_spent_incorrect = 0
@@ -37,7 +40,7 @@ def compute_student_attempt_analytics(attempt):
 
     # Categorized buckets
     subject_data = defaultdict(lambda: {
-        "total": 0, "attempted": 0, "correct": 0, "incorrect": 0,
+        "total": 0, "attempted": 0, "correct": 0, "incorrect": 0, "ungraded": 0,
         "marks_obtained": Decimal("0.00"), "max_marks": Decimal("0.00"),
         "time_spent": 0,
     })
@@ -50,9 +53,9 @@ def compute_student_attempt_analytics(attempt):
         "marks_obtained": Decimal("0.00"),
     })
     difficulty_data = {
-        "easy": {"total": 0, "correct": 0, "incorrect": 0, "unattempted": 0, "time_spent": 0},
-        "medium": {"total": 0, "correct": 0, "incorrect": 0, "unattempted": 0, "time_spent": 0},
-        "hard": {"total": 0, "correct": 0, "incorrect": 0, "unattempted": 0, "time_spent": 0},
+        "easy": {"total": 0, "correct": 0, "incorrect": 0, "unattempted": 0, "ungraded": 0, "time_spent": 0},
+        "medium": {"total": 0, "correct": 0, "incorrect": 0, "unattempted": 0, "ungraded": 0, "time_spent": 0},
+        "hard": {"total": 0, "correct": 0, "incorrect": 0, "unattempted": 0, "ungraded": 0, "time_spent": 0},
     }
 
     fastest_time = None
@@ -73,7 +76,8 @@ def compute_student_attempt_analytics(attempt):
 
         subj = q.subject or "General"
         subject_data[subj]["total"] += 1
-        subject_data[subj]["max_marks"] += eq.positive_marks
+        if r.key_confirmed_at_grading is not False:
+            subject_data[subj]["max_marks"] += eq.positive_marks
         subject_data[subj]["time_spent"] += time_spent
 
         top = q.topic or "General"
@@ -85,8 +89,15 @@ def compute_student_attempt_analytics(attempt):
         chapter_data[chap]["subject"] = subj
         chapter_data[chap]["total"] += 1
 
-        if r.selected_option is not None:
-            # Question was attempted
+        # The saved result, not today's editable key, is authoritative. This
+        # also keeps a deleted selected option from turning a graded response
+        # into an unattempted one and leaves missing decisions ungraded.
+        status = classroom_response_status(r)
+        if status == "ungraded":
+            ungraded_count += 1
+            subject_data[subj]["ungraded"] += 1
+            difficulty_data[diff_key]["ungraded"] += 1
+        elif status in ("correct", "incorrect"):
             subject_data[subj]["attempted"] += 1
             topic_data[top]["attempted"] += 1
             chapter_data[chap]["attempted"] += 1
@@ -96,32 +107,23 @@ def compute_student_attempt_analytics(attempt):
             if time_spent > slowest_time:
                 slowest_time = time_spent
 
-            if r.selected_option.is_correct:
+            subject_data[subj]["marks_obtained"] += r.marks_awarded
+            topic_data[top]["marks_obtained"] += r.marks_awarded
+            chapter_data[chap]["marks_obtained"] += r.marks_awarded
+            if status == "correct":
                 correct_count += 1
                 time_spent_correct += time_spent
                 difficulty_data[diff_key]["correct"] += 1
-
                 subject_data[subj]["correct"] += 1
-                subject_data[subj]["marks_obtained"] += eq.positive_marks
-
                 topic_data[top]["correct"] += 1
-                topic_data[top]["marks_obtained"] += eq.positive_marks
-
                 chapter_data[chap]["correct"] += 1
-                chapter_data[chap]["marks_obtained"] += eq.positive_marks
             else:
                 incorrect_count += 1
                 time_spent_incorrect += time_spent
                 difficulty_data[diff_key]["incorrect"] += 1
-
                 subject_data[subj]["incorrect"] += 1
-                subject_data[subj]["marks_obtained"] -= eq.negative_marks
-
                 topic_data[top]["incorrect"] += 1
-                topic_data[top]["marks_obtained"] -= eq.negative_marks
-
                 chapter_data[chap]["incorrect"] += 1
-                chapter_data[chap]["marks_obtained"] -= eq.negative_marks
         else:
             unattempted_count += 1
             time_spent_unattempted += time_spent
@@ -139,7 +141,8 @@ def compute_student_attempt_analytics(attempt):
             "attempted": att_cnt,
             "correct": s_info["correct"],
             "incorrect": s_info["incorrect"],
-            "unattempted": s_info["total"] - att_cnt,
+            "unattempted": s_info["total"] - att_cnt - s_info["ungraded"],
+            "ungraded": s_info["ungraded"],
             "marks_obtained": s_info["marks_obtained"],
             "max_marks": s_info["max_marks"],
             "percentage": pct_score,
@@ -191,6 +194,7 @@ def compute_student_attempt_analytics(attempt):
             "correct": d_info["correct"],
             "incorrect": d_info["incorrect"],
             "unattempted": d_info["unattempted"],
+            "ungraded": d_info["ungraded"],
             "accuracy": d_acc,
             "avg_time_seconds": avg_t,
         })
@@ -209,7 +213,7 @@ def compute_student_attempt_analytics(attempt):
             attempt.AttemptStatus.EVALUATED,
             attempt.AttemptStatus.TIMED_OUT,
         ]
-    )
+    ).exclude(responses__key_confirmed_at_grading=False)
     total_cohort = submitted_attempts.count()
 
     return {
@@ -217,6 +221,7 @@ def compute_student_attempt_analytics(attempt):
         "correct_count": correct_count,
         "incorrect_count": incorrect_count,
         "unattempted_count": unattempted_count,
+        "ungraded_count": ungraded_count,
         "attempted_count": correct_count + incorrect_count,
         "accuracy_percentage": attempt.accuracy_percentage,
         "score_obtained": attempt.score_obtained,
@@ -254,18 +259,23 @@ def compute_exam_institutional_analytics(exam):
     """
     # Classroom sessions have their own participation and visibility policy;
     # never mix their results into the public institutional cohort.
-    attempts_qs = exam.attempts.filter(
+    completed = exam.attempts.filter(
         classroom_session__isnull=True,
-        status__in=[
-            "submitted", "evaluated", "timed_out"
-        ]
+        status__in=["submitted", "evaluated", "timed_out"],
     ).select_related("student")
-
-    total_attempts = attempts_qs.count()
-    if total_attempts == 0:
+    total_attempts = completed.count()
+    partial_attempts = completed.filter(responses__key_confirmed_at_grading=False).distinct().count()
+    # Partial attempts remain visible in exports, but are not ranked or mixed
+    # into pass rates, averages, and score distributions for complete results.
+    attempts_qs = completed.exclude(responses__key_confirmed_at_grading=False)
+    ranked_attempts = attempts_qs.count()
+    if ranked_attempts == 0:
         return {
-            "total_attempts": 0,
-            "completed_attempts": 0,
+            "total_attempts": total_attempts,
+            "completed_attempts": total_attempts,
+            "partial_attempts": partial_attempts,
+            "ranked_attempts": 0,
+            "avg_percentage": 0.0,
             "pass_count": 0,
             "pass_percentage": 0.0,
             "avg_score": 0.0,
@@ -284,7 +294,7 @@ def compute_exam_institutional_analytics(exam):
     )
 
     pass_count = attempts_qs.filter(is_passed=True).count()
-    pass_pct = round((pass_count / total_attempts * 100.0), 1)
+    pass_pct = round((pass_count / ranked_attempts * 100.0), 1)
 
     # Score distribution histogram bins
     dist = {"<30%": 0, "30-50%": 0, "50-70%": 0, "70-90%": 0, ">90%": 0}
@@ -313,11 +323,12 @@ def compute_exam_institutional_analytics(exam):
             exam_question=eq,
             attempt__classroom_session__isnull=True,
             attempt__status__in=["submitted", "evaluated", "timed_out"],
-        ).select_related("selected_option")
+        ).exclude(key_confirmed_at_grading=False).select_related("selected_option")
 
         q_total = responses.count()
-        q_correct = responses.filter(selected_option__is_correct=True).count()
-        q_attempted = responses.filter(selected_option__isnull=False).count()
+        q_correct = responses.filter(is_correct=True).count()
+        q_attempted = responses.filter(Q(selected_option__isnull=False) | Q(selected_option_key_at_grading__isnull=False)
+                                       | Q(is_correct__isnull=False)).count()
 
         accuracy = round((q_correct / q_total * 100.0), 1) if q_total > 0 else 0.0
 
@@ -334,13 +345,14 @@ def compute_exam_institutional_analytics(exam):
 
         # Most common distractor (incorrect option chosen most often)
         distractor = None
-        incorrect_responses = responses.filter(selected_option__isnull=False, selected_option__is_correct=False)
+        incorrect_responses = (responses.filter(is_correct=False)
+            .exclude(exam_question__question__is_pdf_derived=True, key_confirmed_at_grading__isnull=True)
+            .annotate(saved_choice=Coalesce("selected_option_key_at_grading", "selected_option__option_key"))
+            .exclude(saved_choice__isnull=True))
         if incorrect_responses.exists():
-            top_opt = incorrect_responses.values("selected_option__option_key").annotate(
-                count=Count("id")
-            ).order_by("-count").first()
+            top_opt = incorrect_responses.values("saved_choice").annotate(count=Count("id")).order_by("-count").first()
             if top_opt:
-                distractor = f"Option {top_opt['selected_option__option_key']} ({top_opt['count']} students)"
+                distractor = f"Option {top_opt['saved_choice']} ({top_opt['count']} students)"
 
         avg_time = responses.aggregate(Avg("time_spent_seconds"))["time_spent_seconds__avg"] or 0
 
@@ -366,6 +378,8 @@ def compute_exam_institutional_analytics(exam):
     return {
         "total_attempts": total_attempts,
         "completed_attempts": total_attempts,
+        "partial_attempts": partial_attempts,
+        "ranked_attempts": ranked_attempts,
         "pass_count": pass_count,
         "pass_percentage": pass_pct,
         "avg_score": round(agg["avg_score"] or Decimal("0.0"), 2),

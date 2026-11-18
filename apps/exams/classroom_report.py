@@ -7,7 +7,7 @@ import pymupdf as fitz
 from django.conf import settings
 
 
-def generate_classroom_report(attempt, summary):
+def generate_classroom_report(attempt, summary, *, title="Classroom result summary"):
     def text(value):
         return html.escape(str(value if value is not None else ""), quote=True)
 
@@ -16,13 +16,14 @@ def generate_classroom_report(attempt, summary):
     percentage = f'{summary["percentage"]}%' if summary["percentage"] is not None else "Not available"
     completeness = "Complete key recorded." if summary["fully_keyed"] else "This score or percentage may be partial, not an overall outcome."
     name = attempt.student.get_full_name() or attempt.student.username
-    content = f'''<h1>Classroom result summary</h1>
+    label = "confirmed keys" if title == "Classroom result summary" else "graded questions"
+    content = f'''<h1>{text(title)}</h1>
     <p>{text(attempt.exam.title)}<br>Candidate: {text(name)}</p>
-    <table><tr><th>Score on confirmed keys</th><th>Percentage on confirmed keys</th></tr>
+    <table><tr><th>Score on {label}</th><th>Percentage on {label}</th></tr>
       <tr><td>{text(score)}</td><td>{text(percentage)}</td></tr></table>
     <p>Correct: {counts["correct"]} | Incorrect: {counts["incorrect"]} | Answered, ungraded: {counts["ungraded"]} | Unattempted: {counts["unattempted"]}</p>
     <p>Without a confirmed key when graded: {summary["pending_keys"]}<br>Key status not recorded at grading: {summary["unknown_keys"]}</p>
-    <p class="note">{text(completeness)} Only saved grading decisions from confirmed keys are scored. An ungraded answer is not marked wrong. Changing a key later does not automatically regrade an attempt.</p>'''
+    <p class="note">{text(completeness)} This report uses saved grading decisions. An ungraded answer is not marked wrong. Changing a key later does not automatically regrade an attempt.</p>'''
     css = '''@font-face { font-family: Noto; src: url(NotoSansDevanagari.ttf); }
       body { font-family:Noto; color:#202923; font-size:11pt; line-height:1.5; }
       h1 { font-size:22pt; color:#bd412a; } table { border-collapse:collapse; width:100%; }

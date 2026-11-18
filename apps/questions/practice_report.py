@@ -17,7 +17,7 @@ def generate_practice_report(attempt, result):
     archive = fitz.Archive(str(font_dir))
     images = {}
 
-    def image_tag(field, alt):
+    def image_tag(field, alt, *, primary=False):
         if not field or not field.name:
             return ""
         if field.name not in images:
@@ -29,20 +29,24 @@ def generate_practice_report(attempt, result):
                 images[field.name] = alias
             except (OSError, ValueError):
                 return '<p class="muted">[Image unavailable]</p>'
-        return f'<p><img src="{images[field.name]}" alt="{_text(alt)}" width="200"></p>'
+        css_class = ' class="primary-question"' if primary else ''
+        return f'<p><img{css_class} src="{images[field.name]}" alt="{_text(alt)}" width="{450 if primary else 200}"></p>'
 
     counts = result["counts"]
-    score = f'{attempt.score_obtained} / {result["graded_marks"]}' if result["keyed_count"] else "Not graded"
-    percent = f'{result["percentage"]}%' if result["percentage"] is not None else "Not graded"
+    score = (f'{attempt.score_obtained} / original maximum unavailable' if result["legacy_unknown_count"] else
+             f'{attempt.score_obtained} / {result["graded_marks"]}' if result["keyed_count"] else "Not graded")
+    percent = f'{result["percentage"]}%' if result["percentage"] is not None else "Not available"
     accuracy = f'{result["accuracy"]}%' if result["accuracy"] is not None else "Not available"
     parts = [f'''<h1>Practice report / अभ्यास परिणाम</h1>
         <p class="muted">{_text(attempt.exam.title)} · {_text(attempt.started_at.strftime("%d %b %Y %H:%M"))}</p>
         <table><tr><th>Score on confirmed keys</th><th>Percentage</th><th>Accuracy</th><th>Outcome</th></tr>
         <tr><td>{_text(score)}</td><td>{_text(percent)}</td><td>{_text(accuracy)}</td><td>{_text(result["outcome"])}</td></tr></table>
-        <p>Total possible marks: {_text(attempt.total_marks)} | Confirmed-key marks: {_text(result["graded_marks"])}<br>
+        <p>Total possible marks: {_text(attempt.total_marks)} | Confirmed-key marks: {_text(result["graded_marks"] if result["graded_marks"] is not None else "Unknown")}<br>
         Attempted: {result["attempted_total"]} / {len(result["rows"])} | Correct: {counts["correct"]} | Incorrect: {counts["incorrect"]} | Unattempted: {counts["unattempted"]} | Answered but ungraded: {counts["ungraded"]}<br>
         Elapsed time: {attempt.time_taken_seconds} sec | Recorded question time: {result["time_logged_seconds"]} sec</p>
         <p class="muted">Only student-confirmed, unambiguous keys are scored. Unknown keys are not graded. Question time reflects saved browser activity and may be incomplete. Private practice is not an institutional qualification.</p>''']
+    if result["legacy_unknown_count"]:
+        parts.append('<p class="muted">Earlier attempt: key details and original graded maximum were not recorded. The saved score and response decisions have not been recalculated.</p>')
     for kind, groups in result["breakdowns"].items():
         parts.append(f"<h2>{_text(kind.title())} performance</h2>")
         for group in groups:
@@ -53,12 +57,31 @@ def generate_practice_report(attempt, result):
     parts.append("<h2>Question-wise analysis / प्रश्न अनुसार विवरण</h2>")
     for row in result["rows"]:
         q, response = row["question"], row["response"]
-        parts.append(f'<div class="question"><h3>Question {response.order} — {_text(row["label"])}</h3>'
-                     f'<div>{render_question(q)}</div>')
-        parts.append(image_tag(q.private_image, "Question image"))
-        for fig in q.figures.all():
-            if not fig.option_id:
-                parts.append(image_tag(fig.private_image, "Question figure"))
+        parts.append(f'<div class="question"><h3>Question {response.order} — {_text(row["label"])}</h3>')
+        primary = row.get("primary_crops", [])
+        primary_tags = [image_tag(fig.private_image, "Original question image", primary=True) for fig in primary]
+        use_primary = bool(primary_tags and not row.get("missing_crop_pages")
+                           and all("[Image unavailable]" not in tag for tag in primary_tags))
+        if use_primary:
+            parts.extend(primary_tags)
+        else:
+            if primary or row.get("original_image_missing"):
+                parts.append('<p class="muted">[Question image incomplete or unavailable; showing available text and supporting images.]</p>')
+            # Preserve the available ordered parts even when another part is
+            # missing, followed by the text and supplementary material.
+            parts.extend(primary_tags)
+            parts.append(f'<div>{render_question(q)}</div>')
+            parts.append(image_tag(q.private_image, "Question image"))
+            primary_ids = {fig.pk for fig in primary}
+            for fig in q.figures.all():
+                if not fig.option_id and fig.pk not in primary_ids:
+                    parts.append(image_tag(fig.private_image, "Question figure"))
+        if row["saved_choice"] is not None:
+            parts.append(f'<p class="muted">Choice when graded: {_text(row["saved_choice"])}</p>')
+        if row["saved_key"] is not None:
+            parts.append(f'<p class="muted">Key when graded: {_text(row["saved_key"])}</p>')
+        elif row["legacy_key_unknown"]:
+            parts.append('<p class="muted">Original key status was not recorded.</p>')
         for option in row["options"]:
             flags = []
             if option.pk == response.selected_option_id:
@@ -67,10 +90,11 @@ def generate_practice_report(attempt, result):
                 flags.append("confirmed key")
             flag_text = f' ({", ".join(flags)})' if flags else ""
             parts.append(f'<p class="option"><b>{_text(option.option_key)}.</b> {_text(option.option_text)}{_text(flag_text)}</p>')
-            for fig in option.figures.all():
-                parts.append(image_tag(fig.private_image, "Option image"))
+            if not use_primary:
+                for fig in option.figures.all():
+                    parts.append(image_tag(fig.private_image, "Option image"))
         parts.append(f'<p class="muted">Recorded time: {response.time_spent_seconds} sec'
-                     + (f' | Marks: {_text(response.marks_awarded)}' if row["correct"] else "") + '</p>')
+                     + (f' | Marks: {_text(response.marks_awarded)}' if row["status"] in ("correct", "incorrect") else "") + '</p>')
         if row["explanation"]:
             parts.append(f'<p><b>Explanation:</b> {_text(row["explanation"])}</p>')
         parts.append('</div>')
@@ -88,6 +112,7 @@ def generate_practice_report(attempt, result):
       th, td { border: 1px solid #dbe4f1; padding: 6pt; text-align: left; }
       th { background: #eef3ff; }
       img { max-width: 200pt; max-height: 180pt; }
+      img.primary-question { max-width: 450pt; max-height: 420pt; }
     '''
     buffer = io.BytesIO()
     writer = fitz.DocumentWriter(buffer)

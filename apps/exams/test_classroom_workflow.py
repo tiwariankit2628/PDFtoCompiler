@@ -185,7 +185,7 @@ class ClassroomWorkflowTests(TestCase):
         payload = {
             "question_number": question.question_number, "detected_type": question.detected_type,
             "question_text": question.question_text, "positive_marks": "4", "negative_marks": "1",
-            "visible_crop_choices": ["A", "B", "C", "D"], "correct_option": "C", "reviewed": "on",
+            "visible_crop_choices": ["A", "B", "C", "D"], "correct_option": "C", "confirm_answer_key": "on", "reviewed": "on",
         }
         response = self.client.post(edit_url, payload)
         self.assertEqual(response.status_code, 302, response.context and response.context["form"].errors)
@@ -273,7 +273,9 @@ class ClassroomWorkflowTests(TestCase):
         review = reverse("exams:student_result_review", args=[attempt.attempt_uuid])
         pdf = reverse("exams:student_result_pdf", args=[attempt.attempt_uuid])
         self.assertContains(self.client.get(detail), "Results are under evaluation")
-        self.assertNotContains(self.client.get(review), "What is two plus two")
+        unreleased_review = self.client.get(review)
+        self.assertNotContains(unreleased_review, "What is two plus two")
+        self.assertNotContains(unreleased_review, image_url)
         self.assertEqual(self.client.get(pdf).status_code, 403)
         self.assertEqual(self.client.get(image_url).status_code, 403)
         self.client.force_login(self.other_teacher)
@@ -286,7 +288,11 @@ class ClassroomWorkflowTests(TestCase):
         self.assertTrue(session.results_released)
         self.client.force_login(self.student)
         self.assertContains(self.client.get(detail), "SCORE ON CONFIRMED KEYS", html=False)
-        self.assertContains(self.client.get(review), "What is two plus two")
+        released_review = self.client.get(review)
+        self.assertContains(released_review, image_url)
+        self.assertContains(released_review, "Original question image")
+        self.assertContains(released_review, "What is two plus two")  # available in collapsed accessible fallback
+        self.assertContains(released_review, '<details data-image-fallback class="small mb-3" >')
         self.assertEqual(self.client.get(pdf).status_code, 200)
         image = self.client.get(image_url)
         self.assertEqual(image.status_code, 200)

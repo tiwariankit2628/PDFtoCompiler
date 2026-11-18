@@ -10,7 +10,7 @@
 {% if paper.status == 'pending' or paper.status == 'processing' %}
   <div class="alert alert-info">Extraction is running. Refresh this page to check progress.</div>
 {% else %}
-{% if paper.status == 'failed' %}<div class="alert alert-warning"><strong>Automatic extraction did not find questions.</strong> Your paper is saved; add questions manually or try another PDF.<details class="mt-2"><summary>Extraction log</summary><pre class="small text-wrap mb-0">{{ paper.extraction_log }}</pre></details></div>{% endif %}
+{% if paper.status == 'failed' %}<div class="alert alert-warning"><strong>Automatic extraction did not find questions.</strong> Your paper is saved; add questions manually or try another PDF.<details class="mt-2"><summary>Extraction log</summary><pre class="small text-wrap mb-0">{{ extraction_log_display }}</pre></details></div>{% endif %}
 {% if extraction_warnings %}<div class="alert alert-warning small"><strong>Extraction warnings:</strong><ul class="mb-0">{% for warning in extraction_warnings %}<li>{{ warning }}</li>{% endfor %}</ul></div>{% endif %}
 <div class="alert alert-info small"><strong>Review before sharing.</strong> PDF extraction is best-effort: check every image, question, choice and key against the original. Image crops can include unrelated content or printed answers. Only single-correct MCQs can be scored.</div>
 {% if unassigned_figure_count %}<div class="alert alert-warning small">{{ unassigned_figure_count }} image candidate{{ unassigned_figure_count|pluralize }} not assigned. <a href="{% url 'questions:classroom_figure_pool' paper.pk %}">Review the image pool</a>.</div>{% endif %}
@@ -23,11 +23,13 @@
       {% if form.creation_token.errors %}<div class="alert alert-danger" role="alert">{{ form.creation_token.errors|striptags }} Reload this page to try again.</div>{% endif %}
       {% for field in form %}{% if not field.is_hidden %}
         {% if field.name == 'acknowledge_review' and not flagged_count %}{% elif field.name == 'acknowledge_unassigned' and not unassigned_figure_count %}{% else %}
+        {% if field.name == 'answer_key_text' %}{% url 'questions:classroom_answer_image_preview' paper.pk as answer_image_url %}{% include 'questions/_answer_key_image.html' with answer_image_url=answer_image_url only %}{% endif %}
         <div class="mb-3 {% if field.field.widget.input_type == 'checkbox' %}form-check{% endif %}">
           {% if field.field.widget.input_type == 'checkbox' %}{{ field }}<label class="form-check-label fw-semibold" for="{{ field.id_for_label }}">{{ field.label }}</label>
           {% else %}<label class="form-label fw-semibold" for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{% endif %}
           {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
           {% for error in field.errors %}<div class="text-danger small" role="alert">{{ error }}</div>{% endfor %}
+          {% if field.name == 'answer_key_text' %}{% include 'questions/_manual_key_preview.html' %}{% endif %}
         </div>{% endif %}
       {% endif %}{% endfor %}
       <button class="btn btn-primary fw-bold" {% if not total_questions %}disabled{% endif %}>Create test &amp; join code</button>
@@ -45,20 +47,29 @@
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"><div><h4 class="fw-bold mb-0">Questions &amp; original images</h4><span class="small text-muted">Edit or exclude incomplete questions; verify labels against the printed choices.</span></div>
   <form method="post" action="{% url 'questions:classroom_question_add' paper.pk %}">{% csrf_token %}<button class="btn btn-outline-primary btn-sm">+ Add missing question</button></form>
 </div>
+{% include 'questions/_review_filters.html' %}
 {% for question in questions %}
-<div class="card border shadow-sm mb-3 {% if not question.include_in_practice %}opacity-75{% endif %}" id="q-{{ question.pk }}"><div class="card-body">
+<div class="card border shadow-sm mb-3 {% if not question.include_in_practice %}opacity-75{% endif %}" id="q-{{ question.pk }}" data-review-question data-image-question data-number="{{ question.question_number }}" data-needs-review="{% if question.is_flagged or question.practice_error or question.image_notice or question.crop_warning or question.detected_type != 'mcq_single' %}1{% else %}0{% endif %}" data-missing-key="{% if question.correct_option and question.answer_status == 'manually_verified' and question.detected_type == 'mcq_single' %}0{% else %}1{% endif %}"><div class="card-body">
   <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2"><div><strong>Question {{ question.question_number }}</strong> <span class="small text-muted">· page {{ question.page_number }}</span>
     {% if not question.include_in_practice %}<span class="badge bg-secondary">Excluded</span>{% elif question.practice_error %}<span class="badge bg-danger">Needs editing</span>{% elif question.is_flagged %}<span class="badge bg-warning text-dark">Review</span>{% else %}<span class="badge bg-success">Ready</span>{% endif %}
-    {% if question.correct_option and question.answer_status == 'manually_verified' %}<span class="badge bg-light text-dark border">Confirmed key · {{ question.correct_option }}</span>{% else %}<span class="badge bg-light text-dark border">No confirmed key</span>{% endif %}
+    {% if question.correct_option and question.answer_status == 'manually_verified' and question.detected_type == 'mcq_single' %}<span class="badge bg-light text-dark border">Confirmed key · {{ question.correct_option }}</span>{% else %}<span class="badge bg-light text-dark border">No confirmed single-correct key</span>{% endif %}
     {% if question.is_image_first %}<span class="badge bg-primary">Image-first</span>{% endif %}
     {% if question.detected_type != 'mcq_single' %}<span class="badge bg-warning text-dark">{{ question.get_detected_type_display }} — review type</span>{% endif %}
   </div><div class="d-flex flex-wrap gap-2"><a class="btn btn-sm btn-outline-primary" href="{% url 'questions:classroom_question_edit' question.pk %}">Edit &amp; key</a><a class="btn btn-sm btn-outline-primary" href="{% url 'questions:classroom_figures' question.pk %}">Images / recrop</a>
     <form method="post" action="{% url 'questions:classroom_question_include' question.pk %}">{% csrf_token %}<button class="btn btn-sm btn-outline-secondary">{% if question.include_in_practice %}Exclude{% else %}Include{% endif %}</button></form></div></div>
   {% if question.crop_warning %}<p class="small text-danger fw-semibold">{{ question.crop_warning }}</p>{% endif %}
-  <div>{{ question|render_question }}</div>
-  {% if question.private_image %}<img class="img-fluid border rounded my-2" style="max-height:280px" src="{% url 'questions:classroom_extracted_image' question.pk %}" alt="Extracted question image">{% endif %}
-  {% for figure in question.figures.all %}{% if not figure.option_key and figure.private_image %}<figure class="mt-2 mb-1"><figcaption class="small text-muted">{% if figure.source == 'question_crop' %}Original question image{% elif figure.source == 'parallel-source' %}Other language / source region{% else %}Source or diagram{% endif %} · page {{ figure.page_number }}</figcaption><a href="{% url 'questions:classroom_figure_file' figure.pk %}" target="_blank" rel="noopener"><img loading="lazy" class="img-fluid border rounded" style="max-height:360px" src="{% url 'questions:classroom_figure_file' figure.pk %}" alt="Original question image, page {{ figure.page_number }}"></a></figure>{% endif %}{% endfor %}
-  <ul class="mt-2 mb-1 small">{% for option in question.options %}<li><strong>{{ option.key }}.</strong> {{ option.text }}{% if option.visible_in_crop and not option.text %}<span class="text-muted">Choice shown in original image</span>{% endif %}{% for figure in question.figures.all %}{% if figure.option_key == option.key and figure.private_image %}<br><img loading="lazy" class="img-fluid border my-1" style="max-height:140px" src="{% url 'questions:classroom_figure_file' figure.pk %}" alt="Option {{ option.key }} image">{% endif %}{% endfor %}</li>{% endfor %}</ul>
+  {% if question.primary_crops %}
+    {% for figure in question.primary_crops %}<figure class="my-2"><a href="{% url 'questions:classroom_figure_file' figure.pk %}" target="_blank" rel="noopener"><img data-primary-question-image loading="lazy" decoding="async" class="img-fluid border rounded" style="max-height:420px" src="{% url 'questions:classroom_figure_file' figure.pk %}" alt="Original question image{% if question.primary_crops|length > 1 %}, part {{ forloop.counter }}{% endif %}"></a><figcaption class="small text-muted">Original question image{% if question.primary_crops|length > 1 %} · part {{ forloop.counter }}{% endif %} · tap to enlarge</figcaption></figure>{% endfor %}
+    <div class="small text-muted">Selectable choices: {% for option in question.options %}<strong>{{ option.key }}</strong>{% if not forloop.last %} · {% endif %}{% empty %}none yet{% endfor %}. Check that the image shows the whole question and every choice.</div>
+    <p class="small text-danger mt-2" role="status" data-image-error hidden>An original image could not be loaded. Available text and supporting images are shown below.</p>
+    <details data-image-fallback class="small mt-2" {% if question.image_notice %}open{% endif %}><summary>Accessible text and supporting images</summary>
+  {% endif %}
+    <div>{{ question|render_question }}</div>
+    {% if question.private_image %}<img class="img-fluid border rounded my-2" style="max-height:280px" src="{% url 'questions:classroom_extracted_image' question.pk %}" alt="Extracted question image">{% endif %}
+    {% for figure in question.figures.all %}{% if not figure.option_key and figure.private_image and figure.source != 'question_crop' or not question.primary_crops and not figure.option_key and figure.private_image %}<figure class="mt-2 mb-1"><figcaption class="small text-muted">{% if figure.source == 'parallel-source' %}Other language / source region{% else %}Source or diagram{% endif %} · page {{ figure.page_number }}</figcaption><a href="{% url 'questions:classroom_figure_file' figure.pk %}" target="_blank" rel="noopener"><img loading="lazy" class="img-fluid border rounded" style="max-height:360px" src="{% url 'questions:classroom_figure_file' figure.pk %}" alt="Original question image, page {{ figure.page_number }}"></a></figure>{% endif %}{% endfor %}
+    <ul class="mt-2 mb-1 small">{% for option in question.options %}<li><strong>{{ option.key }}.</strong> {{ option.text }}{% if option.visible_in_crop and not option.text %}<span class="text-muted">Choice shown in original image</span>{% endif %}{% for figure in question.figures.all %}{% if figure.option_key == option.key and figure.private_image %}<br><img loading="lazy" class="img-fluid border my-1" style="max-height:140px" src="{% url 'questions:classroom_figure_file' figure.pk %}" alt="Option {{ option.key }} image">{% endif %}{% endfor %}</li>{% endfor %}</ul>
+  {% if question.primary_crops %}</details>{% endif %}
+  {% if question.image_notice %}<div class="small text-danger mt-2" role="note">{{ question.image_notice }}</div>{% endif %}
   <div class="small text-muted">+{{ question.positive_marks }} / −{{ question.negative_marks }} marks{% if question.is_flagged and question.flag_reason %} · {{ question.flag_reason }}{% endif %}</div>
   {% if question.extraction_issues %}<details class="small mt-2"><summary class="text-warning-emphasis">Extraction notes ({{ question.extraction_issues|length }})</summary><ul class="mt-1 mb-0">{% for issue in question.extraction_issues %}<li>{{ issue }}</li>{% endfor %}</ul></details>{% endif %}
   {% if question.practice_error %}<div class="small text-danger mt-1">{{ question.practice_error }}</div>{% endif %}
@@ -66,3 +77,4 @@
 {% empty %}<div class="text-muted">No questions yet. Add one manually above.</div>{% endfor %}
 {% endif %}
 {% endblock %}
+{% block extra_js %}<script src="{% static 'js/answer-key-image.js' %}"></script><script src="{% static 'js/manual-key-preview.js' %}"></script><script src="{% static 'js/question-review.js' %}"></script><script src="{% static 'js/question-image-fallback.js' %}"></script>{% endblock %}

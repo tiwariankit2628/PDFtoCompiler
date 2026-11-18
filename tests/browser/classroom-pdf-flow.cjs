@@ -46,7 +46,8 @@ const {chromium} = require('playwright-core');
     await teacher.locator('#id_subject').fill('Science');
     await teacher.locator('#id_pdf_file').setInputFiles(data.pdf);
     await teacher.locator('#id_image_first').check();
-    assert.strictEqual(await teacher.locator('#id_extraction_mode').inputValue(), 'local');
+    assert.strictEqual(await teacher.locator('#id_extraction_mode').count(), 0);
+    assert(await teacher.getByText('Your PDF is processed on the server and is not sent to an external provider.', {exact:true}).isVisible());
     await Promise.all([teacher.waitForURL('**/classroom/papers/**/review/', {timeout: 45000}),
       teacher.getByRole('button', {name:/Upload & start extraction/i}).click()]);
     assert(await teacher.getByText('Test preview').isVisible());
@@ -54,6 +55,7 @@ const {chromium} = require('playwright-core');
     const firstQ = teacher.locator('[id^="q-"]').first();
     await firstQ.getByRole('link', {name:'Edit & key'}).click();
     await teacher.locator('#id_correct_option').selectOption('A');
+    await teacher.locator('#id_confirm_answer_key').check();
     await teacher.locator('#id_reviewed').check();
     await Promise.all([teacher.waitForURL('**/classroom/papers/**/review/**'),
       teacher.getByRole('button', {name:'Save question'}).click()]);

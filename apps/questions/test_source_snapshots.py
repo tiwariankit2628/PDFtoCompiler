@@ -377,7 +377,11 @@ class SnapshotPrivateWorkflowTests(TestCase):
         review = self.client.get(reverse("questions:practice_settings", args=[paper.pk]))
         self.assertContains(review, "manually repair")
         self.assertContains(review, "At least two non-empty options are required")
+        # The primary image is shown first; supporting material remains in a
+        # collapsed, accessible fallback and the private repair workspace.
+        self.assertContains(review, '<details data-image-fallback class="small mt-2" >')
         self.assertContains(review, url)
+        self.assertContains(self.client.get(reverse("questions:practice_figures", args=[item.pk])), url)
         blocked = self.client.post(reverse("questions:practice_settings", args=[paper.pk]), {
             "duration_minutes": 20, "acknowledge_review": "on", "acknowledge_unassigned": "on",
         })
@@ -427,7 +431,7 @@ class SnapshotPrivateWorkflowTests(TestCase):
         review = self.client.get(reverse("questions:practice_settings", args=[paper.pk]))
         self.assertContains(review, "Other original-language region")
         response = self.client.post(reverse("questions:practice_settings", args=[paper.pk]), {
-            "duration_minutes": 20, "acknowledge_review": "on", "answer_key_text": "1: 2",
+            "duration_minutes": 20, "acknowledge_review": "on", "answer_key_text": "1: 2", "confirm_answer_key": "on",
         })
         self.assertEqual(response.status_code, 302, getattr(response, "context", None))
         paper.refresh_from_db(); first.refresh_from_db()
@@ -478,7 +482,12 @@ class SnapshotPrivateWorkflowTests(TestCase):
         self.assertIn(self.client.get(reverse("questions:practice_figure_file", args=[source.pk])).status_code, (403, 404))
         self.client.force_login(self.owner)
         response = self.client.get(reverse("questions:practice_settings", args=[paper.pk]))
-        self.assertContains(response, "Original choices in printed order")
+        self.assertContains(response, '<details data-image-fallback class="small mt-2" >')
+        self.assertContains(response, "Original choices in printed order")  # optional fallback
+        primary = item.figures.get(source="question_crop")
+        self.assertContains(response, reverse("questions:practice_figure_file", args=[primary.pk]))
+        self.assertContains(self.client.get(reverse("questions:practice_figures", args=[item.pk])),
+                            reverse("questions:practice_figure_file", args=[source.pk]))
         self.assertEqual(self.client.post(reverse("questions:practice_settings", args=[paper.pk]),
                          {"duration_minutes": 20, "acknowledge_review": "on"}).status_code, 302)
         paper.refresh_from_db(); item.refresh_from_db()

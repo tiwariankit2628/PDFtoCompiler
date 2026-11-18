@@ -6,6 +6,7 @@ from django.core.exceptions import ValidationError
 from apps.exams.models import Category
 from .structured_forms import add_tables_editor, clean_tables_editor
 from .models import ExtractedQuestion, QuestionPaperUpload
+from .answer_key_validation import parse_checked_answer_key, staged_question_signature
 
 
 class BootstrapFormMixin:
@@ -26,10 +27,9 @@ class BootstrapFormMixin:
 
 
 # --- Local-only extraction selector -----------------------------------------
-# The upload screens expose only local PyMuPDF/Tesseract extraction plus a
-# disabled "coming later" placeholder. Provider code, configuration, migrations
-# and historical records for cloud/MinerU modes are intentionally preserved for
-# future use; they are simply not offered or accepted here.
+# The selector is not shown on upload screens. This server-side field still
+# rejects a forged non-local choice. Provider code, configuration, migrations
+# and historical records are intentionally preserved without enabling them.
 EXTRACTION_PLACEHOLDER = "__more__"
 LOCAL_EXTRACTION_CHOICES = [
     (QuestionPaperUpload.ExtractionMode.LOCAL, "Local PyMuPDF / Tesseract"),
@@ -67,10 +67,7 @@ def clean_local_extraction_mode(value):
     value = (value or "").strip()
     if value in ("", QuestionPaperUpload.ExtractionMode.LOCAL):
         return QuestionPaperUpload.ExtractionMode.LOCAL
-    raise ValidationError(
-        "Only local PyMuPDF / Tesseract extraction is available right now. "
-        "More methods are coming later."
-    )
+    raise ValidationError("This upload option is not available. Refresh the page and try again.")
 
 
 class QuestionPaperUploadForm(BootstrapFormMixin, forms.ModelForm):
@@ -152,6 +149,14 @@ class ExtractedQuestionEditForm(BootstrapFormMixin, forms.ModelForm):
     """
     Form for manual verification and editing of an extracted question in the review workspace.
     """
+    confirm_answer_key = forms.BooleanField(required=False,
+        label="I checked this answer against the correct paper, set and printed choice order.",
+        help_text="New answers or changes to the question, type, number or choices require confirmation. Unchanged verified answers stay verified.")
+    visible_crop_choices = forms.MultipleChoiceField(
+        required=False, choices=[(key, key) for key in "ABCDE"], widget=forms.CheckboxSelectMultiple,
+        label="Choice labels visible in the original question image",
+        help_text="For image-only choices, check only labels you can see in the crop. No text or answer will be guessed.",
+    )
 
     class Meta:
         model = ExtractedQuestion
@@ -175,6 +180,19 @@ class ExtractedQuestionEditForm(BootstrapFormMixin, forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # ModelForm validation mutates instance fields, so capture the original
+        # key and status before binding in order to preserve confirmation safely.
+        self.previous_key = self.instance.correct_option
+        self.previous_answer_status = self.instance.answer_status
+        self.previous_content = staged_question_signature(self.instance)
+        self.has_original_crop = bool(self.instance.pk and self.instance.paper.image_first
+            and self.instance.is_image_first and self.instance.figures.filter(
+                source="question_crop", option_key="").exclude(image="").exists())
+        self.fields["question_text"].required = not self.has_original_crop
+        self.fields["visible_crop_choices"].widget.attrs.pop("class", None)
+        if not self.is_bound:
+            self.initial["visible_crop_choices"] = [option.get("key") for option in self.instance.options
+                if isinstance(option, dict) and option.get("visible_in_crop") is True]
         # Advisory field: keep the detected value when the reviewer does not
         # change it, so editing other fields never clears the type.
         self.fields["detected_type"].required = False
@@ -185,7 +203,13 @@ class ExtractedQuestionEditForm(BootstrapFormMixin, forms.ModelForm):
         return value or getattr(self.instance, "detected_type", None) or ExtractedQuestion.DetectedType.SINGLE
 
     def clean(self):
-        return clean_tables_editor(self, super().clean())
+        cleaned = clean_tables_editor(self, super().clean())
+        if cleaned.get("visible_crop_choices") and not self.has_original_crop:
+            self.add_error("visible_crop_choices", "Add an original question crop in image-first mode before checking labels.")
+        if (cleaned.get("confirm_answer_key") and cleaned.get("correct_option")
+                and cleaned.get("detected_type") != ExtractedQuestion.DetectedType.SINGLE):
+            self.add_error("correct_option", "Only single-correct MCQs can use this answer key. Review the type first.")
+        return cleaned
 
     def save(self, commit=True):
         instance = super().save(commit=False)
@@ -197,6 +221,9 @@ class ExtractedQuestionEditForm(BootstrapFormMixin, forms.ModelForm):
 
     def clean_correct_option(self):
         opt = self.cleaned_data.get("correct_option", "").strip().upper()
+        kind = self.cleaned_data.get("detected_type") or self.instance.detected_type
+        if kind == ExtractedQuestion.DetectedType.SINGLE and opt and (len(opt) != 1 or opt not in "ABCDE"):
+            raise ValidationError("Enter one existing choice from A to E, or leave the key blank.")
         return opt
 
 
@@ -208,15 +235,42 @@ class AnswerKeyImportForm(BootstrapFormMixin, forms.Form):
     """
 
     answer_key_text = forms.CharField(
-        label="Paste Answer Key",
+        label="Type or paste checked answer key",
+        max_length=30000,
         widget=forms.Textarea(
             attrs={
                 "rows": 4,
-                "placeholder": "Paste keys e.g.:\n1: A, 2: B, 3: C, 4: D\nor\n1-A\n2-B\n3-C\n4-D",
+                "placeholder": "Paste checked keys e.g.:\n1: A, 2: B, 3: C, 4: D\nor\n1-A\n2-B\n3-C\n4-D",
             }
         ),
-        help_text="Automatically maps answers to extracted questions by question number.",
+        help_text="Only single-correct answers for unapproved questions are accepted; blank questions remain ungraded.",
     )
+    confirm_checked = forms.BooleanField(
+        required=True,
+        label="I checked these answers against the correct paper, set and printed choice order.",
+    )
+    overwrite_existing = forms.BooleanField(
+        required=False, label="Allow replacing a different answer already saved on a question.",
+    )
+
+    def __init__(self, *args, questions=(), **kwargs):
+        self.questions = list(questions)
+        super().__init__(*args, **kwargs)
+
+    def clean_answer_key_text(self):
+        text = self.cleaned_data["answer_key_text"]
+        self.answer_keys = parse_checked_answer_key(text, self.questions, exclude_approved=True)
+        return text
+
+    def clean(self):
+        cleaned = super().clean()
+        keys = getattr(self, "answer_keys", {})
+        conflicts = [q.question_number for q in self.questions
+                     if q.question_number in keys and q.correct_option
+                     and q.correct_option.strip().upper() != keys[q.question_number]]
+        if conflicts and not cleaned.get("overwrite_existing"):
+            self.add_error("overwrite_existing", "Confirm replacement of saved answers for: " + ", ".join(map(str, conflicts[:20])))
+        return cleaned
 
 
 class QuestionBankForm(BootstrapFormMixin, forms.ModelForm):
@@ -295,6 +349,27 @@ class QuestionBankForm(BootstrapFormMixin, forms.ModelForm):
         super().__init__(*args, **kwargs)
 
         add_tables_editor(self, self.instance)
+        if self.instance.pk and self.instance.is_pdf_derived:
+            original_options = list(self.instance.options.all())
+            original_correct = [opt.option_key for opt in original_options if opt.is_correct]
+            self.previous_key = original_correct[0] if len(original_correct) == 1 else ""
+            self.previous_answer_status = self.instance.answer_status
+            self.has_original_crop = bool(self.instance.is_image_first and self.instance.figures.filter(
+                source="question_crop", option__isnull=True).exclude(image="").exists())
+            self.crop_only_keys = {opt.option_key for opt in original_options
+                                   if self.has_original_crop and not (opt.option_text or "").strip()}
+            if self.has_original_crop:
+                self.fields["question_text"].required = False
+            self.previous_question_content = (
+                self.instance.question_type, (self.instance.question_text or "").strip(),
+                self.instance.tables or [],
+                tuple((opt.option_key, (opt.option_text or "").strip()) for opt in original_options),
+            )
+            self.fields["confirm_answer_key"] = forms.BooleanField(
+                required=False, label="I checked this answer against the correct paper, set and printed choice order.",
+                help_text="Confirm new answers and changes to the question or choices. Unchanged verified answers stay verified.",
+                widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+            )
 
         # Scoping categories by user permissions
         if user and user.is_teacher and not user.is_admin_role:
@@ -337,7 +412,8 @@ class QuestionBankForm(BootstrapFormMixin, forms.ModelForm):
         image_keys = set()
         if self.instance and self.instance.pk:
             image_keys = {opt.option_key for opt in self.instance.options.all() if opt.image or opt.figures.exists()}
-        valid_opts = [k for k, v in options_map.items() if v or k in image_keys]
+        crop_keys = getattr(self, "crop_only_keys", set())
+        valid_opts = [k for k, v in options_map.items() if v or k in image_keys or k in crop_keys]
 
         if len(valid_opts) < 2:
             raise ValidationError("An MCQ question must provide at least 2 non-empty options.")
@@ -346,6 +422,9 @@ class QuestionBankForm(BootstrapFormMixin, forms.ModelForm):
             raise ValidationError(
                 f"Selected correct answer ({correct}) cannot be empty. Please provide text for Option {correct}."
             )
+        if (self.instance.pk and self.instance.is_pdf_derived and cleaned_data.get("confirm_answer_key")
+                and correct and cleaned_data.get("question_type") != "mcq_single"):
+            self.add_error("correct_option", "Only single-correct MCQs can use a confirmed key.")
 
         return cleaned_data
 

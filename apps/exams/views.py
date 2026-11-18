@@ -12,6 +12,7 @@ from django.views.generic import CreateView, DetailView, ListView, UpdateView, V
 from apps.core.permissions import AdminRequiredMixin, TeacherRequiredMixin
 from apps.core.utils import log_audit
 from apps.questions.models import Question
+from apps.questions.presentation import decorate_staged_question, use_original_image
 from .forms import CategoryForm, ExamForm, ExamRandomQuestionForm
 from .models import Category, Exam, ExamQuestion
 
@@ -393,6 +394,7 @@ class ExamDuplicateView(TeacherRequiredMixin, View):
                 default_negative_marks=source_exam.default_negative_marks,
                 shuffle_questions=source_exam.shuffle_questions,
                 shuffle_options=source_exam.shuffle_options,
+                image_first_mode=source_exam.image_first_mode,
                 max_attempts=source_exam.max_attempts,
                 show_result_immediately=source_exam.show_result_immediately,
                 allow_review_answers=source_exam.allow_review_answers,
@@ -489,6 +491,24 @@ class ExamTogglePublishView(TeacherRequiredMixin, View):
         return redirect("exams:exam_list")
 
 
+def _review_questions(exam):
+    """Owner-facing image, key and repair diagnostics for the exam builder."""
+    items = list(exam.exam_questions.select_related("question__source_paper")
+        .prefetch_related("question__options__figures", "question__figures", "question__source_extracted_item")
+        .order_by("order", "id"))
+    for item in items:
+        question = item.question
+        wants_crop = use_original_image(question, image_first=exam.image_first_mode, private=False)
+        decorate_staged_question(question, image_first=wants_crop, private=False)
+        correct = [option for option in question.options.all() if option.is_correct]
+        question.display_gradeable_key = (question.question_type == Question.QuestionType.MCQ_SINGLE
+            and len(correct) == 1 and (not question.is_pdf_derived or question.answer_status == "manually_verified"))
+        staged = next((source for source in question.source_extracted_item.all()
+                       if source.paper_id == question.source_paper_id), None)
+        question.source_crop_warning = staged.crop_warning if staged else ""
+    return items
+
+
 class ExamQuestionManageView(TeacherRequiredMixin, DetailView):
     """
     Interactive Question Builder for an examination.
@@ -516,11 +536,7 @@ class ExamQuestionManageView(TeacherRequiredMixin, DetailView):
         exam = self.get_object()
         user = self.request.user
 
-        context["exam_questions"] = (
-            exam.exam_questions.select_related("question")
-            .prefetch_related("question__options__figures", "question__figures")
-            .order_by("order", "id")
-        )
+        context["exam_questions"] = _review_questions(exam)
 
         assigned_q_ids = exam.exam_questions.values_list("question_id", flat=True)
         available_qs = Question.objects.filter(category=exam.category, is_private_practice=False, is_classroom_snapshot=False).exclude(id__in=assigned_q_ids)
@@ -756,11 +772,7 @@ class ExamPreviewView(TeacherRequiredMixin, DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         exam = self.get_object()
-        context["exam_questions"] = (
-            exam.exam_questions.select_related("question")
-            .prefetch_related("question__options__figures", "question__figures")
-            .order_by("order", "id")
-        )
+        context["exam_questions"] = _review_questions(exam)
         context["total_questions"] = exam.total_questions_count
         context["calculated_marks"] = exam.calculated_total_marks
         return context

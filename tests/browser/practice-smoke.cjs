@@ -40,6 +40,7 @@ const assert = require('assert');
     await page.getByRole('link',{name:'Edit',exact:true}).first().click();
     await page.locator('#id_question_text').fill('भारत में गति का प्रश्न १२३ / Browser motion question');
     await page.locator('#id_correct_option').selectOption('A');
+    await page.locator('#id_confirm_answer_key').check();
     await page.locator('#id_explanation').fill('Confirmed explanation for the practice answer.');
     if(await page.locator('#id_reviewed').count()) await page.locator('#id_reviewed').check();
     await Promise.all([page.waitForURL('**/settings/'),page.getByRole('button',{name:'Save question'}).click()]);
@@ -68,7 +69,9 @@ const assert = require('assert');
     assert((await page.locator('body').innerText()).includes('Question-wise review'));
     assert((await page.locator('body').innerText()).includes('Confirmed key'));
     assert((await page.locator('body').innerText()).includes('Answered, ungraded'));
-    assert((await page.locator('body').innerText()).includes('भारत में गति का प्रश्न'));
+    // Image-first results keep the editable text in an accessible details
+    // fallback rather than duplicating it visibly under the original crop.
+    assert((await page.locator('body').textContent()).includes('भारत में गति का प्रश्न'));
     step('CBT save, atomic submit, keyed and ungraded result dashboard');
 
     const dlPromise=page.waitForEvent('download');
@@ -100,8 +103,18 @@ const assert = require('assert');
     assert((await page.locator('table tbody tr').count())>=2); step('history and attempt comparison');
 
     await page.goto(base+'/questions/practice/bank/');
-    assert((await page.locator('body').innerText()).includes('Browser motion question'));
-    await page.getByRole('link',{name:'Edit',exact:true}).filter({visible:true}).first().click();
+    assert((await page.locator('body').textContent()).includes('Browser motion question'));
+    assert(await page.locator('img[alt^="Original question image"]').first().isVisible());
+    const keyedBankCard = page.locator('.card').filter({hasText:'Confirmed key A'}).first();
+    await keyedBankCard.getByRole('link',{name:'Images / recrop'}).click();
+    const oldImagesUrl = page.url();
+    await page.locator('#crop-replace').selectOption({index:1});
+    for (const [id, value] of Object.entries({x0:'0.05',y0:'0.05',x1:'0.9',y1:'0.5'})) await page.locator('#'+id).fill(value);
+    await Promise.all([page.waitForURL(url => url.toString() !== oldImagesUrl), page.getByRole('button',{name:'Save original crop'}).click()]);
+    assert((await page.locator('body').innerText()).includes('Check the answer again'));
+    await page.getByRole('link',{name:'Edit question and key'}).click();
+    assert((await page.locator('body').innerText()).includes('unconfirmed suggestion'));
+    await page.locator('#id_confirm_answer_key').check();
     await page.locator('#id_topic').fill('Mechanics'); await page.locator('#id_chapter').fill('Motion');
     await page.locator('#id_difficulty').selectOption('hard');
     await page.getByRole('button',{name:'Save changes'}).click();

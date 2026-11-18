@@ -57,8 +57,17 @@
             </a>
         </div>
     </div>
+    {% elif attempt.has_ungraded_keys %}
+    <div class="card border shadow-sm rounded-4 p-4 mb-4">
+        <h3 class="fw-bold">Partial result — not ranked</h3>
+        <p>Some questions lacked a confirmed, supported single-correct key when this attempt was graded. Their answers are ungraded, not wrong. The recorded result is not a final pass or fail.</p>
+        {% if partial_summary.score_available %}<p>{% if partial_summary.unknown_keys %}Recorded score{% else %}Score on graded questions{% endif %}: <strong>{{ attempt.score_obtained }}{% if partial_summary.possible_marks != None %} / {{ partial_summary.possible_marks }}{% endif %}</strong>{% if partial_summary.percentage != None %} ({{ partial_summary.percentage }}% of graded marks){% elif partial_summary.unknown_keys %} (original graded maximum unavailable){% endif %}.</p>{% else %}<p>No score is available because no question had a gradeable key.</p>{% endif %}
+        <p>Correct: {{ partial_summary.counts.correct }} · Incorrect: {{ partial_summary.counts.incorrect }} · Answered, ungraded: {{ partial_summary.counts.ungraded }} · Unattempted: {{ partial_summary.counts.unattempted }}</p>
+        <p class="small text-muted mb-0">{{ partial_summary.pending_keys }} question{{ partial_summary.pending_keys|pluralize }} had no confirmed key at grading.{% if partial_summary.unknown_keys %} The key status was not recorded for {{ partial_summary.unknown_keys }} older question{{ partial_summary.unknown_keys|pluralize }}; those saved results have not been regraded.{% endif %} Later key edits do not automatically regrade this attempt.</p>
+    </div>
     {% else %}
 
+    {% if attempt.has_legacy_pdf_key_snapshots %}<div class="alert alert-light border small">This result was recorded before grading-time PDF key details were saved. The recorded score and outcome have not been recalculated; the original key status and labels may be unavailable in review.</div>{% endif %}
     <!-- Top Score Banner Card -->
     <div class="card border-0 shadow-sm rounded-4 mb-4 overflow-hidden">
         <div class="p-4 p-md-5 text-white {% if attempt.is_passed %}bg-primary{% else %}bg-secondary{% endif %}">
@@ -362,10 +371,12 @@
                     {% for o_att in other_attempts %}
                     <tr>
                         <td class="text-muted">{{ o_att.started_at|date:"M d, Y H:i" }}</td>
-                        <td class="fw-bold">{{ o_att.score_obtained }} / {{ o_att.total_marks }}</td>
-                        <td>{{ o_att.percentage }}%</td>
+                        <td class="fw-bold">{% if o_att.has_ungraded_keys %}Partial{% else %}{{ o_att.score_obtained }} / {{ o_att.total_marks }}{% endif %}</td>
+                        <td>{% if o_att.has_ungraded_keys %}—{% else %}{{ o_att.percentage }}%{% endif %}</td>
                         <td>
-                            {% if o_att.is_passed %}
+                            {% if o_att.has_ungraded_keys %}
+                                <span class="badge text-bg-light border">Partial · unranked</span>
+                            {% elif o_att.is_passed %}
                                 <span class="badge bg-success">Passed</span>
                             {% else %}
                                 <span class="badge bg-danger">Not Qualified</span>

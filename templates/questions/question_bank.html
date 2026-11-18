@@ -123,12 +123,12 @@
                 <div class="row g-2 mb-2">
                     {% for opt in q.options.all %}
                     <div class="col-md-6">
-                        <div class="p-2 border rounded d-flex align-items-center gap-2 small {% if opt.is_correct %}border-success bg-success bg-opacity-10{% else %}bg-light{% endif %}">
-                            <span class="badge {% if opt.is_correct %}bg-success{% else %}bg-secondary{% endif %}">{{ opt.option_key }}</span>
+                        <div class="p-2 border rounded d-flex align-items-center gap-2 small {% if opt.is_correct and q.display_gradeable_key %}border-success bg-success bg-opacity-10{% else %}bg-light{% endif %}">
+                            <span class="badge {% if opt.is_correct and q.display_gradeable_key %}bg-success{% else %}bg-secondary{% endif %}">{{ opt.option_key }}</span>
                             <span class="flex-grow-1">{{ opt.option_text }}</span>
-                            {% if opt.is_correct %}
+                            {% if opt.is_correct and q.display_gradeable_key %}
                                 <i class="bi bi-check-circle-fill text-success" title="Correct Answer"></i>
-                            {% endif %}
+                            {% elif opt.is_correct %}<span class="badge text-bg-warning">{% if q.question_type != 'mcq_single' %}Unsupported · ungraded{% else %}Unconfirmed{% endif %}</span>{% endif %}
                         </div>
                     </div>
                     {% endfor %}

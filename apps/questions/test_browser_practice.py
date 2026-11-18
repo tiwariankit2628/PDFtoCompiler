@@ -196,7 +196,8 @@ class BrowserLocalImprovementsTests(StaticLiveServerTestCase):
         selected = QuestionOption.objects.create(question=question, option_key="B", option_text="Four", order=1)
         exam_question = ExamQuestion.objects.create(exam=exam, question=question, order=1)
         attempt = ExamAttempt.objects.create(exam=exam, student=student, status=ExamAttempt.AttemptStatus.SUBMITTED)
-        response = ExamResponse.objects.create(attempt=attempt, exam_question=exam_question, selected_option=selected, order=1)
+        response = ExamResponse.objects.create(attempt=attempt, exam_question=exam_question, selected_option=selected, order=1,
+                                               key_confirmed_at_grading=False, selected_option_key_at_grading="B")
         source = Path(self.workspace.name) / "synthetic.pdf"; source.write_bytes(make_two_column_pdf())
         env = os.environ.copy()
         env.update(LOCAL_IMPROVE_URL=self.live_server_url, LOCAL_IMPROVE_PDF=str(source),
@@ -425,7 +426,7 @@ class BrowserSourceSnapshotTests(StaticLiveServerTestCase):
         self.assertTrue(paper.extracted_questions.get(question_number=1).figures.filter(source="parallel-source").exists())
         self.client.force_login(student)
         self.assertEqual(self.client.post(reverse("questions:practice_settings", args=[paper.pk]),
-                         {"duration_minutes": 20, "acknowledge_review": "on", "answer_key_text": "1: 2"}).status_code, 302)
+                         {"duration_minutes": 20, "acknowledge_review": "on", "answer_key_text": "1: 2", "confirm_answer_key": "on"}).status_code, 302)
         paper.refresh_from_db()
         paper.practice_exam.shuffle_options = True
         paper.practice_exam.save(update_fields=["shuffle_options"])
@@ -472,7 +473,7 @@ class BrowserSourceSnapshotTests(StaticLiveServerTestCase):
         self.assertTrue(paper.extracted_questions.get(question_number=1).figures.filter(source="parallel-source").exists())
         self.client.force_login(student)
         self.assertEqual(self.client.post(reverse("questions:practice_settings", args=[paper.pk]),
-                         {"duration_minutes": 20, "acknowledge_review": "on", "answer_key_text": "1: 2"}).status_code, 302)
+                         {"duration_minutes": 20, "acknowledge_review": "on", "answer_key_text": "1: 2", "confirm_answer_key": "on"}).status_code, 302)
         paper.refresh_from_db()
         self.assertEqual(self.client.post(reverse("exams:exam_start", args=[paper.practice_exam.slug])).status_code, 302)
         attempt = ExamAttempt.objects.get(exam=paper.practice_exam)
@@ -489,3 +490,80 @@ class BrowserSourceSnapshotTests(StaticLiveServerTestCase):
         response = attempt.responses.order_by("order").first()
         self.assertEqual(response.selected_option.option_key, "B")
         self.assertTrue(response.exam_question.question.key_verified)
+
+
+@skipUnless(os.environ.get("RUN_BROWSER_E2E") == "1", "Optional Chromium answer-key workflow")
+@skipUnless(os.path.isfile(os.path.join(os.environ.get("TESSDATA_PREFIX", ""), "eng.traineddata")),
+            "Local English OCR language data required for real image reading")
+class BrowserAnswerKeyImageTests(StaticLiveServerTestCase):
+    """Real local OCR plus browser confirmation for each owner workflow."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.workspace = tempfile.TemporaryDirectory(prefix="answer-key-browser-")
+        cls.addClassCleanup(cls.workspace.cleanup)
+        root = Path(cls.workspace.name)
+        cls.enterClassContext(override_settings(
+            PRIVATE_PRACTICE_ROOT=str(root / "private"), MEDIA_ROOT=str(root / "media"),
+            CELERY_TASK_ALWAYS_EAGER=True, PDF_CLOUD_ENABLED=False,
+            PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"],
+        ))
+        super().setUpClass()
+
+    def exercise_workflow(self, mode):
+        from unittest.mock import patch
+        from django.urls import reverse
+        from apps.accounts.models import User
+        from apps.exams.models import Category, ClassroomSession
+        from .models import AnswerStatus, ExtractedQuestion, QuestionPaperUpload
+        from .test_answer_key_image import OPTIONS, synthetic_key_png
+
+        if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):
+            self.fail("Set CHROMIUM_PATH and install Node and browser dependencies first.")
+        user = User.objects.create_user(username="key_browser_user", email="key-browser@example.test",
+            password="KeyBrowserPass987!", role="STUDENT" if mode == "student" else "TEACHER")
+        category = Category.objects.create(name="Browser key", slug="browser-key")
+        flags = {"is_student_private": mode == "student", "is_classroom_private": mode == "classroom"}
+        paper = QuestionPaperUpload.objects.create(title="Browser key paper", category=category, uploaded_by=user,
+            status=QuestionPaperUpload.ProcessingStatus.EXTRACTED, image_first=False, **flags)
+        for number in (1, 2, 7):
+            ExtractedQuestion.objects.create(paper=paper, question_number=number, question_text=f"Question {number}?",
+                                             options=list(OPTIONS), detected_type="mcq_single", is_flagged=False)
+        path_name = {"student": "practice_settings", "classroom": "classroom_paper_review", "teacher": "paper_review"}[mode]
+        root = Path(self.workspace.name)
+        image, second_image = root / "key-original.png", root / "key-reselected.png"
+        image.write_bytes(synthetic_key_png()); second_image.write_bytes(image.read_bytes())
+        env = os.environ.copy()
+        env.update(KEY_TEST_URL=self.live_server_url, KEY_TEST_MODE=mode, KEY_TEST_IMAGE=str(image),
+                   KEY_TEST_SECOND_IMAGE=str(second_image), KEY_TEST_PATH=reverse("questions:" + path_name, args=[paper.pk]))
+        script = Path(settings.BASE_DIR) / "tests" / "browser" / "answer-key-image-smoke.cjs"
+        # The browser's stale-response simulation is mocked, but the successful
+        # preview uses PyMuPDF's real native local OCR. No provider may be called.
+        with patch("requests.sessions.Session.request", side_effect=AssertionError("External requests are forbidden")):
+            result = subprocess.run(["node", str(script)], env=env, text=True, capture_output=True, timeout=120)
+        self.assertEqual(result.returncode, 0, f"Answer-key browser ({mode}) failed:\n{result.stdout}\n{result.stderr}")
+        self.assertIn("ANSWER_KEY_BROWSER_OK", result.stdout)
+        if mode == "teacher":
+            rows = list(paper.extracted_questions.order_by("question_number"))
+            self.assertEqual([q.correct_option for q in rows], ["D", "", "C"])
+            self.assertEqual(rows[0].answer_status, AnswerStatus.MANUALLY_VERIFIED)
+            self.assertEqual(rows[1].answer_status, AnswerStatus.NEEDS_REVIEW)
+        else:
+            if mode == "student":
+                paper.refresh_from_db(); exam = paper.practice_exam
+            else:
+                exam = ClassroomSession.objects.get(teacher=user).exam
+            items = list(exam.exam_questions.select_related("question").order_by("order"))
+            self.assertEqual([item.question.options.filter(is_correct=True).first().option_key
+                              if item.question.options.filter(is_correct=True).exists() else "" for item in items],
+                             ["D", "", "C"])
+            self.assertEqual(items[1].question.answer_status, AnswerStatus.NEEDS_REVIEW)
+
+    def test_student_practice_photo_review(self):
+        self.exercise_workflow("student")
+
+    def test_teacher_classroom_photo_review(self):
+        self.exercise_workflow("classroom")
+
+    def test_teacher_paper_photo_review(self):
+        self.exercise_workflow("teacher")

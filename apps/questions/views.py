@@ -7,6 +7,7 @@ from django.db import transaction
 from django.db.models import Count, Q
 from django.http import FileResponse, Http404
 from django.utils import timezone
+from django.utils.cache import patch_cache_control
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
 from django.views.generic import CreateView, DetailView, ListView, UpdateView, View
@@ -14,20 +15,26 @@ from django.views.generic import CreateView, DetailView, ListView, UpdateView, V
 from apps.core.permissions import TeacherRequiredMixin
 from apps.core.utils import log_audit
 from .extractor import PDFQuestionExtractor
+from .answer_key_validation import edited_answer_status, staged_question_signature
 from .forms import (
     AnswerKeyImportForm,
     ExtractedQuestionEditForm,
     QuestionPaperUploadForm,
 )
 from .models import (AnswerStatus, ExtractedFigure, ExtractedQuestion, Question, QuestionFigure, QuestionOption, QuestionPaperUpload)
+from .presentation import (answer_key_preview_questions, decorate_staged_question, missing_crop_pages,
+                           primary_question_crops, unavailable_crop_pages, user_diagnostic)
 
 
 def _approval_error(question):
     """Keep known-bad extraction results out of the question bank."""
     if question.is_flagged:
         return "Review this flagged question and clear the flag before approval."
-    if not question.question_text.strip():
-        return "A question statement is required."
+    crops = primary_question_crops(question, image_first=question.paper.image_first, private=False)
+    usable_crop = bool(crops and not unavailable_crop_pages(crops, private=False)
+                       and not missing_crop_pages(question, crops))
+    if not question.question_text.strip() and not usable_crop:
+        return "Add a question statement or a complete original question image."
     options = question.options if isinstance(question.options, list) else []
     if any(not isinstance(option, dict) for option in options):
         return "The options are invalid. Edit them before approval."
@@ -38,10 +45,11 @@ def _approval_error(question):
     if image_keys - set(keys):
         return "An image is assigned to an option that no longer exists."
     if len(options) < 2 or any(
-        not isinstance(option.get("text"), str) or (not option["text"].strip() and key not in image_keys)
+        not isinstance(option.get("text"), str) or (not option["text"].strip() and key not in image_keys
+            and not (usable_crop and option.get("visible_in_crop") is True))
         for option, key in zip(options, keys)
     ):
-        return "At least two options with text or an image are required."
+        return "At least two options need text, an image, or checked labels in a complete original crop."
     if question.correct_option and question.correct_option.strip().upper() not in keys:
         return "The answer key does not match an option."
     return ""
@@ -70,15 +78,34 @@ def _infer_language(staged):
     return Question.Language.BILINGUAL if has_hindi and has_english else Question.Language.HINDI if has_hindi else Question.Language.ENGLISH
 
 
+def _confirmed_staging_key(question):
+    """Never promote a suggestion, or a non-single-correct answer, as a key."""
+    if (question.detected_type == ExtractedQuestion.DetectedType.SINGLE
+            and question.answer_status == AnswerStatus.MANUALLY_VERIFIED):
+        return (question.correct_option or "").strip().upper()
+    return ""
+
+
+def _display_gradeable_bank_key(question):
+    """PDF answer flags are only a grading key after a single-answer check."""
+    if (question.question_type != Question.QuestionType.MCQ_SINGLE
+            or sum(option.is_correct for option in question.options.all()) != 1):
+        return False
+    if not question.is_pdf_derived:
+        return True  # retain ordinary manually-authored single-choice behavior
+    return question.answer_status == AnswerStatus.MANUALLY_VERIFIED
+
+
 def _equivalent_bank_question(question):
     """Only link an existing question when doing so cannot discard content."""
-    if question.image or question.figures.exists() or question.tables:
+    if question.image or question.figures.exists() or question.tables or question.source_regions or question.is_image_first:
         return None
-    correct = question.correct_option.strip().upper()
+    correct = _confirmed_staging_key(question)
     staged = [(o["key"].strip().upper(), o.get("text", ""), o["key"].strip().upper() == correct and bool(correct))
               for o in question.options]
     for existing in Question.objects.filter(is_private_practice=False, is_classroom_snapshot=False, category=question.paper.category, question_text__iexact=question.question_text.strip()):
-        if (existing.image or existing.figures.exists()
+        if (existing.image or existing.figures.exists() or existing.is_image_first or not existing.is_pdf_derived
+                or bool(existing.answer_status == AnswerStatus.MANUALLY_VERIFIED) != bool(correct)
                 or existing.question_type != _bank_question_type(question)
                 or existing.explanation != question.explanation
                 or existing.positive_marks != question.positive_marks
@@ -96,7 +123,7 @@ def _equivalent_bank_question(question):
 
 
 def _create_bank_options_and_figures(staged, bank):
-    correct = (staged.correct_option or "").strip().upper()
+    correct = _confirmed_staging_key(staged)
     options = {}
     for index, opt in enumerate(staged.options):
         key = opt["key"].strip().upper()
@@ -216,6 +243,12 @@ class QuestionPaperReviewView(TeacherRequiredMixin, DetailView):
     template_name = "questions/paper_review.html"
     context_object_name = "paper"
 
+    def dispatch(self, request, *args, **kwargs):
+        response = super().dispatch(request, *args, **kwargs)
+        patch_cache_control(response, private=True, no_store=True)
+        response["X-Robots-Tag"] = "noindex, nofollow"
+        return response
+
     def get_object(self, queryset=None):
         paper = super().get_object(queryset)
         if paper.uses_private_storage:
@@ -242,7 +275,10 @@ class QuestionPaperReviewView(TeacherRequiredMixin, DetailView):
         elif filter_mode == "approved":
             qs = qs.filter(status=ExtractedQuestion.Status.APPROVED)
 
-        context["questions"] = qs
+        questions = list(qs)
+        for question in questions:
+            decorate_staged_question(question, image_first=paper.image_first, private=False)
+        context["questions"] = questions
         context["filter_mode"] = filter_mode
         context["total_extracted"] = paper.extracted_questions.count()
         context["flagged_count"] = paper.extracted_questions.filter(is_flagged=True).count()
@@ -250,12 +286,17 @@ class QuestionPaperReviewView(TeacherRequiredMixin, DetailView):
             status=ExtractedQuestion.Status.APPROVED
         ).count()
         context["answer_key_form"] = AnswerKeyImportForm()
+        context["can_manage_answer_keys"] = self.request.user.is_admin_role or paper.uploaded_by_id == self.request.user.pk
+        if context["can_manage_answer_keys"]:
+            eligible = paper.extracted_questions.exclude(status=ExtractedQuestion.Status.REJECTED).order_by("question_number", "id")
+            context["answer_key_preview_questions"] = answer_key_preview_questions(eligible, exclude_approved=True)
         context["unassigned_figure_count"] = paper.figures.filter(question__isnull=True).count()
         context["extraction_warnings"] = [
-            line.removeprefix("Warning: ")
+            user_diagnostic(line.removeprefix("Warning: "))
             for line in paper.extraction_log.splitlines()
             if line.startswith("Warning: ")
         ]
+        context["extraction_log_display"] = user_diagnostic(paper.extraction_log)
         return context
 
 
@@ -316,16 +357,29 @@ class ExtractedQuestionEditView(TeacherRequiredMixin, UpdateView):
         # Process dynamic option inputs from POST data
         # Reads option_key_*, option_text_*
         options = []
+        crop_keys = set(form.cleaned_data.get("visible_crop_choices") or [])
         for key in ["A", "B", "C", "D", "E"]:
             opt_text = self.request.POST.get(f"option_text_{key}", "").strip()
-            if opt_text or extracted_q.figures.filter(option_key=key).exists():
-                options.append({"key": key, "text": opt_text})
+            if opt_text or key in crop_keys or extracted_q.figures.filter(option_key=key).exists():
+                option = {"key": key, "text": opt_text}
+                if key in crop_keys:
+                    option["visible_in_crop"] = True
+                options.append(option)
+
+        if (extracted_q.detected_type == ExtractedQuestion.DetectedType.SINGLE and extracted_q.correct_option
+                and extracted_q.correct_option not in {option["key"] for option in options}):
+            form.add_error("correct_option", "Choose an existing option, or leave the key blank.")
+            return self.form_invalid(form)
 
         # Allow all options to be cleared as well as changed. The reviewer
         # controls the flag in the form; unrelated warnings must not be
         # silently cleared merely because two options were entered.
         extracted_q.options = options
-        extracted_q.answer_status = AnswerStatus.MANUALLY_VERIFIED if extracted_q.correct_option else AnswerStatus.NEEDS_REVIEW
+        extracted_q.answer_status = edited_answer_status(form.previous_key, form.previous_answer_status,
+            extracted_q.correct_option, form.cleaned_data["confirm_answer_key"], AnswerStatus.MANUALLY_VERIFIED,
+            content_changed=(form.previous_content != staged_question_signature(extracted_q) or "image" in form.changed_data))
+        if extracted_q.detected_type != ExtractedQuestion.DetectedType.SINGLE:
+            extracted_q.answer_status = AnswerStatus.NEEDS_REVIEW
         if not extracted_q.is_flagged:
             extracted_q.flag_reason = ""
 
@@ -334,9 +388,10 @@ class ExtractedQuestionEditView(TeacherRequiredMixin, UpdateView):
             extracted_q.status = ExtractedQuestion.Status.REVIEWED
 
         extracted_q.save()
-        messages.success(
-            self.request, f"Question #{extracted_q.question_number} updated successfully."
-        )
+        if extracted_q.correct_option and extracted_q.answer_status != AnswerStatus.MANUALLY_VERIFIED:
+            messages.warning(self.request, "Question saved. Its answer remains unconfirmed and will not be copied as a grading key unless checked.")
+        else:
+            messages.success(self.request, f"Question #{extracted_q.question_number} updated successfully.")
         return redirect("questions:paper_review", pk=extracted_q.paper.pk)
 
 
@@ -431,8 +486,8 @@ class ExtractedQuestionApproveView(TeacherRequiredMixin, View):
                 topic=paper.target_exam or "",
                 question_text=q.question_text, tables=q.tables, source_regions=q.source_regions, primary_image_region=q.primary_image_region,
                 language=_infer_language(q),
-                question_type=_bank_question_type(q),
-                answer_status=AnswerStatus.MANUALLY_VERIFIED if q.correct_option else AnswerStatus.NEEDS_REVIEW,
+                question_type=_bank_question_type(q), is_image_first=q.is_image_first, is_pdf_derived=True,
+                answer_status=AnswerStatus.MANUALLY_VERIFIED if _confirmed_staging_key(q) else AnswerStatus.NEEDS_REVIEW,
                 explanation=q.explanation,
                 positive_marks=q.positive_marks,
                 negative_marks=q.negative_marks,
@@ -512,8 +567,8 @@ class QuestionPaperBulkApproveView(TeacherRequiredMixin, View):
                     topic=paper.target_exam or "",
                     question_text=q.question_text, tables=q.tables, source_regions=q.source_regions, primary_image_region=q.primary_image_region,
                     language=_infer_language(q),
-                    question_type=_bank_question_type(q),
-                    answer_status=AnswerStatus.MANUALLY_VERIFIED if q.correct_option else AnswerStatus.NEEDS_REVIEW,
+                    question_type=_bank_question_type(q), is_image_first=q.is_image_first, is_pdf_derived=True,
+                    answer_status=AnswerStatus.MANUALLY_VERIFIED if _confirmed_staging_key(q) else AnswerStatus.NEEDS_REVIEW,
                     explanation=q.explanation,
                     positive_marks=q.positive_marks,
                     negative_marks=q.negative_marks,
@@ -561,53 +616,44 @@ class QuestionPaperBulkApproveView(TeacherRequiredMixin, View):
 
 
 class AnswerKeyImportView(TeacherRequiredMixin, View):
-    """
-    Parses and maps an answer key text string to questions in the paper.
-    Supports formats like:
-    1: A, 2: B, 3: C
-    or
-    1-A\n2-B\n3-C
+    """Apply only explicitly checked, fully validated keys to staging questions.
+
+    Approval copies staging into the bank; changing an already approved record
+    here would not update the bank and could mislead its owner, so it is rejected.
     """
 
     def post(self, request, pk):
-        paper = get_object_or_404(QuestionPaperUpload, pk=pk, is_student_private=False, is_classroom_private=False)
-        if not request.user.is_admin_role and paper.uploaded_by != request.user:
-            raise PermissionDenied("You cannot import answer keys for this paper.")
-
-        key_text = request.POST.get("answer_key_text", "").strip()
-        if not key_text:
-            messages.error(request, "Please enter an answer key string.")
-            return redirect("questions:paper_review", pk=paper.pk)
-
-        # Regex to find pairs of (question_number, answer_letter)
-        # e.g. "1: A" or "1. B" or "1 - C" or "1 A"
-        pairs = re.findall(r"(\d+)\s*[:.\-]?\s*([A-Da-d1-4])", key_text)
-
-        updated_count = 0
-        norm_map = {"1": "A", "2": "B", "3": "C", "4": "D"}
-
-        for q_num_str, ans_str in pairs:
-            q_num = int(q_num_str)
-            ans = norm_map.get(ans_str, ans_str.upper())
-
-            # Find matching question in paper
-            matched_qs = paper.extracted_questions.filter(question_number=q_num)
-            for q in matched_qs:
-                q.correct_option = ans
-                q.answer_status = AnswerStatus.MANUALLY_VERIFIED
-                q.save(update_fields=["correct_option", "answer_status"])
-                updated_count += 1
-
-        if updated_count > 0:
-            messages.success(
-                request, f"Successfully applied answer keys to {updated_count} question(s)!"
-            )
-        else:
-            messages.warning(
-                request, "Could not map any answer keys. Check format e.g. '1: A, 2: B, 3: C'."
-            )
-
-        return redirect("questions:paper_review", pk=paper.pk)
+        with transaction.atomic():
+            paper = get_object_or_404(QuestionPaperUpload.objects.select_for_update(), pk=pk,
+                                      is_student_private=False, is_classroom_private=False)
+            if not request.user.is_admin_role and paper.uploaded_by_id != request.user.pk:
+                raise PermissionDenied("You cannot import answer keys for this paper.")
+            if paper.status in (paper.ProcessingStatus.PENDING, paper.ProcessingStatus.PROCESSING):
+                raise Http404("Wait for extraction to finish before editing this paper.")
+            questions = list(paper.extracted_questions.select_for_update().exclude(
+                status=ExtractedQuestion.Status.REJECTED).order_by("question_number", "id"))
+            form = AnswerKeyImportForm(request.POST, questions=questions)
+            if not form.is_valid():
+                # Re-render, retaining typed values and validation messages;
+                # nothing is partially applied to the paper or bank.
+                view = QuestionPaperReviewView()
+                view.setup(request, pk=pk)
+                view.object = paper
+                context = view.get_context_data()
+                context.update(answer_key_form=form, answer_key_open=True)
+                response = render(request, view.template_name, context)
+                patch_cache_control(response, private=True, no_store=True)
+                return response
+            for question in questions:
+                if question.question_number in form.answer_keys:
+                    question.correct_option = form.answer_keys[question.question_number]
+                    question.answer_status = AnswerStatus.MANUALLY_VERIFIED
+                    question.save(update_fields=["correct_option", "answer_status"])
+        log_audit(request.user, "PAPER_ANSWER_KEYS_REVIEWED", f"Checked staging keys for paper {paper.pk}.", request=request)
+        messages.success(request, f"Applied checked keys to {len(form.answer_keys)} staging question(s). Approved bank questions were not changed.")
+        response = redirect("questions:paper_review", pk=paper.pk)
+        patch_cache_control(response, private=True, no_store=True)
+        return response
 
 
 class QuestionBankListView(TeacherRequiredMixin, ListView):
@@ -670,6 +716,8 @@ class QuestionBankListView(TeacherRequiredMixin, ListView):
         context["selected_language"] = self.request.GET.get("language", "")
         context["search_query"] = self.request.GET.get("q", "")
         context["total_bank_count"] = self.get_queryset().count()
+        for question in context["questions"]:
+            question.display_gradeable_key = _display_gradeable_bank_key(question)
         return context
 
 
@@ -769,10 +817,6 @@ class QuestionUpdateView(TeacherRequiredMixin, UpdateView):
 
         with transaction.atomic():
             question = form.save(commit=False)
-            question.answer_status = AnswerStatus.MANUALLY_VERIFIED if form.cleaned_data.get("correct_option") else AnswerStatus.NEEDS_REVIEW
-            question.save()
-            form.save_m2m()
-
             opt_map = {
                 "A": form.cleaned_data.get("option_text_A", "").strip(),
                 "B": form.cleaned_data.get("option_text_B", "").strip(),
@@ -781,19 +825,41 @@ class QuestionUpdateView(TeacherRequiredMixin, UpdateView):
                 "E": form.cleaned_data.get("option_text_E", "").strip(),
             }
             correct_key = form.cleaned_data.get("correct_option")
+            existing = {opt.option_key: opt for opt in question.options.all()}
+            if question.is_pdf_derived:
+                new_choices = tuple(
+                    (key, text) for key, text in opt_map.items()
+                    if text or key in form.crop_only_keys or (key in existing and (existing[key].image or existing[key].figures.exists()))
+                )
+                content = (question.question_type, (question.question_text or "").strip(),
+                           question.tables or [], new_choices)
+                question.answer_status = edited_answer_status(
+                    form.previous_key, form.previous_answer_status, correct_key,
+                    form.cleaned_data.get("confirm_answer_key"), AnswerStatus.MANUALLY_VERIFIED,
+                    content_changed=(content != form.previous_question_content or "image" in form.changed_data),
+                )
+                if question.question_type != Question.QuestionType.MCQ_SINGLE:
+                    question.answer_status = AnswerStatus.NEEDS_REVIEW
+                # Public PDF keys use the teacher-confirmation status, never a
+                # stale private-practice verification flag.
+                question.key_verified = False
+            else:
+                question.answer_status = AnswerStatus.MANUALLY_VERIFIED if correct_key else AnswerStatus.NEEDS_REVIEW
+            question.save()
+            form.save_m2m()
 
             # Update options in place: candidate responses and figure
             # associations refer to their IDs and must not be silently lost.
-            existing = {opt.option_key: opt for opt in question.options.all()}
             for idx, key in enumerate(["A", "B", "C", "D", "E"]):
                 text = opt_map[key]
                 opt = existing.get(key)
                 has_image = bool(opt and (opt.image or opt.figures.exists()))
-                if opt and not text and not has_image and opt.selected_in_responses.exists():
+                keep_in_crop = key in getattr(form, "crop_only_keys", set())
+                if opt and not text and not has_image and not keep_in_crop and opt.selected_in_responses.exists():
                     # Preserve historical selections and their original text.
                     text = opt.option_text
                     messages.warning(self.request, f"Option {key} was retained because candidates have selected it.")
-                if text or has_image:
+                if text or has_image or keep_in_crop:
                     if opt:
                         opt.option_text, opt.is_correct, opt.order = text, key == correct_key, idx
                         opt.save(update_fields=["option_text", "is_correct", "order"])
@@ -809,7 +875,10 @@ class QuestionUpdateView(TeacherRequiredMixin, UpdateView):
                 f"Updated Question Bank item #{question.pk}",
                 request=self.request,
             )
-            messages.success(self.request, f"Question #{question.pk} updated successfully!")
+            if question.is_pdf_derived and correct_key and question.answer_status != AnswerStatus.MANUALLY_VERIFIED:
+                messages.warning(self.request, "Question saved. Its answer is unconfirmed and will be ungraded until checked.")
+            else:
+                messages.success(self.request, f"Question #{question.pk} updated successfully!")
             return redirect("questions:question_bank")
 
 
@@ -871,4 +940,6 @@ class QuestionPreviewView(TeacherRequiredMixin, DetailView):
         if not user.is_admin_role and q.creator != user:
             if not user.assigned_categories.filter(pk=q.category_id).exists():
                 raise PermissionDenied()
+        q.display_gradeable_key = _display_gradeable_bank_key(q)
+        decorate_staged_question(q, image_first=True, private=False)
         return q

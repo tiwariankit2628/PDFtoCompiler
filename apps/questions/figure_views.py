@@ -13,7 +13,7 @@ from django.views import View
 
 from apps.core.permissions import TeacherRequiredMixin
 from .figure_utils import page_image, validate_box
-from .models import ExtractedFigure, ExtractedQuestion, QuestionPaperUpload
+from .models import AnswerStatus, ExtractedFigure, ExtractedQuestion, QuestionPaperUpload
 
 
 def _authorize(user, paper):
@@ -57,9 +57,12 @@ def _ensure_option(question, key):
 def _flag(question):
     question.is_flagged = True
     question.flag_reason = "Image assignment changed; review question and options against the source."
+    # An image can contain the statement or choices on which the key depends.
+    # Keep the entered answer as a suggestion, but require a fresh check.
+    question.answer_status = AnswerStatus.NEEDS_REVIEW
     if question.status == ExtractedQuestion.Status.EXTRACTED:
         question.status = ExtractedQuestion.Status.REVIEWED
-    question.save(update_fields=["options", "is_flagged", "flag_reason", "status"])
+    question.save(update_fields=["options", "is_flagged", "flag_reason", "status", "answer_status"])
 
 
 def _png_upload(upload):
@@ -160,8 +163,10 @@ class QuestionFigureManageView(TeacherRequiredMixin, View):
                 with transaction.atomic():
                     if action == "retarget":
                         figure.option_key = _target(request.POST.get("target"))
+                        if figure.option_key and figure.source == "question_crop":
+                            figure.source = "manual_crop"
                         _ensure_option(question, figure.option_key)
-                        figure.save(update_fields=["option_key"])
+                        figure.save(update_fields=["option_key", "source"])
                     elif action == "unassign":
                         figure.question = None
                         figure.option_key = ""
@@ -172,9 +177,12 @@ class QuestionFigureManageView(TeacherRequiredMixin, View):
                         figure.delete()
                     _flag(question)
             elif action in ("crop", "upload"):
-                target = _target(request.POST.get("target"))
+                raw_target = request.POST.get("target", "")
+                original_crop = raw_target == "__crop__"
+                target = "" if original_crop else _target(raw_target)
                 replace_id = request.POST.get("replace_id", "")
                 figure = get_object_or_404(ExtractedFigure, pk=_safe_id(replace_id), question=question) if replace_id else ExtractedFigure(paper=question.paper, question=question)
+                keep_crop = original_crop or (figure.source == "question_crop" and not target)
                 if action == "crop":
                     try:
                         page_number = int(request.POST.get("page_number", ""))
@@ -184,11 +192,11 @@ class QuestionFigureManageView(TeacherRequiredMixin, View):
                     with _open_pdf(question.paper) as doc:
                         if not 1 <= page_number <= len(doc):
                             raise ValueError("That source page does not exist.")
-                        png = page_image(doc[page_number - 1], box)
-                    figure.page_number, figure.bounding_box, figure.source = page_number, box, "manual_crop"
+                        png = page_image(doc[page_number - 1], box, max_side=3200, scale=3) if keep_crop else page_image(doc[page_number - 1], box)
+                    figure.page_number, figure.bounding_box, figure.source = page_number, box, "question_crop" if keep_crop else "manual_crop"
                 else:
                     png = _png_upload(request.FILES.get("image"))
-                    figure.page_number, figure.bounding_box, figure.source = question.page_number, [], "upload"
+                    figure.page_number, figure.bounding_box, figure.source = question.page_number, [], "question_crop" if keep_crop else "upload"
                 figure.option_key = target
                 figure.image.save(f"paper_{question.paper_id}_manual.png", ContentFile(png), save=False)
                 with transaction.atomic():
@@ -339,19 +347,33 @@ class BankFigureManageView(TeacherRequiredMixin, View):
                     raise ValueError("This is the only content in that option. Add option text or another image first.")
                 if action == "retarget":
                     figure.option = target
-                    figure.save(update_fields=["option"])
+                    if target and figure.source == "question_crop":
+                        figure.source = "manual_crop"
+                    figure.save(update_fields=["option", "source"])
                 else:
                     figure.delete()
             elif action in ("crop", "upload"):
-                target = _bank_target(question, request.POST.get("target"))
+                raw_target = request.POST.get("target", "")
+                original_crop = raw_target == "__crop__"
+                target = None if original_crop else _bank_target(question, raw_target)
                 replace_id = request.POST.get("replace_id", "")
                 figure = get_object_or_404(QuestionFigure.objects.select_related("option"), pk=_safe_id(replace_id), question=question) if replace_id else QuestionFigure(question=question)
+                keep_crop = original_crop or (figure.source == "question_crop" and not target)
                 if (replace_id and figure.option_id and (not target or target.pk != figure.option_id)
                         and not _can_remove_bank_figure(figure)):
                     raise ValueError("This is the only content in the old option. Add text or another image first.")
                 if action == "upload":
                     png = _png_upload(request.FILES.get("image"))
-                    figure.page_number, figure.bounding_box, figure.source = 0, [], "upload"
+                    if keep_crop and request.POST.get("page_number"):
+                        try:
+                            page_number = int(request.POST["page_number"])
+                            if page_number < 1:
+                                raise ValueError
+                        except (TypeError, ValueError):
+                            raise ValueError("Choose a valid page number for the original image.") from None
+                    else:
+                        page_number = figure.page_number or (question.primary_image_region or {}).get("page", 1)
+                    figure.page_number, figure.bounding_box, figure.source = page_number, [], "question_crop" if keep_crop else "upload"
                 else:
                     staged = _bank_source(request.user, question)
                     if not staged:
@@ -364,8 +386,8 @@ class BankFigureManageView(TeacherRequiredMixin, View):
                     with _open_pdf(staged.paper) as doc:
                         if not 1 <= page_number <= len(doc):
                             raise ValueError("That source page does not exist.")
-                        png = page_image(doc[page_number - 1], box)
-                    figure.page_number, figure.bounding_box, figure.source = page_number, box, "manual_crop"
+                        png = page_image(doc[page_number - 1], box, max_side=3200, scale=3) if keep_crop else page_image(doc[page_number - 1], box)
+                    figure.page_number, figure.bounding_box, figure.source = page_number, box, "question_crop" if keep_crop else "manual_crop"
                 figure.option = target
                 figure.image.save(f"question_{question.pk}_manual.png", ContentFile(png), save=True)
             elif action == "clear_legacy_option":
@@ -381,5 +403,11 @@ class BankFigureManageView(TeacherRequiredMixin, View):
         except ValueError as exc:
             messages.error(request, str(exc))
         else:
-            messages.success(request, "Bank image changes saved. They may affect exams that use this question.")
+            if question.is_pdf_derived:
+                question.answer_status = AnswerStatus.NEEDS_REVIEW
+                question.key_verified = False
+                question.save(update_fields=["answer_status", "key_verified"])
+                messages.warning(request, "Image changes saved. Recheck the answer before this PDF question is graded in a new attempt.")
+            else:
+                messages.success(request, "Bank image changes saved. They may affect exams that use this question.")
         return redirect("questions:bank_figure_manage", pk=pk)

@@ -1,0 +1,51 @@
+{% extends 'dashboard_base.html' %}
+{% block title %}Repair original question images{% endblock %}
+{% block dashboard_content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+  <div><a class="small" href="{% url 'questions:practice_bank' %}">← My question bank</a><h2 class="fw-bold mt-2 mb-1">Repair original images</h2><p class="text-muted mb-0">Check that the whole question and every printed choice are visible, without printed answers or unrelated questions.</p></div>
+  <a class="btn btn-outline-primary" href="{% url 'questions:practice_bank_edit' question.pk %}">Edit question and key</a>
+</div>
+<div class="alert alert-warning small">Changes create a new bank version for future tests; past tests and results keep their original images. After any image change, check the answer again before it can be graded.</div>
+<div class="row g-4"><div class="col-lg-7">
+  {% if staged and page_range %}<div class="card border shadow-sm p-3 mb-4">
+    <h5>Crop from the original PDF</h5><p class="small text-muted">Choose a page, then drag a rectangle on the preview or enter coordinates from 0 to 1. For a genuine multi-page question, add a separate part from each page.</p>
+    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="crop">
+      <div class="row g-2 mb-2"><div class="col-sm-5"><label class="form-label small" for="crop-page">Source page</label><select id="crop-page" name="page_number" class="form-select">{% for page in page_range %}<option value="{{ page }}" {% if page == staged.page_number %}selected{% endif %}>Page {{ page }}</option>{% endfor %}</select></div>
+      <div class="col-sm-7"><label class="form-label small" for="crop-replace">Replace</label><select id="crop-replace" name="replace_id" class="form-select"><option value="">Add a new part</option>{% for figure in crops %}<option value="{{ figure.pk }}">Original image {{ forloop.counter }} · page {{ figure.page_number }}</option>{% endfor %}</select></div></div>
+      <div id="crop-stage" class="position-relative d-inline-block border bg-light" style="max-width:100%;line-height:0;touch-action:none;user-select:none"><img id="source-preview" src="{% url 'questions:practice_source_page' staged.pk staged.page_number %}" alt="Source PDF page; drag to select an original question image" draggable="false" style="display:block;max-width:100%;height:auto"><div id="crop-box" style="position:absolute;border:2px solid #e24b23;background:rgba(226,75,35,.15);display:none;pointer-events:none"></div></div>
+      <div class="row g-2 mt-2">
+        <div class="col-6 col-sm-3"><label class="small" for="x0">Left</label><input id="x0" name="x0" type="number" min="0" max="1" step="0.0001" class="form-control" required></div>
+        <div class="col-6 col-sm-3"><label class="small" for="y0">Top</label><input id="y0" name="y0" type="number" min="0" max="1" step="0.0001" class="form-control" required></div>
+        <div class="col-6 col-sm-3"><label class="small" for="x1">Right</label><input id="x1" name="x1" type="number" min="0" max="1" step="0.0001" class="form-control" required></div>
+        <div class="col-6 col-sm-3"><label class="small" for="y1">Bottom</label><input id="y1" name="y1" type="number" min="0" max="1" step="0.0001" class="form-control" required></div>
+      </div><button class="btn btn-primary mt-3">Save original crop</button>
+    </form>
+  </div>{% else %}<div class="alert alert-info small">The source PDF is unavailable for cropping. You can upload a replacement original image below.</div>{% endif %}
+  <div class="card border shadow-sm p-3"><h5>Upload an original image</h5><p class="small text-muted">A supported image up to 8 MB / 16 megapixels. Choose its source page so parts remain in order.</p>
+    <form method="post" enctype="multipart/form-data">{% csrf_token %}<input type="hidden" name="action" value="upload">
+      <label class="form-label small" for="original-file">Image file</label><input id="original-file" name="image" type="file" accept="image/*" class="form-control mb-2" required>
+      <div class="row g-2"><div class="col-sm-4"><label class="form-label small" for="upload-page">Source page</label><input id="upload-page" name="page_number" type="number" min="1" {% if staged and staged.paper.total_pages %}max="{{ staged.paper.total_pages }}"{% endif %} value="{% if staged %}{{ staged.page_number }}{% else %}1{% endif %}" class="form-control" required></div>
+      <div class="col-sm-8"><label class="form-label small" for="upload-replace">Replace</label><select id="upload-replace" name="replace_id" class="form-select"><option value="">Add a new part</option>{% for figure in crops %}<option value="{{ figure.pk }}">Original image {{ forloop.counter }} · page {{ figure.page_number }}</option>{% endfor %}</select></div></div>
+      <button class="btn btn-primary mt-3">Upload original image</button>
+    </form>
+  </div>
+</div><div class="col-lg-5"><h5>Current original images</h5>
+  {% for figure in crops %}<div class="card border shadow-sm p-3 mb-3"><strong>Original image {{ forloop.counter }} · page {{ figure.page_number }}</strong><a href="{% url 'questions:practice_bank_figure' figure.pk %}" target="_blank" rel="noopener"><img src="{% url 'questions:practice_bank_figure' figure.pk %}" class="img-fluid rounded border my-2" alt="Original question image, page {{ figure.page_number }}; open larger"></a><form method="post" onsubmit="return confirm('Remove this original image from future tests? Past tests are not changed.')">{% csrf_token %}<input type="hidden" name="replace_id" value="{{ figure.pk }}"><button name="action" value="remove" class="btn btn-sm btn-outline-danger">Remove from future tests</button></form></div>{% empty %}<p class="text-muted small">No original image is attached. Supporting images and source records have not been removed.</p>{% endfor %}
+</div></div>
+{% if staged and page_range %}<script>
+(() => {
+  const page = document.getElementById('crop-page'), img = document.getElementById('source-preview');
+  const stage = document.getElementById('crop-stage'), box = document.getElementById('crop-box');
+  const inputs = ['x0','y0','x1','y1'].map(id => document.getElementById(id));
+  const pageUrl = "{% url 'questions:practice_source_page' staged.pk 0 %}";
+  page.addEventListener('change', () => { img.src=pageUrl.replace('/0/', '/' + encodeURIComponent(page.value) + '/'); box.style.display='none'; inputs.forEach(input => input.value=''); });
+  let start = null;
+  function position(event) { const r=img.getBoundingClientRect(); return [Math.min(1,Math.max(0,(event.clientX-r.left)/r.width)),Math.min(1,Math.max(0,(event.clientY-r.top)/r.height))]; }
+  function show(a,b) { const left=Math.min(a[0],b[0]),top=Math.min(a[1],b[1]),right=Math.max(a[0],b[0]),bottom=Math.max(a[1],b[1]); box.style.display='block';box.style.left=left*100+'%';box.style.top=top*100+'%';box.style.width=(right-left)*100+'%';box.style.height=(bottom-top)*100+'%';[left,top,right,bottom].forEach((value,index)=>inputs[index].value=value.toFixed(4)); }
+  stage.addEventListener('pointerdown', event => { if (!img.complete || !img.naturalWidth) return; start=position(event);stage.setPointerCapture(event.pointerId);show(start,start); });
+  stage.addEventListener('pointermove', event => { if(start) show(start,position(event)); });
+  stage.addEventListener('pointerup', event => { if(start) {show(start,position(event));start=null;} });
+  stage.addEventListener('pointercancel', () => {start=null;});
+})();
+</script>{% endif %}
+{% endblock %}

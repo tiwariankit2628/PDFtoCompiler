@@ -1,0 +1,9 @@
+{{ answer_key_preview_questions|json_script:"answer-key-preview-data" }}
+<div class="border rounded bg-light p-3 mt-2 small" data-manual-key-preview hidden>
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+    <strong>Entered key preview</strong><button type="button" class="btn btn-sm btn-cbt-outline" data-manual-key-clear>Clear entered answers</button>
+  </div>
+  <p class="text-muted mt-2 mb-2">Preview only. Check the paper/set and printed choice order; the server validates everything on submission. Previously confirmed answers remain unless replaced.</p>
+  <div role="status" aria-live="polite" data-manual-key-summary></div>
+  <ul class="mb-0 mt-2 ps-3" data-manual-key-details></ul>
+</div>

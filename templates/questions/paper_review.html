@@ -94,9 +94,11 @@ document.addEventListener("DOMContentLoaded", function() {
             <div class="col-md-7 d-flex flex-wrap justify-content-md-end gap-2">
                 <a href="{% url 'questions:extracted_add' paper.pk %}" class="btn btn-sm btn-outline-primary">Add missing question</a>
                 <a href="{% url 'questions:figure_pool' paper.pk %}" class="btn btn-sm btn-outline-secondary">Image pool ({{ unassigned_figure_count }})</a>
-                <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#answerKeyDrawer" aria-expanded="false">
+                {% if can_manage_answer_keys and paper.status != 'pending' and paper.status != 'processing' %}
+                <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#answerKeyDrawer" aria-expanded="{% if answer_key_open %}true{% else %}false{% endif %}" aria-controls="answerKeyDrawer">
                     <i class="bi bi-key-fill me-1"></i> Import Answer Key
                 </button>
+                {% endif %}
 
                 <form method="post" action="{% url 'questions:paper_bulk_approve' paper.pk %}" class="d-inline" onsubmit="return confirm('Approve all valid extracted questions from this paper into the permanent Question Bank?');">
                     {% csrf_token %}
@@ -112,21 +114,27 @@ document.addEventListener("DOMContentLoaded", function() {
         </div>
 
         <!-- Answer Key Import Collapsible Drawer -->
-        <div class="collapse mt-3 pt-3 border-top" id="answerKeyDrawer">
+        {% if can_manage_answer_keys and paper.status != 'pending' and paper.status != 'processing' %}
+        <div class="collapse mt-3 pt-3 border-top {% if answer_key_open %}show{% endif %}" id="answerKeyDrawer">
             <div class="p-3 bg-light rounded-3">
                 <h6 class="fw-bold mb-2"><i class="bi bi-key text-primary me-1"></i> Bulk Answer Key Mapping</h6>
-                <p class="text-muted small mb-3">Paste your answer key list. Questions with matching numbers will be automatically updated with their correct answer option.</p>
-                <form method="post" action="{% url 'questions:paper_import_answer_key' paper.pk %}">
+                <p class="text-muted small mb-3">Check each key against the correct paper and set. This updates unapproved staging questions only; edit keys on already approved bank questions separately.</p>
+                <form method="post" action="{% url 'questions:paper_import_answer_key' paper.pk %}" novalidate>
                     {% csrf_token %}
-                    <div class="mb-3">
-                        {{ answer_key_form.answer_key_text }}
+                    {% url 'questions:teacher_answer_image_preview' paper.pk as answer_image_url %}
+                    {% include 'questions/_answer_key_image.html' with answer_image_url=answer_image_url answer_key_action='import' only %}
+                    {% if answer_key_form.non_field_errors %}<div class="alert alert-danger mt-3">{{ answer_key_form.non_field_errors|striptags }}</div>{% endif %}
+                    <div class="my-3"><label class="form-label fw-semibold" for="{{ answer_key_form.answer_key_text.id_for_label }}">{{ answer_key_form.answer_key_text.label }}</label>
+                        {{ answer_key_form.answer_key_text }}<div class="form-text">{{ answer_key_form.answer_key_text.help_text }}</div>
+                        {% for error in answer_key_form.answer_key_text.errors %}<div class="text-danger small" role="alert">{{ error }}</div>{% endfor %}
+                        {% include 'questions/_manual_key_preview.html' %}
                     </div>
-                    <button type="submit" class="btn btn-sm btn-primary">
-                        <i class="bi bi-lightning-fill me-1"></i> Map Answer Keys
-                    </button>
+                    {% for field in answer_key_form %}{% if field.name != 'answer_key_text' %}<div class="form-check mb-2">{{ field }}<label class="form-check-label small" for="{{ field.id_for_label }}">{{ field.label }}</label>{% for error in field.errors %}<div class="text-danger small" role="alert">{{ error }}</div>{% endfor %}</div>{% endif %}{% endfor %}
+                    <button type="submit" class="btn btn-sm btn-primary mt-2"><i class="bi bi-check2 me-1"></i> Apply checked keys to staging</button>
                 </form>
             </div>
         </div>
+        {% endif %}
     </div>
 </div>
 
@@ -149,9 +157,10 @@ document.addEventListener("DOMContentLoaded", function() {
 
 <!-- Extracted Questions List -->
 {% if questions %}
+{% include 'questions/_review_filters.html' %}
 <div class="d-flex flex-column gap-3 mb-4">
     {% for q in questions %}
-    <div class="card border shadow-sm {% if q.is_flagged %}border-warning bg-warning bg-opacity-10{% elif q.status == 'approved' %}border-success{% endif %}">
+    <div class="card border shadow-sm {% if q.is_flagged %}border-warning bg-warning bg-opacity-10{% elif q.status == 'approved' %}border-success{% endif %}" data-review-question data-image-question data-number="{{ q.question_number }}" data-needs-review="{% if q.is_flagged or q.image_notice or q.crop_warning or q.detected_type != 'mcq_single' %}1{% else %}0{% endif %}" data-missing-key="{% if q.correct_option and q.answer_status == 'manually_verified' and q.detected_type == 'mcq_single' %}0{% else %}1{% endif %}">
         <div class="card-header bg-white py-2 px-3 d-flex justify-content-between align-items-center">
             <div class="d-flex align-items-center gap-2">
                 <span class="badge bg-dark fw-bold">Q{{ q.question_number }}</span>
@@ -183,8 +192,10 @@ document.addEventListener("DOMContentLoaded", function() {
 
             <div class="d-flex align-items-center gap-2">
                 <span class="badge text-bg-light border text-muted small">+{{ q.positive_marks }} / -{{ q.negative_marks }}</span>
-                {% if q.correct_option %}
-                    <span class="badge bg-success">Answer: {{ q.correct_option }}</span>
+                {% if q.correct_option and q.answer_status == 'manually_verified' and q.detected_type == 'mcq_single' %}
+                    <span class="badge bg-success">Confirmed answer: {{ q.correct_option }}</span>
+                {% elif q.correct_option %}
+                    <span class="badge bg-warning text-dark">Unconfirmed answer: {{ q.correct_option }}</span>
                 {% else %}
                     <span class="badge bg-warning text-dark">No Answer Key</span>
                 {% endif %}
@@ -193,12 +204,14 @@ document.addEventListener("DOMContentLoaded", function() {
 
         <div class="card-body p-3">
             {% if q.status != 'approved' %}<div class="ai-batch-select form-check small mb-2" hidden><input class="form-check-input" type="checkbox" id="batch-q-{{ q.pk }}" data-request-url="{% url 'questions:answer_request' q.pk %}"><label class="form-check-label" for="batch-q-{{ q.pk }}">Select for AI batch<span class="ai-batch-outcome text-muted"></span></label></div>{% endif %}
-            <!-- Question Text with Math rendering -->
-            <div class="fs-6 fw-semibold text-dark mb-3">
-                {{ q|render_question }}
-            </div>
-
-            {% if q.extraction_issues %}<details class="small text-muted mb-2"><summary>Original extraction notes</summary><ul class="mb-0">{% for issue in q.extraction_issues %}<li>{{ issue }}</li>{% endfor %}</ul></details>{% endif %}
+            {% if q.primary_crops %}
+              {% for figure in q.primary_crops %}<figure class="mb-2"><a href="{% url 'questions:figure_file' figure.pk %}" target="_blank" rel="noopener"><img data-primary-question-image src="{% url 'questions:figure_file' figure.pk %}" loading="lazy" decoding="async" alt="Original question image{% if q.primary_crops|length > 1 %}, part {{ forloop.counter }}{% endif %}" class="img-fluid rounded border" style="max-height:420px;"></a><figcaption class="small text-muted">Original question{% if q.primary_crops|length > 1 %} · part {{ forloop.counter }}{% endif %} · tap to enlarge</figcaption></figure>{% endfor %}
+              <div class="small text-muted mb-3">Selectable choices: {% for opt in q.options %}<strong>{{ opt.key }}</strong>{% if not forloop.last %} · {% endif %}{% empty %}none yet{% endfor %}. Check that the image shows the entire question and choices.</div>
+              <p class="small text-danger" role="status" data-image-error hidden>An original image could not be loaded. Available text and supporting images are shown below.</p>
+              <details data-image-fallback class="small mb-3" {% if q.image_notice %}open{% endif %}><summary>Accessible text and supporting images</summary>
+            {% endif %}
+            <!-- Text-mode and missing-image fallback keep all existing content. -->
+            <div class="fs-6 fw-semibold text-dark mb-3">{{ q|render_question }}</div>
 
             <!-- Optional Extracted Diagram -->
             {% if q.image %}
@@ -207,7 +220,7 @@ document.addEventListener("DOMContentLoaded", function() {
             </div>
             {% endif %}
 
-            {% for figure in q.figures.all %}{% if not figure.option_key %}
+            {% for figure in q.figures.all %}{% if not figure.option_key and figure.source != 'question_crop' or not q.primary_crops and not figure.option_key %}
             <div class="mb-3">{% if figure.source == 'option-source' %}<div class="small text-muted">Original choices in printed order (1=A, 2=B, etc.).</div>{% elif figure.source == 'parallel-source' %}<div class="small text-muted">Other original-language region — verify that choices match the printed labels (1=A, 2=B, etc.).</div>{% elif figure.source == 'stem-source' or figure.source == 'table-source' %}<div class="small text-muted">Original question or table region — compare with extracted text.</div>{% endif %}<a href="{% url 'questions:figure_file' figure.pk %}" target="_blank" rel="noopener"><img src="{% url 'questions:figure_file' figure.pk %}" alt="{% if figure.source == 'stem-source' or figure.source == 'table-source' or figure.source == 'option-source' or figure.source == 'parallel-source' %}Original question region{% else %}Question figure{% endif %}" class="img-thumbnail" style="max-height:180px; max-width:100%;"></a></div>
             {% endif %}{% endfor %}
 
@@ -215,16 +228,16 @@ document.addEventListener("DOMContentLoaded", function() {
             <div class="row g-2 mb-3">
                 {% for opt in q.options %}
                 <div class="col-md-6">
-                    <div class="p-2 border rounded d-flex align-items-start gap-2 small {% if opt.key == q.correct_option %}border-success bg-success bg-opacity-10{% else %}bg-light{% endif %}">
-                        <span class="badge {% if opt.key == q.correct_option %}bg-success{% else %}bg-secondary{% endif %}">{{ opt.key }}</span>
+                    <div class="p-2 border rounded d-flex align-items-start gap-2 small {% if opt.key == q.correct_option and q.answer_status == 'manually_verified' and q.detected_type == 'mcq_single' %}border-success bg-success bg-opacity-10{% else %}bg-light{% endif %}">
+                        <span class="badge {% if opt.key == q.correct_option and q.answer_status == 'manually_verified' and q.detected_type == 'mcq_single' %}bg-success{% else %}bg-secondary{% endif %}">{{ opt.key }}</span>
                         <div class="flex-grow-1 text-dark">
                             {{ opt.text }}
                             {% for figure in q.figures.all %}{% if figure.option_key == opt.key %}
                             <img src="{% url 'questions:figure_file' figure.pk %}" alt="Option {{ opt.key }} image" class="img-fluid d-block mt-2 rounded border" style="max-height:140px;">
                             {% endif %}{% endfor %}
                         </div>
-                        {% if opt.key == q.correct_option %}
-                            <i class="bi bi-check-circle-fill text-success" title="Correct Answer"></i>
+                        {% if opt.key == q.correct_option and q.answer_status == 'manually_verified' and q.detected_type == 'mcq_single' %}
+                            <i class="bi bi-check-circle-fill text-success" title="Confirmed answer"></i>
                         {% endif %}
                     </div>
                 </div>
@@ -237,6 +250,9 @@ document.addEventListener("DOMContentLoaded", function() {
                 {% endfor %}
             </div>
 
+            {% if q.primary_crops %}</details>{% endif %}
+            {% if q.image_notice %}<div class="small text-danger mb-2" role="note">{{ q.image_notice }}</div>{% endif %}
+            {% if q.extraction_issues %}<details class="small text-muted mb-2"><summary>Original extraction notes</summary><ul class="mb-0">{% for issue in q.extraction_issues %}<li>{{ issue }}</li>{% endfor %}</ul></details>{% endif %}
             {% if q.explanation %}
             <div class="p-2 border-start border-3 border-info bg-light small mb-3">
                 <strong>Solution / Explanation:</strong> {{ q.explanation }}
@@ -244,8 +260,8 @@ document.addEventListener("DOMContentLoaded", function() {
             {% endif %}
 
             <!-- Action Toolbar for Question -->
-            <div class="d-flex justify-content-between align-items-center pt-2 border-top">
-                <div class="d-flex gap-1">
+            <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center pt-2 border-top">
+                <div class="d-flex flex-wrap gap-1">
                     <a href="{% url 'questions:extracted_edit' q.pk %}" class="btn btn-sm btn-outline-primary py-1 px-2">
                         <i class="bi bi-pencil-square me-1"></i> Edit Question
                     </a>
@@ -307,10 +323,10 @@ document.addEventListener("DOMContentLoaded", function() {
     </div>
     <div class="collapse" id="extractionLog">
         <div class="card-body bg-dark text-light font-monospace small p-3 rounded-bottom" style="max-height: 200px; overflow-y: auto;">
-            <pre class="mb-0 text-light" style="white-space: pre-wrap;">{{ paper.extraction_log|default:"No errors logged." }}</pre>
+            <pre class="mb-0 text-light" style="white-space: pre-wrap;">{{ extraction_log_display|default:"No errors logged." }}</pre>
         </div>
     </div>
 </div>
 {% endblock %}
 
-{% block extra_js %}<script src="{% static 'js/ai-batch.js' %}"></script>{% endblock %}
+{% block extra_js %}<script src="{% static 'js/ai-batch.js' %}"></script><script src="{% static 'js/answer-key-image.js' %}"></script><script src="{% static 'js/manual-key-preview.js' %}"></script><script src="{% static 'js/question-review.js' %}"></script><script src="{% static 'js/question-image-fallback.js' %}"></script>{% endblock %}

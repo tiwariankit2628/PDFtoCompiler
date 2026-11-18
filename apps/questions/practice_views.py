@@ -18,10 +18,12 @@ from apps.core.permissions import StudentRequiredMixin
 from apps.exams.models import Category, Exam, ExamAttempt, ExamQuestion
 from apps.payments.services import QuotaExceeded, FeatureUnavailable, consume, lock_practice_user, require_feature
 from apps.core.utils import log_audit
+from .answer_key_validation import edited_answer_status, staged_question_signature
 from .figure_utils import page_image, validate_box
 from .figure_views import _png_upload, _target
 from .models import AnswerStatus, ExtractedFigure, ExtractedQuestion, Question, QuestionFigure, QuestionOption, QuestionPaperUpload
 from .practice_forms import PracticeQuestionForm, PracticeSettingsForm, PracticeUploadForm, practice_question_error
+from .presentation import answer_key_preview_questions, decorate_staged_question, user_diagnostic
 from .tasks import extract_cloud_paper, extract_private_practice_paper
 
 
@@ -188,16 +190,20 @@ class PracticeSettingsView(PrivateStudentMixin, View):
         questions = list(paper.extracted_questions.prefetch_related("figures", "ai_suggestions").order_by("question_number", "id"))
         included = [q for q in questions if q.include_in_practice]
         for question in questions:
-            question.practice_error = practice_question_error(question)
+            decorate_staged_question(question, image_first=paper.image_first, private=True)
+            question.practice_error = practice_question_error(question, allow_confirmed_crop_choices=True)
             question.latest_ai = next(iter(question.ai_suggestions.all()), None)
         return {
             "paper": paper, "questions": questions, "included": included,
             "total_questions": len(included),
+            "answer_key_preview_questions": answer_key_preview_questions(included, student=True),
             "total_marks": sum((q.positive_marks for q in included), Decimal("0.00")),
-            "keyed_count": sum(bool(q.correct_option) for q in included),
+            "keyed_count": sum(bool(q.correct_option and q.answer_status == AnswerStatus.STUDENT_CONFIRMED
+                                     and q.detected_type == ExtractedQuestion.DetectedType.SINGLE) for q in included),
             "flagged_count": sum(q.is_flagged for q in included),
             "unassigned_figure_count": paper.figures.filter(question__isnull=True).count(),
-            "extraction_warnings": [line.removeprefix("Warning: ") for line in paper.extraction_log.splitlines() if line.startswith("Warning: ")],
+            "extraction_warnings": [user_diagnostic(line.removeprefix("Warning: ")) for line in paper.extraction_log.splitlines() if line.startswith("Warning: ")],
+            "extraction_log_display": user_diagnostic(paper.extraction_log),
             "cloud_usage": [line for line in paper.extraction_log.splitlines() if line.startswith((
                 "Gemini model:", "Gemini reported", "Gemini did not report usable token counts",
             ))],
@@ -240,7 +246,11 @@ class PracticeSettingsView(PrivateStudentMixin, View):
                 description="Private practice from your PDF. Only questions with a supplied answer key are graded.",
             )
             for position, staged in enumerate(included, 1):
-                correct = form.answer_keys.get(staged.question_number, staged.correct_option).upper()
+                # A historical or extracted suggestion is not a confirmation.
+                # Keep it in staging but grade only an explicitly entered key or
+                # one the student previously confirmed in the question editor.
+                saved_key = staged.correct_option if staged.answer_status == AnswerStatus.STUDENT_CONFIRMED else ""
+                correct = form.answer_keys.get(staged.question_number, saved_key).upper()
                 bank = Question.objects.create(
                     is_private_practice=True, key_verified=bool(correct), is_image_first=bool(staged.is_image_first),
                     answer_status=AnswerStatus.STUDENT_CONFIRMED if correct else AnswerStatus.NEEDS_REVIEW, category=paper.category, creator=request.user,
@@ -267,11 +277,14 @@ class PracticeSettingsView(PrivateStudentMixin, View):
                     exam=exam, question=bank, order=position, section=paper.subject or "General",
                     positive_marks=staged.positive_marks, negative_marks=staged.negative_marks,
                 )
-                staged.correct_option = correct
-                staged.answer_status = AnswerStatus.STUDENT_CONFIRMED if correct else AnswerStatus.NEEDS_REVIEW
+                updates = ["approved_question", "status"]
+                if correct:
+                    staged.correct_option = correct
+                    staged.answer_status = AnswerStatus.STUDENT_CONFIRMED
+                    updates.extend(["correct_option", "answer_status"])
                 staged.approved_question = bank
                 staged.status = ExtractedQuestion.Status.APPROVED
-                staged.save(update_fields=["correct_option", "answer_status", "approved_question", "status"])
+                staged.save(update_fields=updates)
             exam.recalculate_marks()
             paper.practice_exam = exam
             paper.status = QuestionPaperUpload.ProcessingStatus.COMPLETED
@@ -299,20 +312,29 @@ class PracticeQuestionEditView(PrivateStudentMixin, View):
             if not form.is_valid():
                 return render(request, "questions/practice_question_edit.html", {"question": question, "form": form})
             data = form.cleaned_data
+            previous_content = staged_question_signature(question)
             figure_keys = {f.option_key for f in question.figures.all() if f.private_image}
+            question.detected_type = data["detected_type"]
             question.question_text = data["question_text"]
             question.tables = data["tables_data"]
-            question.options = [{"key": k, "text": data[f"option_{k}"].strip()} for k in "ABCDE" if data[f"option_{k}"].strip() or k in figure_keys]
+            crop_keys = set(data.get("visible_crop_choices") or [])
+            question.options = [{"key": k, "text": data[f"option_{k}"].strip(), "visible_in_crop": k in crop_keys}
+                                for k in "ABCDE" if data[f"option_{k}"].strip() or k in figure_keys or k in crop_keys]
+            question.answer_status = edited_answer_status(question.correct_option, question.answer_status,
+                data["correct_option"], data["confirm_answer_key"], AnswerStatus.STUDENT_CONFIRMED,
+                content_changed=previous_content != staged_question_signature(question))
             question.correct_option = data["correct_option"]
-            question.answer_status = AnswerStatus.STUDENT_CONFIRMED if question.correct_option else AnswerStatus.NEEDS_REVIEW
             question.positive_marks = data["positive_marks"]
             question.negative_marks = data["negative_marks"]
             question.explanation = data["explanation"]
             question.is_flagged = not data["reviewed"]
             question.flag_reason = "" if data["reviewed"] else "Not yet checked against source."
             question.status = ExtractedQuestion.Status.REVIEWED
-            question.save(update_fields=["question_text", "tables", "options", "correct_option", "answer_status", "positive_marks", "negative_marks", "explanation", "is_flagged", "flag_reason", "status"])
-        messages.success(request, "Question saved.")
+            question.save(update_fields=["detected_type", "question_text", "tables", "options", "correct_option", "answer_status", "positive_marks", "negative_marks", "explanation", "is_flagged", "flag_reason", "status"])
+        if question.correct_option and question.answer_status != AnswerStatus.STUDENT_CONFIRMED:
+            messages.warning(request, "Question saved. Its answer is unconfirmed and will remain ungraded until you check it.")
+        else:
+            messages.success(request, "Question saved.")
         return redirect("questions:practice_settings", pk=question.paper_id)
 
 
@@ -444,7 +466,9 @@ class PracticeFigureManageView(PrivateStudentMixin, View):
                     figure = get_object_or_404(ExtractedFigure, pk=request.POST.get("figure_id"), question=question, paper=paper)
                     if action == "retarget":
                         figure.option_key = _target(request.POST.get("target"))
-                        figure.save(update_fields=["option_key"])
+                        if figure.option_key and figure.source == "question_crop":
+                            figure.source = "manual_crop"
+                        figure.save(update_fields=["option_key", "source"])
                         self._ensure_option(question, figure.option_key)
                     elif action == "unassign":
                         figure.question = None
@@ -456,9 +480,12 @@ class PracticeFigureManageView(PrivateStudentMixin, View):
                         if old:
                             transaction.on_commit(lambda: figure.private_image.storage.delete(old))
                 elif action in ("crop", "upload"):
-                    target = _target(request.POST.get("target"))
+                    raw_target = request.POST.get("target", "")
+                    original_crop = raw_target == "__crop__"
+                    target = "" if original_crop else _target(raw_target)
                     replace_id = request.POST.get("replace_id", "")
                     figure = get_object_or_404(ExtractedFigure, pk=replace_id, question=question, paper=paper) if replace_id else ExtractedFigure(paper=paper, question=question)
+                    keep_crop = original_crop or (figure.source == "question_crop" and not target)
                     old = figure.private_image.name
                     if action == "crop":
                         try:
@@ -469,11 +496,11 @@ class PracticeFigureManageView(PrivateStudentMixin, View):
                         with _open_private_pdf(paper) as document:
                             if not 1 <= page_number <= len(document):
                                 raise ValueError("That source page does not exist.")
-                            png = page_image(document[page_number - 1], box)
-                        figure.page_number, figure.bounding_box, figure.source = page_number, box, "manual_crop"
+                            png = page_image(document[page_number - 1], box, max_side=3200, scale=3) if keep_crop else page_image(document[page_number - 1], box)
+                        figure.page_number, figure.bounding_box, figure.source = page_number, box, "question_crop" if keep_crop else "manual_crop"
                     else:
                         png = _png_upload(request.FILES.get("image"))
-                        figure.page_number, figure.bounding_box, figure.source = question.page_number, [], "upload"
+                        figure.page_number, figure.bounding_box, figure.source = question.page_number, [], "question_crop" if keep_crop else "upload"
                     figure.option_key = target
                     figure.private_image.save(f"practice_{paper.pk}_figure.png", ContentFile(png), save=False)
                     figure.save()
@@ -484,7 +511,8 @@ class PracticeFigureManageView(PrivateStudentMixin, View):
                     raise ValueError("Unknown image operation.")
                 question.is_flagged = True
                 question.flag_reason = "Image assignment changed; check the question against its source."
-                question.save(update_fields=["options", "is_flagged", "flag_reason"])
+                question.answer_status = AnswerStatus.NEEDS_REVIEW
+                question.save(update_fields=["options", "is_flagged", "flag_reason", "answer_status"])
             except ValueError as exc:
                 messages.error(request, str(exc))
                 return redirect("questions:practice_figures", pk=question.pk)
@@ -514,7 +542,14 @@ class PracticeResultView(PrivateStudentMixin, View):
         result.update(estimate_context(attempt, result["rows"]))
         log_audit(request.user, "PRACTICE_RESULT_VIEWED", f"Private attempt {attempt.attempt_uuid} viewed.", request=request)
         history = (ExamAttempt.objects.filter(exam=attempt.exam, student=request.user)
-                   .exclude(status=ExamAttempt.AttemptStatus.IN_PROGRESS).order_by("-started_at", "-pk"))
+                   .exclude(status=ExamAttempt.AttemptStatus.IN_PROGRESS)
+                   .prefetch_related("responses__exam_question").order_by("-started_at", "-pk"))
+        for previous in history:
+            saved = list(previous.responses.all())
+            previous.comparison_legacy = any(row.key_confirmed_at_grading is None for row in saved)
+            previous.comparison_keyed = any(row.key_confirmed_at_grading is True for row in saved)
+            previous.comparison_marks = sum((row.exam_question.positive_marks for row in saved
+                                             if row.key_confirmed_at_grading is True), Decimal("0.00"))
         return render(request, "questions/practice_result.html", {
             "attempt": attempt, "exam": attempt.exam, "history": history,
             **result,
@@ -524,19 +559,14 @@ class PracticeResultView(PrivateStudentMixin, View):
 class PracticeHistoryView(PrivateStudentMixin, View):
     def get(self, request):
         from django.core.paginator import Paginator
-        from django.db.models import Count, Q
         attempts = (ExamAttempt.objects.filter(student=request.user, exam__creator=request.user,
                                                 exam__is_private_practice=True)
-                    .select_related("exam").order_by("-started_at", "-pk"))
+                    .select_related("exam").prefetch_related("responses").order_by("-started_at", "-pk"))
         page = Paginator(attempts, 25).get_page(request.GET.get("page"))
-        # Avoid presenting an entirely unkeyed paper as a zero score. Tests
-        # share immutable question versions across their own attempts.
-        exam_ids = {attempt.exam_id for attempt in page if attempt.status != ExamAttempt.AttemptStatus.IN_PROGRESS}
-        keyed_exams = set(ExamQuestion.objects.filter(exam_id__in=exam_ids, question__key_verified=True)
-            .annotate(correct_keys=Count("question__options", filter=Q(question__options__is_correct=True)))
-            .filter(correct_keys=1).values_list("exam_id", flat=True))
         for attempt in page:
-            attempt.has_verified_key = attempt.exam_id in keyed_exams
+            saved = list(attempt.responses.all())
+            attempt.has_verified_key = any(row.key_confirmed_at_grading is True for row in saved)
+            attempt.has_legacy_key_details = any(row.key_confirmed_at_grading is None for row in saved)
         return render(request, "questions/practice_history.html", {"page_obj": page})
 
 
@@ -599,7 +629,8 @@ class PracticeFigurePoolView(PrivateStudentMixin, View):
                     PracticeFigureManageView._ensure_option(question, target)
                     question.is_flagged = True
                     question.flag_reason = "Image assignment changed; check the question against its source."
-                    question.save(update_fields=["options", "is_flagged", "flag_reason"])
+                    question.answer_status = AnswerStatus.NEEDS_REVIEW
+                    question.save(update_fields=["options", "is_flagged", "flag_reason", "answer_status"])
                 else:
                     raise ValueError("Choose an image action.")
             except (ValueError, TypeError) as exc:

@@ -91,6 +91,7 @@
     </div>
 </div>
 
+{% if exam_questions %}<div class="alert alert-info small">Before publishing, check every original question image and printed choice. Crops can be missing, incomplete, or include printed answers or unrelated content even when no warning is detected. Use the image repair links below.</div>{% endif %}
 <!-- Main Builder Grid -->
 <div class="row g-4">
     <!-- Left Column: Current Exam Questions List -->
@@ -125,6 +126,11 @@
                             </div>
                         </div>
 
+                        {% if not eq.question.display_gradeable_key %}<p class="small text-warning-emphasis mb-2">No supported single-correct key; this question will be ungraded. <a href="{% url 'questions:question_edit' eq.question.pk %}">Review key</a></p>{% endif %}
+                        {% if eq.question.image_notice %}<p class="small text-danger mb-2">{{ eq.question.image_notice }} <a href="{% url 'questions:bank_figure_manage' eq.question.pk %}">Repair images</a></p>{% endif %}
+                        {% if eq.question.source_crop_warning %}<p class="small text-warning-emphasis mb-2">Source warning: {{ eq.question.source_crop_warning }} <a href="{% url 'questions:bank_figure_manage' eq.question.pk %}">Inspect / recrop</a></p>{% endif %}
+                        {% for figure in eq.question.primary_crops %}<figure class="my-2"><a href="{{ figure.image.url }}" target="_blank" rel="noopener"><img src="{{ figure.image.url }}" loading="lazy" alt="Original question image{% if eq.question.primary_crops|length > 1 %}, part {{ forloop.counter }}{% endif %}" class="img-fluid rounded border" style="max-height:420px"></a><figcaption class="small text-muted">Original question{% if eq.question.primary_crops|length > 1 %} · part {{ forloop.counter }}{% endif %} · tap to enlarge</figcaption></figure>{% endfor %}
+                        {% if eq.question.primary_crops %}<details class="mb-2" {% if eq.question.image_notice %}open{% endif %}><summary class="small">Text and supporting images</summary>{% endif %}
                         <!-- Statement -->
                         <div class="fw-semibold text-dark mb-2" style="font-size: 0.95rem;">
                             {{ eq.question|render_question }}
@@ -136,14 +142,15 @@
                         </div>
                         {% endif %}
 
-                        {% for figure in eq.question.figures.all %}{% if not figure.option_id %}<img src="{{ figure.image.url }}" alt="Question figure" class="img-thumbnail mb-2" style="max-height:100px;">{% endif %}{% endfor %}
+                        {% for figure in eq.question.figures.all %}{% if figure.image and not figure.option_id and figure.source != 'question_crop' or figure.image and not eq.question.primary_crops and not figure.option_id %}<img src="{{ figure.image.url }}" alt="Question figure" class="img-thumbnail mb-2" style="max-height:100px;">{% endif %}{% endfor %}
+                        {% if eq.question.primary_crops %}</details>{% endif %}
 
                         <!-- Options Preview (Compact) -->
                         <div class="row g-1 small">
                             {% for opt in eq.question.options.all %}
                             <div class="col-6">
-                                <div class="p-1 px-2 border rounded text-truncate {% if opt.is_correct %}bg-success bg-opacity-10 text-success border-success fw-bold{% else %}bg-light text-muted{% endif %}">
-                                    {{ opt.option_key }}. {{ opt.option_text }}
+                                <div class="p-1 px-2 border rounded text-truncate {% if opt.is_correct and eq.question.display_gradeable_key %}bg-success bg-opacity-10 text-success border-success fw-bold{% else %}bg-light text-muted{% endif %}">
+                                    {{ opt.option_key }}. {{ opt.option_text }}{% if opt.is_correct and not eq.question.display_gradeable_key %} <span class="badge text-bg-warning">Ungraded</span>{% endif %}
                                     {% if opt.image %}<img src="{{ opt.image.url }}" alt="Option image" class="img-thumbnail d-block" style="max-height:70px;">{% endif %}
                                     {% for figure in opt.figures.all %}<img src="{{ figure.image.url }}" alt="Option image" class="img-thumbnail d-block" style="max-height:70px;">{% endfor %}
                                 </div>

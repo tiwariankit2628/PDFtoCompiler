@@ -1,6 +1,4 @@
 """Validation for the student-owned, local-only practice workflow."""
-import re
-from collections import Counter
 from decimal import Decimal
 
 import pymupdf as fitz
@@ -14,7 +12,9 @@ from .forms import (
     clean_local_extraction_mode,
     local_extraction_field,
 )
-from .models import QuestionPaperUpload
+from .answer_key_validation import parse_checked_answer_key
+from .models import ExtractedQuestion, QuestionPaperUpload
+from .presentation import missing_crop_pages, unavailable_crop_pages
 from .structured_forms import add_tables_editor, clean_tables_editor
 
 
@@ -61,13 +61,15 @@ class PracticeUploadForm(BootstrapFormMixin, forms.Form):
 def practice_question_error(question, *, allow_confirmed_crop_choices=False):
     """Return a human-readable error instead of silently dropping a question.
 
-    Classroom teachers may explicitly confirm labels visible in a whole-question
-    crop. Never infer labels merely because a crop exists; private practice keeps
-    its existing stricter validation.
+    Reviewers may explicitly confirm labels visible in a whole-question crop.
+    Never infer labels merely because a crop exists; the private original must
+    be available and each crop-only label must be deliberately selected.
     """
     figures = list(question.figures.all())
+    crops = [f for f in figures if f.source == "question_crop" and not f.option_key and f.private_image]
     has_crop = (allow_confirmed_crop_choices and question.paper.image_first and question.is_image_first
-                and any(f.source == "question_crop" and not f.option_key and f.private_image for f in figures))
+                and bool(crops) and not unavailable_crop_pages(crops, private=True)
+                and not missing_crop_pages(question, crops))
     if not question.question_text.strip() and not question.private_image and not any(not f.option_key and f.private_image for f in figures):
         return "Add a question statement or question image."
     options = question.options if isinstance(question.options, list) else []
@@ -82,7 +84,7 @@ def practice_question_error(question, *, allow_confirmed_crop_choices=False):
                 and not any(f.option_key == key and f.private_image for f in figures)
                 and not (has_crop and opt.get("visible_in_crop") is True)):
             if allow_confirmed_crop_choices:
-                return f"Option {key} needs text, an image or a teacher-confirmed label in the original crop."
+                return f"Option {key} needs text, an image or a checked label in the original crop."
             return f"Option {key} needs text or an image."
         keys.append(key)
     if len(keys) < 2:
@@ -102,9 +104,12 @@ class PracticeSettingsForm(BootstrapFormMixin, forms.Form):
         help_text="Optional. Pass/fail is shown only when every question has a confirmed key; blank or 0 disables it.",
     )
     answer_key_text = forms.CharField(
-        label="Answer key (optional)", required=False,
+        label="Type or paste answer key (optional)", required=False, max_length=30000,
         widget=forms.Textarea(attrs={"rows": 3, "placeholder": "1: A, 2: B, 3: D"}),
-        help_text="Enter only keys you have personally checked. Questions without a confirmed key stay ungraded.",
+        help_text="Enter only answers you have checked. Questions without a confirmed key stay ungraded.",
+    )
+    confirm_answer_key = forms.BooleanField(
+        required=False, label="I checked the entered answers against the correct paper, set and printed choice order."
     )
     acknowledge_review = forms.BooleanField(
         required=False, label="I understand extracted text, options and figures can be inaccurate and need review."
@@ -129,37 +134,19 @@ class PracticeSettingsForm(BootstrapFormMixin, forms.Form):
 
     def clean_answer_key_text(self):
         text = self.cleaned_data.get("answer_key_text", "").strip()
-        if not text:
-            self.answer_keys = {}
-            return text
-        pattern = re.compile(r"(\d+)\s*[:.\-=]?\s*([A-Ea-e1-5])")
-        matches = list(pattern.finditer(text))
-        remainder = pattern.sub("", text)
-        if not matches or remainder.strip(" ,;\n\r\t"):
-            raise ValidationError("Use pairs like 1: A, 2: B, separated by commas or new lines.")
-        counts = Counter(q.question_number for q in self.questions)
-        by_number = {q.question_number: q for q in self.questions}
-        keys = {}
-        for match in matches:
-            number = int(match.group(1))
-            key = match.group(2).upper()
-            key = {"1": "A", "2": "B", "3": "C", "4": "D", "5": "E"}.get(key, key)
-            if number in keys:
-                raise ValidationError(f"Question {number} appears more than once in the answer key.")
-            if number not in by_number or counts[number] != 1:
-                raise ValidationError(f"Question {number} is missing, excluded, or ambiguous. Edit it individually instead.")
-            options = by_number[number].options or []
-            if key not in [str(o.get("key", "")).upper() for o in options if isinstance(o, dict)]:
-                raise ValidationError(f"Question {number} has no option {key}.")
-            keys[number] = key
-        self.answer_keys = keys
+        self.answer_keys = parse_checked_answer_key(text, self.questions)
         return text
 
     def clean(self):
         cleaned = super().clean()
+        if cleaned.get("answer_key_text") and not cleaned.get("confirm_answer_key"):
+            self.add_error("confirm_answer_key", "Confirm that you checked the entered answer key, or leave it blank.")
         if not self.questions:
             raise ValidationError("Include at least one question before creating a test.")
-        invalid = [q.question_number for q in self.questions if practice_question_error(q)]
+        unsupported = [q.question_number for q in self.questions if q.detected_type != ExtractedQuestion.DetectedType.SINGLE]
+        if unsupported:
+            raise ValidationError("Only single-correct MCQs can be scored. Review the type or exclude: " + ", ".join(map(str, unsupported[:20])))
+        invalid = [q.question_number for q in self.questions if practice_question_error(q, allow_confirmed_crop_choices=True)]
         if invalid:
             raise ValidationError("Edit or exclude invalid questions before creating the test: " + ", ".join(map(str, invalid[:20])) + ("…" if len(invalid) > 20 else ""))
         total = sum((q.positive_marks for q in self.questions), Decimal("0.00"))
@@ -176,17 +163,30 @@ class PracticeSettingsForm(BootstrapFormMixin, forms.Form):
 
 
 class PracticeQuestionForm(BootstrapFormMixin, forms.Form):
-    option_error_message = "At least two options need text or an attached image."
+    option_error_message = "At least two options need text, an attached image or checked labels in the original crop."
+    detected_type = forms.ChoiceField(
+        required=False, choices=ExtractedQuestion.DetectedType.choices,
+        label="Question type (check against the PDF)",
+        help_text="Scoring supports one correct choice only. Review or exclude other types.",
+    )
     question_text = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 4}))
     option_A = forms.CharField(label="Option A", required=False, widget=forms.Textarea(attrs={"rows": 2}))
     option_B = forms.CharField(label="Option B", required=False, widget=forms.Textarea(attrs={"rows": 2}))
     option_C = forms.CharField(label="Option C", required=False, widget=forms.Textarea(attrs={"rows": 2}))
     option_D = forms.CharField(label="Option D", required=False, widget=forms.Textarea(attrs={"rows": 2}))
     option_E = forms.CharField(label="Option E", required=False, widget=forms.Textarea(attrs={"rows": 2}))
+    visible_crop_choices = forms.MultipleChoiceField(
+        required=False, choices=[(key, key) for key in "ABCDE"], widget=forms.CheckboxSelectMultiple,
+        label="Choice labels visible in the original question image",
+        help_text="For image-only choices, check only labels you can see in the crop. No text or answer will be guessed.",
+    )
     correct_option = forms.ChoiceField(
         required=False, choices=[("", "No answer key — ungraded")] + [(k, k) for k in "ABCDE"],
         label="Correct option (optional)",
     )
+    confirm_answer_key = forms.BooleanField(required=False,
+        label="I checked this answer against the correct paper, set and printed choice order.",
+        help_text="New answers or changes to the question, type, number or choices require confirmation. Unchanged confirmed answers stay confirmed.")
     positive_marks = forms.DecimalField(min_value=0, max_value=Decimal("999.99"), max_digits=5, decimal_places=2)
     negative_marks = forms.DecimalField(min_value=0, max_value=Decimal("999.99"), max_digits=5, decimal_places=2)
     explanation = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 3}))
@@ -197,17 +197,29 @@ class PracticeQuestionForm(BootstrapFormMixin, forms.Form):
         if not args and "data" not in kwargs:
             options = {str(o.get("key", "")).upper(): o.get("text", "") for o in question.options if isinstance(o, dict)}
             kwargs["initial"] = {
+                "detected_type": question.detected_type,
                 "question_text": question.question_text, "correct_option": question.correct_option,
                 "positive_marks": question.positive_marks, "negative_marks": question.negative_marks,
                 "explanation": question.explanation, "reviewed": not question.is_flagged,
+                "visible_crop_choices": [o.get("key") for o in question.options
+                                         if isinstance(o, dict) and o.get("visible_in_crop") is True],
                 **{f"option_{k}": options.get(k, "") for k in "ABCDE"},
             }
         super().__init__(*args, **kwargs)
+        self.fields["visible_crop_choices"].widget.attrs.pop("class", None)
         add_tables_editor(self, question)
 
     def available_option_keys(self, cleaned, figures):
-        return [k for k in "ABCDE" if cleaned.get(f"option_{k}", "").strip()
-                or any(f.option_key == k and f.private_image for f in figures)]
+        keys = {k for k in "ABCDE" if cleaned.get(f"option_{k}", "").strip()
+                or any(f.option_key == k and f.private_image for f in figures)}
+        selected = set(cleaned.get("visible_crop_choices") or [])
+        has_crop = (self.question.paper.image_first and self.question.is_image_first
+                    and any(f.source == "question_crop" and not f.option_key and f.private_image for f in figures))
+        if selected and not has_crop:
+            self.add_error("visible_crop_choices", "Add an original question crop in image-first mode before checking labels.")
+        elif has_crop:
+            keys.update(selected)
+        return sorted(keys)
 
     def clean(self):
         cleaned = clean_tables_editor(self, super().clean())
@@ -219,4 +231,8 @@ class PracticeQuestionForm(BootstrapFormMixin, forms.Form):
             raise ValidationError(self.option_error_message)
         if cleaned.get("correct_option") and cleaned["correct_option"] not in keys:
             self.add_error("correct_option", "Select an existing option, or leave the answer key blank.")
+        question_type = cleaned.get("detected_type") or self.question.detected_type
+        cleaned["detected_type"] = question_type
+        if question_type != ExtractedQuestion.DetectedType.SINGLE and cleaned.get("correct_option"):
+            self.add_error("correct_option", "A single-choice key cannot grade this question type. Leave it blank or review the type.")
         return cleaned

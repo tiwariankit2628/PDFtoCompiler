@@ -27,6 +27,7 @@
         </div>
     </div>
 
+    {% if partial_attempts %}<div class="alert alert-info small">{{ partial_attempts }} completed attempt{{ partial_attempts|pluralize }} with missing or unsupported keys remain unranked and are excluded from score and pass-rate statistics.</div>{% endif %}
     <!-- Cohort Summary Metrics Grid -->
     <div class="row g-3 mb-4">
         <div class="col-6 col-md-3">
@@ -38,19 +39,19 @@
         <div class="col-6 col-md-3">
             <div class="card h-100 p-3 border-0 shadow-sm rounded-4 text-center">
                 <span class="text-muted small mb-1">Highest Score</span>
-                <h3 class="fw-bold text-success mb-0">{{ highest_score }} <small class="fs-6 text-muted">/ {{ exam.total_marks }}</small></h3>
+                <h3 class="fw-bold text-success mb-0">{% if ranked_attempts %}{{ highest_score }} <small class="fs-6 text-muted">/ {{ exam.total_marks }}</small>{% else %}—{% endif %}</h3>
             </div>
         </div>
         <div class="col-6 col-md-3">
             <div class="card h-100 p-3 border-0 shadow-sm rounded-4 text-center">
                 <span class="text-muted small mb-1">Class Average</span>
-                <h3 class="fw-bold text-dark mb-0">{{ avg_score }}</h3>
+                <h3 class="fw-bold text-dark mb-0">{% if ranked_attempts %}{{ avg_score }}{% else %}—{% endif %}</h3>
             </div>
         </div>
         <div class="col-6 col-md-3">
             <div class="card h-100 p-3 border-0 shadow-sm rounded-4 text-center">
-                <span class="text-muted small mb-1">Pass Benchmark</span>
-                <h3 class="fw-bold text-primary mb-0">{{ pass_percentage }}%</h3>
+                <span class="text-muted small mb-1">Pass Rate</span>
+                <h3 class="fw-bold text-primary mb-0">{% if ranked_attempts %}{{ pass_percentage }}%{% else %}—{% endif %}</h3>
             </div>
         </div>
     </div>
@@ -82,7 +83,7 @@
     <div class="card border-0 shadow-sm rounded-4 overflow-hidden mb-4">
         <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
             <h5 class="fw-bold text-dark mb-0">Ranked Standings (Top Candidates)</h5>
-            <span class="badge bg-light text-dark border">{{ total_candidates }} Evaluated Submissions</span>
+            <span class="badge bg-light text-dark border">{{ ranked_attempts }} Ranked Submissions</span>
         </div>
         <div class="table-responsive">
             <table class="table table-hover align-middle mb-0">

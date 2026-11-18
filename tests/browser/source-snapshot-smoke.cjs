@@ -42,6 +42,18 @@ const assert = require('assert');
       return images.length === expected && images.every(image => image.complete && image.naturalWidth > 0);
     }, count);
     assert.strictEqual(await page.locator('.option-card').count(), 4);
+    const statement = page.locator('#question-statement-box');
+    const assertAccessibleTextOnly = async () => {
+      assert.strictEqual(await page.locator('#question-accessibility, #question-accessibility-summary').count(), 0,
+        'A normal image-first test must not show a text/source toggle');
+      assert(await statement.evaluate(el => el.classList.contains('visually-hidden') && !el.hidden && !el.closest('[aria-hidden="true"]')),
+        'Extracted text must remain available to assistive technology');
+      assert((await statement.ariaSnapshot()).trim(), 'Extracted text must be present in the accessibility tree');
+    };
+    const assertVisibleFallback = async () => {
+      assert(await statement.isVisible());
+      assert(!(await statement.evaluate(el => el.classList.contains('visually-hidden'))));
+    };
 
     if (publicExam) {
       // A teacher-created exam uses public image storage and explicit saving,
@@ -51,11 +63,7 @@ const assert = require('assert');
       await waitForCrops(1);
       await assertNoDefaultSources();
       assert.deepStrictEqual(await page.locator('.option-card .option-badge').allTextContents(), ['A', 'B', 'C', 'D']);
-      await page.locator('#toggle-source-regions').click();
-      await page.getByText('Original question region', {exact: false}).waitFor({state: 'visible'});
-      await page.getByText('Original answer choices', {exact: false}).waitFor({state: 'visible'});
-      await page.waitForFunction(() => [...document.querySelectorAll('#question-diagram-box img')].every(image => image.complete && image.naturalWidth > 0));
-      await page.locator('#toggle-source-regions').click();
+      await assertAccessibleTextOnly();
       await page.locator('.option-card').nth(2).click();
       assert(![...requestedUrls].some(url => url.includes('/save-answer/')), 'Teacher exam changed to automatic saving');
       const [saved] = await Promise.all([
@@ -74,21 +82,14 @@ const assert = require('assert');
         page.locator('#btn-confirm-submit').click(),
       ]);
     } else if (parallelImage) {
-      // A separately captured language is not duplicated by default, but is
-      // still available alongside the original fixed-order answer choices.
+      // A separately captured language is not duplicated by default. Its
+      // saved source remains available automatically if the original fails.
       assert(payload[0].image_first && payload[0].crop_urls.length > 0);
       assert(payload[0].source_images.some(source => source.kind === 'parallel-source'));
       await waitForCrops(payload[0].crop_urls.length);
       await assertNoDefaultSources();
+      await assertAccessibleTextOnly();
       assert.deepStrictEqual(await page.locator('.option-card .option-badge').allTextContents(), ['A', 'B', 'C', 'D']);
-      await page.locator('#toggle-source-regions').click();
-      const region = page.locator('img[alt="Other original-language region"]');
-      await region.waitFor({state: 'visible'});
-      await page.waitForFunction(() => {
-        const image = document.querySelector('img[alt="Other original-language region"]');
-        return image && image.complete && image.naturalWidth > 0;
-      });
-      assert(await page.getByText('1=A, 2=B', {exact: false}).first().isVisible());
       const [saved] = await Promise.all([
         page.waitForResponse(response => response.url().includes('/save-answer/') && response.request().method() === 'POST'),
         page.locator('.option-card').filter({hasText: 'English 1-2'}).click(),
@@ -112,16 +113,15 @@ const assert = require('assert');
       assert.deepStrictEqual(await page.locator('.option-card .option-badge').allTextContents(), ['A', 'B', 'C', 'D']);
       assert(/^\d{2}:\d{2}:\d{2}$/.test((await page.locator('#exam-timer').textContent()).trim()));
 
-      // The continuation can be zoomed independently. Source snapshots from
-      // both pages are still accessible when the reader requests them.
-      await page.locator('#question-crop-box img').nth(1).click();
+      // The continuation can be zoomed independently by keyboard; source
+      // snapshots remain stored and will appear automatically on failure.
+      await page.locator('.crop-zoom-trigger').nth(1).focus();
+      await page.keyboard.press('Enter');
       assert(await page.locator('#crop-zoom-overlay').isVisible());
       assert.strictEqual(await page.locator('#crop-zoom-img').getAttribute('src'), payload[0].crop_urls[1]);
       await page.keyboard.press('Escape');
-      await page.locator('#toggle-source-regions').click();
-      assert.strictEqual(await page.locator('#question-diagram-box figcaption').filter({hasText: 'Original answer choices'}).count(), 2);
-      await page.waitForFunction(() => [...document.querySelectorAll('#question-diagram-box img')].every(image => image.complete && image.naturalWidth > 0));
-      await page.locator('#toggle-source-regions').click();
+      assert(await page.locator('.crop-zoom-trigger').nth(1).evaluate(el => el === document.activeElement));
+      await assertAccessibleTextOnly();
       assert.strictEqual(await page.locator('#question-diagram-box img').count(), 0);
 
       const [saved] = await Promise.all([
@@ -148,7 +148,7 @@ const assert = require('assert');
         delete window.oldQuestionCropForTest;
       });
       assert.strictEqual((await page.locator('#crop-instruction').textContent()).trim(), 'Tap the image to zoom. Choose your answer below.');
-      assert(!(await page.locator('#question-statement-box').isVisible()));
+      await assertAccessibleTextOnly();
       assert.strictEqual(await page.locator('#question-diagram-box img').count(), 0);
       assert.strictEqual(await page.locator('#palette-btn-1').getAttribute('aria-current'), 'true');
 
@@ -164,9 +164,8 @@ const assert = require('assert');
       assert.strictEqual(sameQuestion.status(), 200);
       await page.getByText('An original image could not be loaded', {exact: false}).waitFor({state: 'visible'});
       assert.strictEqual((await page.locator('#crop-instruction').textContent()).trim(), 'An original image could not be loaded. Showing available text.');
-      assert(await page.locator('#question-statement-box').isVisible());
+      await assertVisibleFallback();
       assert(!(await page.locator('#question-crop-box').isVisible()));
-      assert(!(await page.locator('#toggle-source-regions').isVisible()));
       assert.strictEqual(await page.locator('#question-diagram-box img').count(), 0);
       assert.strictEqual(await page.locator('.option-card').count(), 4);
       await page.unroute(secondQuestionCrop);
@@ -198,9 +197,8 @@ const assert = require('assert');
       await page.getByText('An original image could not be loaded', {exact: false}).waitFor({state: 'visible'});
       await waitForCrops(1);
       assert.strictEqual(await page.locator('#question-crop-box img').first().getAttribute('src'), payload[0].crop_urls[0]);
-      assert(await page.locator('#question-statement-box').isVisible());
+      await assertVisibleFallback();
       assert.strictEqual(await page.locator('#question-diagram-box figcaption').filter({hasText: 'Original answer choices'}).count(), 2);
-      assert.strictEqual(await page.locator('#toggle-source-regions').getAttribute('aria-expanded'), 'true');
       assert.strictEqual(await page.locator('.option-card.selected .option-badge').textContent(), 'D');
       await page.unroute(continuationUrl);
       await page.reload();
@@ -209,23 +207,23 @@ const assert = require('assert');
       assert.strictEqual(await page.locator('#question-diagram-box img').count(), 0);
     } else if (partial) {
       // A valid but incomplete crop cannot be detected from image loading.
-      // Its second page is still available through the visible fallback control.
+      // Its second page is shown automatically via the fallback.
       assert(payload[0].image_first);
       assert.strictEqual(payload[0].crop_urls.length, 1);
       assert.strictEqual(payload[0].source_images.filter(source => source.kind === 'option-source').length, 2);
       await waitForCrops(1);
-      await assertNoDefaultSources();
+      assert(payload[0].missing_crop_pages.length > 0);
+      await assertVisibleFallback();
+      assert((await page.locator('#crop-instruction').textContent()).includes('missing a continuation'));
       assert.strictEqual(await page.locator('.option-card.selected .option-badge').textContent(), 'D');
-      assert((await page.locator('#toggle-source-regions').textContent()).includes('Missing part?'));
-      await page.locator('#toggle-source-regions').click();
       assert.strictEqual(await page.locator('#question-diagram-box figcaption').filter({hasText: 'Original answer choices'}).count(), 2);
       await page.waitForFunction(() => [...document.querySelectorAll('#question-diagram-box img')].every(image => image.complete && image.naturalWidth > 0));
     } else if (parallel || missingCrop) {
       // Text-mode questions (including an image-first item with no saved crop)
       // still show the source images automatically, without a hidden fallback.
       assert.strictEqual(payload[0].image_first, false);
-      assert(await page.locator('#question-statement-box').isVisible());
-      assert(!(await page.locator('#toggle-source-regions').isVisible()));
+      await assertVisibleFallback();
+      assert.strictEqual(await page.locator('#question-accessibility-summary').count(), 0);
       const caption = parallel ? 'Other original-language region' : 'Original answer choices';
       await page.getByText(caption, {exact: false}).waitFor({state: 'visible'});
       await page.waitForFunction((label) => {
@@ -258,27 +256,14 @@ const assert = require('assert');
       await assertNoDefaultSources();
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1));
       assert.deepStrictEqual(await page.locator('.option-card .option-badge').allTextContents(), ['A', 'B', 'C', 'D']);
-      assert(await page.locator('#toggle-ocr-text').isVisible());
-      await page.locator('#toggle-ocr-text').click();
-      assert(await page.locator('#question-statement-box').isVisible());
-      await page.locator('#toggle-ocr-text').click();
-      assert(!(await page.locator('#question-statement-box').isVisible()));
+      await assertAccessibleTextOnly();
       await main.click();
       assert(await page.locator('#crop-zoom-overlay').isVisible());
       await page.keyboard.press('Escape');
       assert(!(await page.locator('#crop-zoom-overlay').isVisible()));
       assert(await page.locator('.crop-zoom-trigger').first().evaluate(el => el === document.activeElement));
 
-      // Optional source fallback remains available for incomplete originals.
-      const sourceToggle = page.locator('#toggle-source-regions');
-      assert(await sourceToggle.isVisible());
-      assert.strictEqual(await sourceToggle.getAttribute('aria-expanded'), 'false');
-      await sourceToggle.click();
-      assert.strictEqual(await sourceToggle.getAttribute('aria-expanded'), 'true');
-      await page.getByText('Original question region', {exact: false}).waitFor({state: 'visible'});
-      await page.getByText('Original answer choices', {exact: false}).waitFor({state: 'visible'});
-      await sourceToggle.click();
-      assert.strictEqual(await sourceToggle.getAttribute('aria-expanded'), 'false');
+      // No extra controls or duplicate sources clutter a healthy image.
       assert.strictEqual(await page.locator('#question-diagram-box img').count(), 0);
 
       // The answer, timer and clean layout survive resizing and reload.
@@ -302,9 +287,8 @@ const assert = require('assert');
       await page.reload();
       await page.locator('#fs-continue-windowed').click();
       await page.getByText('An original image could not be loaded', {exact: false}).waitFor({state: 'visible'});
-      assert(await page.locator('#question-statement-box').isVisible());
+      await assertVisibleFallback();
       assert(await page.getByText('Original answer choices', {exact: false}).isVisible());
-      assert.strictEqual(await page.locator('#toggle-source-regions').getAttribute('aria-expanded'), 'true');
       assert.strictEqual(await page.locator('.option-card.selected .option-badge').textContent(), 'B');
       await page.unroute(primaryUrl);
       await page.reload();

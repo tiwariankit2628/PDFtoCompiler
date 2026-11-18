@@ -20,6 +20,7 @@ from django.views import View
 from apps.core.permissions import TeacherRequiredMixin
 from apps.core.utils import log_audit
 from apps.exams.models import Category, ClassroomSession, Exam, ExamQuestion
+from .answer_key_validation import edited_answer_status, staged_question_signature
 from .classroom_forms import ClassroomCreateForm, ClassroomPaperUploadForm, ClassroomQuestionForm
 from .extractor import PDFQuestionExtractor
 from .figure_utils import page_image, validate_box
@@ -28,6 +29,7 @@ from .models import (AnswerStatus, ExtractedFigure, ExtractedQuestion, Question,
                      QuestionFigure, QuestionOption, QuestionPaperUpload)
 from .practice_forms import practice_question_error
 from .practice_views import _open_private_pdf, _private_file_response
+from .presentation import answer_key_preview_questions, decorate_staged_question, user_diagnostic
 from .private_storage import private_practice_storage
 
 
@@ -113,14 +115,18 @@ def _review_context(paper, form=None):
     questions = list(paper.extracted_questions.prefetch_related("figures").order_by("question_number", "id"))
     included = [q for q in questions if q.include_in_practice]
     for question in questions:
+        decorate_staged_question(question, image_first=paper.image_first, private=True)
         question.practice_error = practice_question_error(question, allow_confirmed_crop_choices=True)
     unassigned = paper.figures.filter(question__isnull=True).count()
     return {
         "paper": paper, "questions": questions, "total_questions": len(included),
+        "answer_key_preview_questions": answer_key_preview_questions(included),
         "total_marks": sum((q.positive_marks for q in included), Decimal("0.00")),
-        "keyed_count": sum(bool(q.correct_option and q.answer_status == AnswerStatus.MANUALLY_VERIFIED) for q in included),
+        "keyed_count": sum(bool(q.correct_option and q.answer_status == AnswerStatus.MANUALLY_VERIFIED
+                                 and q.detected_type == ExtractedQuestion.DetectedType.SINGLE) for q in included),
         "flagged_count": sum(q.is_flagged for q in included), "unassigned_figure_count": unassigned,
-        "extraction_warnings": [line.removeprefix("Warning: ") for line in paper.extraction_log.splitlines() if line.startswith("Warning: ")],
+        "extraction_warnings": [user_diagnostic(line.removeprefix("Warning: ")) for line in paper.extraction_log.splitlines() if line.startswith("Warning: ")],
+        "extraction_log_display": user_diagnostic(paper.extraction_log),
         "form": form if form is not None else ClassroomCreateForm(questions=included, unassigned_count=unassigned),
     }
 
@@ -244,6 +250,7 @@ class ClassroomQuestionEditView(PrivateClassroomMixin, View):
             if not form.is_valid():
                 return render(request, "questions/classroom_question_edit.html", {"question": question, "form": form})
             data = form.cleaned_data
+            previous_content = staged_question_signature(question)
             figure_keys = {f.option_key for f in question.figures.all() if f.private_image}
             question.question_number = data["question_number"]
             question.detected_type = data["detected_type"]
@@ -254,8 +261,10 @@ class ClassroomQuestionEditView(PrivateClassroomMixin, View):
                 {"key": k, "text": data[f"option_{k}"].strip(), "visible_in_crop": k in crop_keys}
                 for k in "ABCDE" if data[f"option_{k}"].strip() or k in figure_keys or k in crop_keys
             ]
+            question.answer_status = edited_answer_status(question.correct_option, question.answer_status,
+                data["correct_option"], data["confirm_answer_key"], AnswerStatus.MANUALLY_VERIFIED,
+                content_changed=previous_content != staged_question_signature(question))
             question.correct_option = data["correct_option"]
-            question.answer_status = AnswerStatus.MANUALLY_VERIFIED if question.correct_option else AnswerStatus.NEEDS_REVIEW
             question.positive_marks = data["positive_marks"]
             question.negative_marks = data["negative_marks"]
             question.explanation = data["explanation"]
@@ -263,7 +272,10 @@ class ClassroomQuestionEditView(PrivateClassroomMixin, View):
             question.flag_reason = "" if data["reviewed"] else "Not yet checked against the source."
             question.status = ExtractedQuestion.Status.REVIEWED
             question.save()
-        messages.success(request, "Question saved. Previously created tests remain unchanged.")
+        if question.correct_option and question.answer_status != AnswerStatus.MANUALLY_VERIFIED:
+            messages.warning(request, "Question saved. Its answer remains unconfirmed and will be ungraded until you check it.")
+        else:
+            messages.success(request, "Question saved. Previously created tests remain unchanged.")
         return redirect("questions:classroom_paper_review", pk=paper.pk)
 
 
@@ -408,7 +420,8 @@ class ClassroomFigureManageView(PrivateClassroomMixin, View):
                     raise ValueError("Unknown image operation.")
                 question.is_flagged = True
                 question.flag_reason = "Image assignment changed; check the question against the source."
-                question.save(update_fields=["options", "is_flagged", "flag_reason"])
+                question.answer_status = AnswerStatus.NEEDS_REVIEW
+                question.save(update_fields=["options", "is_flagged", "flag_reason", "answer_status"])
             except ValueError as exc:
                 messages.error(request, str(exc))
                 return redirect("questions:classroom_figures", pk=question.pk)
@@ -445,7 +458,8 @@ class ClassroomFigurePoolView(PrivateClassroomMixin, View):
                     _ensure_option(question, target)
                     question.is_flagged = True
                     question.flag_reason = "Image assignment changed; check against the source."
-                    question.save(update_fields=["options", "is_flagged", "flag_reason"])
+                    question.answer_status = AnswerStatus.NEEDS_REVIEW
+                    question.save(update_fields=["options", "is_flagged", "flag_reason", "answer_status"])
                 else:
                     raise ValueError("Choose an image action.")
             except ValueError as exc:

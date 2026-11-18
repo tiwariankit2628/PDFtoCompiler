@@ -1,0 +1,10 @@
+<div class="d-flex flex-wrap align-items-end gap-2 mb-3" data-question-filters>
+  <div class="d-flex flex-wrap gap-2" role="group" aria-label="Filter questions">
+    <button type="button" class="btn btn-sm btn-cbt-primary" data-question-filter="all" aria-pressed="true">All questions</button>
+    <button type="button" class="btn btn-sm btn-cbt-outline" data-question-filter="review" aria-pressed="false">Needs review</button>
+    <button type="button" class="btn btn-sm btn-cbt-outline" data-question-filter="missing-key" aria-pressed="false">Missing key</button>
+  </div>
+  <div><label class="visually-hidden" for="review-question-number">Find question number</label><input class="form-control form-control-sm" id="review-question-number" type="number" min="1" placeholder="Find question #" data-question-search></div>
+  <span class="small text-muted" role="status" aria-live="polite" data-question-count></span>
+</div>
+<style>[data-review-question][hidden] { display: none !important; }</style>

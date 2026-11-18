@@ -1,10 +1,12 @@
 """Phase 7 regression coverage: results, bank versioning, quotas and privacy."""
+import io
 import json
 import os
 import tempfile
 from decimal import Decimal
 
 import pymupdf as fitz
+from PIL import Image, ImageDraw
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -33,9 +35,10 @@ class PracticePhase7Tests(TestCase):
         self.client.force_login(self.student)
         self.free = PracticePlan.objects.get(is_default=True)
 
-    def upload(self, title="Science"):
+    def upload(self, title="Science", *, image_first=False):
         response = self.client.post(reverse("questions:practice_upload"), {
-            "title": title, "subject": "Physics", "pdf_file": SimpleUploadedFile("test.pdf", make_two_column_pdf(), content_type="application/pdf")})
+            "title": title, "subject": "Physics", "image_first": "on" if image_first else "",
+            "pdf_file": SimpleUploadedFile("test.pdf", make_two_column_pdf(), content_type="application/pdf")})
         self.assertEqual(response.status_code, 302)
         paper = QuestionPaperUpload.objects.get(title=title, uploaded_by=self.student)
         for question in paper.extracted_questions.filter(include_in_practice=True).prefetch_related("figures"):
@@ -45,7 +48,7 @@ class PracticePhase7Tests(TestCase):
 
     def create_exam(self, paper, keys="", target="40"):
         response = self.client.post(reverse("questions:practice_settings", args=[paper.pk]), {
-            "duration_minutes": "30", "passing_percentage": target, "answer_key_text": keys,
+            "duration_minutes": "30", "passing_percentage": target, "answer_key_text": keys, "confirm_answer_key": "on",
             "acknowledge_review": "on", "acknowledge_unassigned": "on"})
         self.assertEqual(response.status_code, 302)
         paper.refresh_from_db()
@@ -190,6 +193,137 @@ class PracticePhase7Tests(TestCase):
         self.client.force_login(self.other)
         self.assertEqual(self.client.get(reverse("questions:practice_report", args=[attempt.attempt_uuid])).status_code, 404)
 
+    def test_practice_report_keeps_tall_original_image_within_page(self):
+        paper = self.upload("Tall report", image_first=True)
+        exam = self.create_exam(paper)
+        attempt = self.start(exam)
+        response = attempt.responses.first()
+        question = response.exam_question.question
+        crop = question.figures.filter(source="question_crop").first()
+        self.assertIsNotNone(crop)
+        # Synthetic tall original with distinct top and bottom bands.
+        image = Image.new("RGB", (400, 1200), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((0, 0, 399, 100), fill="red")
+        draw.rectangle((0, 1100, 399, 1199), fill="blue")
+        buffer = io.BytesIO(); image.save(buffer, "PNG")
+        crop.private_image.save("tall-original.png", SimpleUploadedFile("tall-original.png", buffer.getvalue()), save=True)
+        self.submit(attempt)
+        report = self.client.get(reverse("questions:practice_report", args=[attempt.attempt_uuid]))
+        with fitz.open(stream=report.content, filetype="pdf") as document:
+            rectangles = []
+            for page in document:
+                for info in page.get_images(full=True):
+                    if info[2:4] == (400, 1200):
+                        rectangles.extend((page.rect, rect) for rect in page.get_image_rects(info[0]))
+            self.assertTrue(rectangles, "The original question image was omitted from the report")
+            for page_rect, rect in rectangles:
+                self.assertTrue(page_rect.contains(rect), f"Original image extends outside the page: {rect}")
+                self.assertAlmostEqual(rect.width / rect.height, 1 / 3, delta=.02)
+
+    def test_practice_saved_keys_survive_deleted_options_and_later_key_edits(self):
+        paper = self.upload()
+        first = paper.extracted_questions.filter(include_in_practice=True).first()
+        exam = self.create_exam(paper, f"{first.question_number}: A")
+        attempt = self.start(exam)
+        response = attempt.responses.first()
+        q = response.exam_question.question
+        self.submit(attempt, response, q.options.get(option_key="A"))
+        response.refresh_from_db()
+        self.assertTrue(response.key_confirmed_at_grading)
+        self.assertEqual((response.selected_option_key_at_grading, response.correct_option_key_at_grading), ("A", "A"))
+        q.options.get(option_key="A").delete()
+        q.options.filter(option_key="B").update(is_correct=True)
+        result = self.client.get(reverse("questions:practice_result", args=[attempt.attempt_uuid]))
+        row = result.context["rows"][0]
+        self.assertEqual(row["status"], "correct")
+        self.assertIsNone(row["correct"])
+        self.assertEqual((row["saved_choice"], row["saved_key"]), ("A", "A"))
+        self.assertContains(result, "Choice when graded: <strong>A</strong>")
+        self.assertContains(result, "Key when graded: <strong>A</strong>")
+        report = self.client.get(reverse("questions:practice_report", args=[attempt.attempt_uuid]))
+        with fitz.open(stream=report.content, filetype="pdf") as document:
+            text = " ".join(page.get_text() for page in document)
+        self.assertIn("Key when graded: A", text)
+
+    def test_legacy_practice_result_does_not_guess_original_key_or_regrade(self):
+        paper = self.upload()
+        first = paper.extracted_questions.filter(include_in_practice=True).first()
+        exam = self.create_exam(paper, f"{first.question_number}: A")
+        attempt = self.start(exam)
+        response = attempt.responses.first()
+        q = response.exam_question.question
+        self.submit(attempt, response, q.options.get(option_key="A"))
+        attempt.refresh_from_db(); old_score = attempt.score_obtained
+        attempt.responses.update(key_confirmed_at_grading=None, correct_option_key_at_grading=None,
+                                 selected_option_key_at_grading=None)
+        q.options.update(is_correct=False)
+        q.options.filter(option_key="B").update(is_correct=True)
+        q.explanation = "CURRENT EXPLANATION NOT HISTORICAL"
+        q.save(update_fields=["explanation"])
+        result = self.client.get(reverse("questions:practice_result", args=[attempt.attempt_uuid]))
+        row = result.context["rows"][0]
+        self.assertEqual(row["status"], "correct")
+        self.assertIsNone(row["saved_key"])
+        self.assertIsNone(row["correct"])
+        self.assertEqual(row["explanation"], "")
+        self.assertIsNone(result.context["graded_marks"])
+        self.assertContains(result, "did not record its key details")
+        self.assertNotContains(result, "CURRENT EXPLANATION NOT HISTORICAL")
+        attempt.refresh_from_db(); self.assertEqual(attempt.score_obtained, old_score)
+        report = self.client.get(reverse("questions:practice_report", args=[attempt.attempt_uuid]))
+        with fitz.open(stream=report.content, filetype="pdf") as document:
+            text = " ".join(page.get_text() for page in document)
+        self.assertIn("original graded maximum were not recorded", text)
+        self.assertNotIn("CURRENT EXPLANATION NOT HISTORICAL", text)
+
+    def test_private_bank_recrop_versions_images_and_requires_key_recheck(self):
+        paper = self.upload("Image bank", image_first=True)
+        staged = paper.extracted_questions.filter(include_in_practice=True).first()
+        self.assertTrue(staged.figures.filter(source="question_crop").exists())
+        staged.crop_warning = "This crop may contain a printed answer."
+        staged.save(update_fields=["crop_warning"])
+        exam = self.create_exam(paper, f"{staged.question_number}: A")
+        attempt = self.start(exam)
+        response = attempt.responses.first()
+        original = response.exam_question.question
+        original_image = original.figures.get(source="question_crop")
+        original_name = original_image.private_image.name
+        self.submit(attempt, response, original.options.get(option_key="A"))
+        listing = self.client.get(reverse("questions:practice_bank"))
+        self.assertContains(listing, "This crop may contain a printed answer")
+        self.assertContains(listing, "Images / recrop")
+        url = reverse("questions:practice_bank_images", args=[original.pk])
+        self.assertContains(self.client.get(url), "Crop from the original PDF")
+        invalid = self.client.post(url, {"action": "crop", "replace_id": original_image.pk,
+                                        "page_number": "1", "x0": ".8", "y0": ".8", "x1": ".2", "y1": ".2"})
+        self.assertEqual(invalid.status_code, 302)
+        original.refresh_from_db(); self.assertFalse(original.is_bank_archived)
+        saved = self.client.post(url, {"action": "crop", "replace_id": original_image.pk,
+                                      "page_number": "1", "x0": ".05", "y0": ".05", "x1": ".9", "y1": ".5"})
+        self.assertEqual(saved.status_code, 302)
+        original.refresh_from_db(); self.assertTrue(original.is_bank_archived)
+        self.assertEqual(original.figures.get(pk=original_image.pk).private_image.name, original_name)
+        revised = Question.objects.get(creator=self.student, source_paper=paper, is_bank_archived=False,
+                                       source_extracted_item__pk=staged.pk)
+        new_crop = revised.figures.get(source="question_crop")
+        self.assertNotEqual(new_crop.private_image.name, original_name)
+        self.assertFalse(revised.key_verified)
+        self.assertTrue(revised.options.get(option_key="A").is_correct)  # retained as a suggestion
+        result = self.client.get(reverse("questions:practice_result", args=[attempt.attempt_uuid]))
+        self.assertEqual(result.context["counts"]["correct"], 1)
+        self.assertContains(result, "Confirmed key")
+        revised_url = reverse("questions:practice_bank_images", args=[revised.pk])
+        self.client.force_login(self.other)
+        self.assertEqual(self.client.get(revised_url).status_code, 404)
+        self.assertEqual(self.client.get(reverse("questions:practice_bank_figure", args=[new_crop.pk])).status_code, 404)
+        self.client.force_login(self.student)
+        edit = self.client.post(reverse("questions:practice_bank_edit", args=[revised.pk]),
+                                self.bank_edit_data(revised, correct_option="A", confirm_answer_key="on"))
+        self.assertEqual(edit.status_code, 302)
+        revised.refresh_from_db(); self.assertTrue(revised.key_verified)
+        self.assertEqual(attempt.responses.get(pk=response.pk).selected_option.option_key, "A")
+
     def test_bank_copy_on_write_and_paper_delete_preserve_other_test(self):
         paper = self.upload()
         first = paper.extracted_questions.filter(include_in_practice=True).first()
@@ -201,7 +335,7 @@ class PracticePhase7Tests(TestCase):
         original_option = original.options.get(option_key="A")
         self.submit(attempt, response, original_option)
         edit = self.client.post(reverse("questions:practice_bank_edit", args=[original.pk]),
-                                self.bank_edit_data(original, question_text="Edited future question", option_B="New B"))
+                                self.bank_edit_data(original, question_text="Edited future question", option_B="New B", confirm_answer_key="on"))
         self.assertEqual(edit.status_code, 302)
         original.refresh_from_db()
         self.assertTrue(original.is_bank_archived)

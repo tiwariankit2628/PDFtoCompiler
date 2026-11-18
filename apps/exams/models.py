@@ -353,6 +353,10 @@ class ExamAttempt(models.Model):
 
     @property
     def answered_count(self):
+        if self.status in self.FINAL_STATUSES:
+            return self.responses.filter(models.Q(selected_option__isnull=False)
+                                         | models.Q(selected_option_key_at_grading__isnull=False)
+                                         | models.Q(is_correct__isnull=False)).count()
         return self.responses.filter(selected_option__isnull=False).count()
 
     @property
@@ -371,8 +375,28 @@ class ExamAttempt(models.Model):
     def uses_confirmed_key_only(self):
         """Classroom and private-practice attempts grade only teacher/student
         confirmed keys; a missing key is 'awaiting key', never a wrong answer.
-        Ordinary institutional exams keep grading every assigned question."""
+        Ordinary single-correct institutional questions retain their existing
+        grading rules; PDF-derived and unsupported types are guarded as well."""
         return self.exam.is_private_practice or self.classroom_session_id is not None
+
+    @property
+    def has_ungraded_keys(self):
+        """Whether a recorded grading snapshot includes an unavailable key."""
+        return self.responses.filter(key_confirmed_at_grading=False).exists()
+
+    @property
+    def has_legacy_pdf_key_snapshots(self):
+        """Older PDF attempts retain their recorded scores but lack key labels."""
+        return self.responses.filter(exam_question__question__is_pdf_derived=True,
+                                     key_confirmed_at_grading__isnull=True).exists()
+
+    @property
+    def graded_possible_marks(self):
+        """Possible marks excluding ungraded questions, if the key status is known."""
+        if self.has_legacy_pdf_key_snapshots:
+            return None
+        return sum((r.exam_question.positive_marks for r in
+                    self.responses.select_related("exam_question").exclude(key_confirmed_at_grading=False)), Decimal("0.00"))
 
     def evaluate_attempt(self):
         """
@@ -387,32 +411,33 @@ class ExamAttempt(models.Model):
         incorr = 0
         unatt = 0
         graded_marks = Decimal("0.00")
-        all_private_keys_verified = True
-        responses = self.responses.select_related("exam_question__question", "selected_option")
-        if confirmed:
-            responses = responses.prefetch_related("exam_question__question__options")
+        all_required_keys_verified = True
+        responses = self.responses.select_related("exam_question__question", "selected_option").prefetch_related(
+            "exam_question__question__options")
 
         for resp in responses.all():
             # Student PDFs commonly contain no answer key. Never interpret a
             # missing key as an incorrect answer or invent the correct choice.
             question = resp.exam_question.question
-            # A confirmed key is a student-confirmed key (key_verified) OR a
-            # teacher-confirmed key (answer_status 'manually_verified'), with
-            # exactly one correct option. A missing key is never a wrong answer.
-            key_confirmed = question.key_verified or question.answer_status == "manually_verified"
-            correct_options = [opt for opt in question.options.all() if opt.is_correct] if confirmed else []
-            has_key = not confirmed or (key_confirmed and len(correct_options) == 1)
-            if self.classroom_session_id:
-                # Historical key state cannot be reconstructed from a question
-                # that a teacher may later edit. Record it with the evaluation;
-                # existing attempts deliberately remain unknown rather than
-                # being guessed or silently regraded by a data migration.
+            # A private key is student-confirmed; a classroom/public PDF key is
+            # teacher-confirmed. Unsupported types are never scored as if one
+            # option represented the whole answer, even outside PDF workflows.
+            correct_options = [opt for opt in question.options.all() if opt.is_correct]
+            guarded = (confirmed or question.is_pdf_derived or question.question_type != "mcq_single"
+                       or len(correct_options) != 1)
+            key_confirmed = (question.key_verified if question.is_private_practice
+                             else question.answer_status == "manually_verified")
+            has_key = not guarded or (key_confirmed and question.question_type == "mcq_single" and len(correct_options) == 1)
+            snapshot_key = guarded
+            if snapshot_key:
+                # Preserve the actual decision for PDF and classroom questions;
+                # a later key edit must not rewrite a past attempt's outcome.
                 resp.key_confirmed_at_grading = has_key
                 resp.correct_option_key_at_grading = correct_options[0].option_key if has_key else None
                 resp.selected_option_key_at_grading = resp.selected_option.option_key if resp.selected_option else None
-            if confirmed and not has_key:
-                all_private_keys_verified = False
-            if has_key and confirmed:
+            if not has_key:
+                all_required_keys_verified = False
+            if has_key:
                 graded_marks += resp.exam_question.positive_marks
             if resp.selected_option is not None and not has_key:
                 resp.is_correct = None
@@ -435,7 +460,7 @@ class ExamAttempt(models.Model):
                 resp.is_correct = None
                 resp.marks_awarded = Decimal("0.00")
             fields = ["is_correct", "marks_awarded"]
-            if self.classroom_session_id:
+            if snapshot_key:
                 fields += ["key_confirmed_at_grading", "correct_option_key_at_grading", "selected_option_key_at_grading"]
             resp.save(update_fields=fields)
 
@@ -451,7 +476,7 @@ class ExamAttempt(models.Model):
         else:
             self.accuracy_percentage = Decimal("0.00")
 
-        total_m = (graded_marks if confirmed else
+        total_m = (graded_marks if confirmed or not all_required_keys_verified else
                    Decimal(str(self.total_marks)) if self.total_marks else Decimal("0.00"))
         if total_m > Decimal("0.00"):
             pct = (net_score / total_m) * Decimal("100.0")
@@ -460,12 +485,12 @@ class ExamAttempt(models.Model):
             self.percentage = Decimal("0.00")
 
         passing_pct = Decimal(str(self.exam.passing_percentage)) if self.exam.passing_percentage else Decimal("0.00")
-        # A confirmed-key-only target (private practice or classroom) is meaningful
-        # only with a complete, confirmed key; it is not an institutional result.
+        # Never report a pass/fail result for a partially keyed paper. Views
+        # show a pending/partial outcome rather than interpreting False as fail.
         if confirmed:
-            self.is_passed = bool(all_private_keys_verified and graded_marks > 0 and passing_pct > 0 and self.percentage >= passing_pct)
+            self.is_passed = bool(all_required_keys_verified and graded_marks > 0 and passing_pct > 0 and self.percentage >= passing_pct)
         else:
-            self.is_passed = self.percentage >= passing_pct
+            self.is_passed = bool(all_required_keys_verified and self.percentage >= passing_pct)
         return self.score_obtained
 
     def recalculate_ranks(self):
@@ -476,16 +501,18 @@ class ExamAttempt(models.Model):
         2. Fewer incorrect questions
         3. Faster completion time
         """
-        attempts = list(
-            self.exam.attempts.filter(
-                classroom_session__isnull=True,
-                status__in=[
-                    self.AttemptStatus.SUBMITTED,
-                    self.AttemptStatus.EVALUATED,
-                    self.AttemptStatus.TIMED_OUT,
-                ]
-            ).order_by("-score_obtained", "incorrect_count", "time_taken_seconds", "started_at")
+        completed = self.exam.attempts.filter(
+            classroom_session__isnull=True,
+            status__in=[self.AttemptStatus.SUBMITTED, self.AttemptStatus.EVALUATED, self.AttemptStatus.TIMED_OUT],
         )
+        # A partial score cannot fairly compete with complete results. Historical
+        # attempts with no key snapshot keep their existing legacy treatment.
+        incomplete = completed.filter(responses__key_confirmed_at_grading=False)
+        incomplete.update(rank=None, percentile=None)
+        if self.has_ungraded_keys:
+            self.rank = self.percentile = None
+        attempts = list(completed.exclude(responses__key_confirmed_at_grading=False).order_by(
+            "-score_obtained", "incorrect_count", "time_taken_seconds", "started_at"))
         total_cohort = len(attempts)
         if total_cohort == 0:
             return
@@ -602,9 +629,9 @@ class ExamResponse(models.Model):
     order = models.PositiveIntegerField("Candidate Display Order", default=0)
     marks_awarded = models.DecimalField("Marks Awarded", max_digits=5, decimal_places=2, default=0.0)
     is_correct = models.BooleanField("Is Correct", null=True, blank=True)
-    # Nullable snapshots for classroom results. NULL means an older record (or
-    # an in-progress response), not an unconfirmed key. Option text remains the
-    # current question version; these fields preserve the grading-time labels.
+    # Nullable grading snapshots for classroom, private-practice and PDF items.
+    # NULL means an older record (or an in-progress response), not an
+    # unconfirmed key. Option text may be edited; these preserve saved labels.
     key_confirmed_at_grading = models.BooleanField(null=True, blank=True, editable=False)
     correct_option_key_at_grading = models.CharField(max_length=10, null=True, blank=True, editable=False)
     selected_option_key_at_grading = models.CharField(max_length=10, null=True, blank=True, editable=False)

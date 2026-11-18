@@ -19,6 +19,7 @@ from django.views.generic import DetailView, ListView
 
 from apps.core.permissions import ActiveUserRequiredMixin, TeacherRequiredMixin
 from apps.core.utils import log_audit
+from apps.questions.presentation import missing_crop_pages, primary_question_crops, use_original_image
 from .analytics import compute_student_attempt_analytics, compute_exam_institutional_analytics
 from .models import Exam, ExamAttempt, ExamResponse
 from .pdf_generator import generate_student_scorecard_pdf
@@ -134,7 +135,10 @@ class StudentResultDetailView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
                 context["security_locked"] = attempt.is_security_locked
             return context
 
-        if can_view_scores:
+        if can_view_scores and attempt.has_ungraded_keys:
+            from .pdf_key_results import partial_pdf_result_summary
+            context["partial_summary"] = partial_pdf_result_summary(attempt)
+        elif can_view_scores:
             analytics = compute_student_attempt_analytics(attempt)
             context["analytics"] = analytics
 
@@ -234,7 +238,12 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
             q = eq.question
             options = list(q.options.all())
             correct_options = [opt for opt in options if opt.is_correct]
-            if attempt.classroom_session_id:
+            # PDF/classroom reviews must use the recorded decision even for
+            # legacy rows with no key-label snapshot. Today's editable key is
+            # not evidence of the key that was used for a past attempt.
+            use_snapshot = bool(attempt.classroom_session_id or q.is_pdf_derived
+                                or r.key_confirmed_at_grading is not None)
+            if use_snapshot:
                 from .classroom_results import classroom_response_status
                 status = classroom_response_status(r)
                 # Never replace an older saved grade with today's editable key.
@@ -244,7 +253,8 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
                 matching = [opt for opt in options if opt.option_key == saved_key] if saved_key is not None else []
                 correct_option = matching[0] if len(matching) == 1 else None
                 current_key_matches = bool(
-                    saved_key is not None and (q.key_verified or q.answer_status == "manually_verified")
+                    saved_key is not None and q.answer_status == "manually_verified"
+                    and q.question_type == "mcq_single"
                     and len(correct_options) == 1 and correct_options[0].option_key == saved_key
                 )
                 explanation = q.explanation if current_key_matches else ""
@@ -263,16 +273,24 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
                 "ungraded": ("Answered, ungraded", "secondary"), "unattempted": ("Unattempted", "secondary"),
             }[status]
 
+            private_images = bool(attempt.classroom_session_id)
+            wants_crop = use_original_image(q, image_first=exam.image_first_mode, private=private_images)
+            primary_crops = primary_question_crops(q, image_first=wants_crop, private=private_images)
+            incomplete_pages = missing_crop_pages(q, primary_crops) if primary_crops else []
             reviewed_questions.append({
                 "response": r,
                 "order": r.order,
                 "section": eq.section,
                 "question": q,
+                "primary_crops": primary_crops,
+                "missing_crop_pages": incomplete_pages,
+                "original_image_missing": bool(wants_crop and not primary_crops),
                 "options": options,
                 "selected_option": r.selected_option,
                 "correct_option": correct_option,
                 "saved_key": saved_key,
-                "saved_choice": r.selected_option_key_at_grading if attempt.classroom_session_id else None,
+                "saved_choice": r.selected_option_key_at_grading if use_snapshot else None,
+                "use_snapshot": use_snapshot,
                 "status": status,
                 "status_label": status_label,
                 "badge_class": badge_class,
@@ -284,6 +302,7 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
             })
 
         context["reviewed_questions"] = reviewed_questions
+        context["has_snapshot_reviews"] = any(item["use_snapshot"] for item in reviewed_questions)
         context["total_reviewed"] = len(reviewed_questions)
         context["correct_total"] = sum(1 for q in reviewed_questions if q["status"] == "correct")
         context["incorrect_total"] = sum(1 for q in reviewed_questions if q["status"] == "incorrect")
@@ -292,6 +311,9 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
         if attempt.classroom_session_id:
             from .classroom_results import classroom_result_summary
             context["classroom_summary"] = classroom_result_summary(attempt)
+        elif attempt.has_ungraded_keys:
+            from .pdf_key_results import partial_pdf_result_summary
+            context["partial_summary"] = partial_pdf_result_summary(attempt)
         return context
 
 
@@ -328,6 +350,10 @@ class StudentResultPdfView(ActiveUserRequiredMixin, PrivateResultRedirectMixin, 
             from .classroom_report import generate_classroom_report
             from .classroom_results import classroom_result_summary
             pdf_bytes = generate_classroom_report(attempt, classroom_result_summary(attempt))
+        elif attempt.has_ungraded_keys:
+            from .classroom_report import generate_classroom_report
+            from .pdf_key_results import partial_pdf_result_summary
+            pdf_bytes = generate_classroom_report(attempt, partial_pdf_result_summary(attempt), title="Partial examination result")
         else:
             analytics = compute_student_attempt_analytics(attempt)
             pdf_bytes = generate_student_scorecard_pdf(attempt, analytics)
@@ -375,6 +401,8 @@ class ExamLeaderboardView(ActiveUserRequiredMixin, DetailView):
         context["highest_score"] = analytics["highest_score"]
         context["avg_score"] = analytics["avg_score"]
         context["pass_percentage"] = analytics["pass_percentage"]
+        context["partial_attempts"] = analytics["partial_attempts"]
+        context["ranked_attempts"] = analytics["ranked_attempts"]
 
         # If user is a student, find their rank in this exam
         if self.request.user.is_student:
@@ -382,7 +410,7 @@ class ExamLeaderboardView(ActiveUserRequiredMixin, DetailView):
                 student=self.request.user,
                 classroom_session__isnull=True,
                 status__in=["submitted", "evaluated", "timed_out"],
-            ).order_by("rank").first()
+            ).exclude(responses__key_confirmed_at_grading=False).order_by("rank").first()
             context["student_best_attempt"] = student_best
 
         return context
@@ -474,7 +502,7 @@ class TeacherExportExamResultsCsvView(TeacherRequiredMixin, View):
             "Email Address",
             "Target Exam",
             "Score Obtained",
-            "Total Marks",
+            "Total Marks (graded marks if partial)",
             "Percentage",
             "Result Outcome",
             "Percentile",
@@ -495,9 +523,12 @@ class TeacherExportExamResultsCsvView(TeacherRequiredMixin, View):
                 att.student.email,
                 att.student.target_exam or "N/A",
                 att.score_obtained,
-                att.total_marks,
-                f"{att.percentage}%",
-                "PASSED" if att.is_passed else "FAILED",
+                (att.graded_possible_marks if att.graded_possible_marks is not None else "Unknown") if att.has_ungraded_keys else att.total_marks,
+                ("Unknown (legacy key details)" if att.has_legacy_pdf_key_snapshots else f"{att.percentage}% (partial)") if att.has_ungraded_keys else f"{att.percentage}%",
+                ("PARTIAL / UNRANKED" if att.has_ungraded_keys else
+                 "PASSED (LEGACY RECORDED)" if att.has_legacy_pdf_key_snapshots and att.is_passed else
+                 "FAILED (LEGACY RECORDED)" if att.has_legacy_pdf_key_snapshots else
+                 "PASSED" if att.is_passed else "FAILED"),
                 f"{att.percentile}%" if att.percentile else "N/A",
                 att.correct_count,
                 att.incorrect_count,

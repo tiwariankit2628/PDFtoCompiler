@@ -1,0 +1,37 @@
+<div class="answer-image-widget border rounded p-3 mt-3" data-answer-key-image data-preview-url="{{ answer_image_url }}" data-key-action="{{ answer_key_action|default:'create' }}">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+    <div><strong>Upload answer-key images</strong><p class="small text-muted mb-2">Choose a clear photo or screenshot. You can still type or paste answers below.</p></div>
+    <span class="badge text-bg-light border">Review before use</span>
+  </div>
+  <label class="form-label small fw-semibold" for="answer-key-images">JPEG or PNG · up to 3 images</label>
+  <div class="d-flex flex-wrap gap-2 align-items-center">
+    <input id="answer-key-images" class="form-control" style="max-width:26rem" type="file" accept="image/jpeg,image/png" multiple data-key-files>
+    <button type="button" class="btn btn-cbt-outline" data-key-read>Read images</button>
+  </div>
+  <p class="form-text mb-1">Maximum 8 MB per image, 20 MB combined. Images are processed on this server and are not sent to an external provider.</p>
+  <p class="small mb-1" role="status" aria-live="polite" data-key-status></p>
+  <noscript><p class="small text-warning">Image preview needs JavaScript. You can type or paste the key instead.</p></noscript>
+  <div data-key-review hidden>
+    <div class="alert alert-warning small my-3" role="note"><strong>Check every answer against your image.</strong> Image reading can make mistakes even when an answer looks clear. Confirm the paper/set and that printed choices 1, 2, 3, 4 correspond to A, B, C, D. Multiple-correct and numerical answers are not supported here.</div>
+    <details class="mb-3" open><summary class="fw-semibold small">Your original images — tap to open larger</summary>
+      <label class="small mt-2" for="answer-key-zoom">Zoom image</label>
+      <input id="answer-key-zoom" type="range" min="50" max="300" step="25" value="100" data-key-zoom aria-describedby="answer-key-zoom-help">
+      <span class="small" data-key-zoom-value>100%</span>
+      <div id="answer-key-zoom-help" class="small text-muted">Zoom in, then scroll the image to compare a detail.</div>
+      <div class="d-flex flex-wrap gap-2 mt-2" data-key-image-previews></div>
+    </details>
+    <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+      <strong class="small" data-key-count></strong>
+      <label class="small ms-sm-auto" for="answer-key-filter">Show</label>
+      <select id="answer-key-filter" class="form-select form-select-sm w-auto" data-key-filter><option value="all">All questions</option><option value="attention">Missing or unclear</option></select>
+      <label class="visually-hidden" for="answer-key-search">Find question number</label>
+      <input id="answer-key-search" class="form-control form-control-sm w-auto" type="number" min="1" placeholder="Question #" data-key-search>
+    </div>
+    <div class="table-responsive border rounded" style="max-height:24rem; overflow:auto">
+      <table class="table table-sm align-middle mb-0"><thead><tr><th scope="col">Question</th><th scope="col">Answer</th><th scope="col">Reading status</th></tr></thead><tbody data-key-rows></tbody></table>
+    </div>
+    <p class="small text-muted mt-2 mb-2">Blank rows are not added. Keys already saved on individual questions remain unless you enter a replacement. Review the printed choices; not every reading error can be detected.</p>
+    <div class="form-check mb-2"><input class="form-check-input" type="checkbox" id="answer-key-confirm" data-key-confirm><label class="form-check-label small" for="answer-key-confirm">I checked every selected answer against the correct answer-key image and choice order.</label></div>
+    <button type="button" class="btn btn-cbt-primary btn-sm" data-key-apply disabled>Use checked answers</button>
+  </div>
+</div>

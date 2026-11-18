@@ -21,7 +21,7 @@
     <a class="btn btn-outline-secondary" href="{% url 'questions:paper_review' question.paper_id %}">Review paper</a>{% endif %}</div>
 </div>
 {% if question.status == 'approved' %}<div class="alert alert-warning">This question is already approved. Staging images are read-only; changes here would not update the bank item.</div>{% endif %}
-<div class="alert alert-info small">Compare with the original. Images can belong to the question or to any option. A crop is made from the PDF itself, not redrawn. Every image change flags the question for review.{% if classroom_teacher %} Choose “Original question image” to add or replace the image shown in image-first mode.{% endif %}</div>
+<div class="alert alert-info small">Compare with the original. Images can belong to the question or to any option. A crop is made from the PDF itself, not redrawn. Image changes flag the question and require the answer to be checked again.{% if question.paper.image_first %} Choose “Original question image” to add or replace the image shown in image-first mode.{% endif %}</div>
 <div class="row g-4">
   <div class="col-lg-7">
     <div class="card shadow-sm p-3 mb-4">
@@ -32,7 +32,7 @@
           <div class="col-sm-4"><label class="form-label" for="crop-page">Page</label><select id="crop-page" name="page_number" class="form-select">
             {% for page in page_range %}<option value="{{ page }}" {% if page == question.page_number %}selected{% endif %}>Page {{ page }}</option>{% endfor %}
           </select></div>
-          <div class="col-sm-4"><label class="form-label" for="crop-target">Attach to</label><select id="crop-target" name="target" class="form-select"><option value="">Question</option>{% if classroom_teacher %}<option value="__crop__">Original question image</option>{% endif %}<option>A</option><option>B</option><option>C</option><option>D</option><option>E</option></select></div>
+          <div class="col-sm-4"><label class="form-label" for="crop-target">Attach to</label><select id="crop-target" name="target" class="form-select"><option value="">Question</option>{% if question.paper.image_first %}<option value="__crop__">Original question image</option>{% endif %}<option>A</option><option>B</option><option>C</option><option>D</option><option>E</option></select></div>
           <div class="col-sm-4"><label class="form-label" for="crop-replace">Replace</label><select id="crop-replace" name="replace_id" class="form-select"><option value="">Append image</option>{% for figure in figures %}<option value="{{ figure.pk }}">Image {{ forloop.counter }} ({{ figure.option_key|default:'question' }})</option>{% endfor %}</select></div>
         </div>
         <div id="crop-stage" class="position-relative d-inline-block border bg-light" style="max-width:100%; line-height:0; touch-action:none; user-select:none;">
@@ -52,7 +52,7 @@
       <h5>Attach an image file</h5><p class="small text-muted">PNG, JPEG or another supported image up to 8 MB / 16 megapixels; converted to PNG.</p>
       <form method="post" enctype="multipart/form-data">{% csrf_token %}<input type="hidden" name="action" value="upload">
         <input class="form-control mb-2" type="file" accept="image/*" name="image" required>
-        <div class="d-flex gap-2 flex-wrap"><select name="target" class="form-select w-auto" aria-label="Attach to"><option value="">Question</option>{% if classroom_teacher %}<option value="__crop__">Original question image</option>{% endif %}<option>A</option><option>B</option><option>C</option><option>D</option><option>E</option></select>
+        <div class="d-flex gap-2 flex-wrap"><select name="target" class="form-select w-auto" aria-label="Attach to"><option value="">Question</option>{% if question.paper.image_first %}<option value="__crop__">Original question image</option>{% endif %}<option>A</option><option>B</option><option>C</option><option>D</option><option>E</option></select>
         <select name="replace_id" class="form-select w-auto" aria-label="Replace"><option value="">Append image</option>{% for figure in figures %}<option value="{{ figure.pk }}">Replace image {{ forloop.counter }}</option>{% endfor %}</select>
         <button class="btn btn-primary" {% if question.status == 'approved' %}disabled{% endif %}>Attach image</button></div>
       </form>

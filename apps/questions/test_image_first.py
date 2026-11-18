@@ -8,6 +8,7 @@ import io
 import os
 import tempfile
 from datetime import timedelta
+from unittest.mock import patch
 
 import pymupdf as fitz
 from PIL import Image
@@ -66,6 +67,38 @@ class CropHelperUnitTests(SimpleTestCase):
             self.assertTrue(data.startswith(b"\x89PNG"))
         finally:
             doc.close()
+
+    def test_same_page_regions_form_one_uncropped_image_and_multipage_stays_ordered(self):
+        doc = fitz.open(); doc.new_page(width=400, height=300); doc.new_page(width=400, height=300)
+        self.addCleanup(doc.close)
+        regions = [{"page": 1, "box": [0, 0, .4, .4]}, {"page": 1, "box": [.6, .6, 1, 1]},
+                   {"page": 2, "box": [0, 0, 1, .5]}]
+        with patch("apps.questions.image_first.page_image", side_effect=[png("red"), png("blue"), png("green")]):
+            crops = render_question_crops(doc, regions)
+        self.assertEqual([crop[0] for crop in crops], [1, 2])
+        self.assertEqual(crops[0][1], [])  # source_regions retains both exact boxes
+        with Image.open(io.BytesIO(crops[0][2])) as image:
+            self.assertEqual(image.size, (60, 96))
+            self.assertEqual(image.getpixel((10, 10)), (255, 0, 0))
+            self.assertEqual(image.getpixel((10, 70)), (0, 0, 255))
+
+    def test_failed_same_page_part_does_not_masquerade_as_complete(self):
+        doc = fitz.open(); doc.new_page(width=400, height=300); doc.new_page(width=400, height=300)
+        self.addCleanup(doc.close)
+        regions = [{"page": 1, "box": [0, 0, .4, .4]}, {"page": 1, "box": [.6, .6, 1, 1]},
+                   {"page": 2, "box": [0, 0, 1, .5]}]
+        with patch("apps.questions.image_first.page_image", side_effect=[png("red"), ValueError("failed"), png("green")]):
+            crops = render_question_crops(doc, regions)
+        self.assertEqual([crop[0] for crop in crops], [2])
+
+    def test_bad_region_does_not_abort_other_pages_and_pages_are_ordered(self):
+        doc = fitz.open(); doc.new_page(width=400, height=300); doc.new_page(width=400, height=300)
+        self.addCleanup(doc.close)
+        regions = [{"page": 2, "box": [0, 0, 1, .5]}, {"page": 1, "box": [0, 0, 1, .5]}]
+        self.assertEqual([page for page, _, _ in render_question_crops(doc, regions)], [1, 2])
+        regions.append({"page": 1, "box": [1, 1, 0, 0]})
+        self.assertEqual([page for page, _, _ in render_question_crops(doc, regions)], [2])
+        self.assertEqual(detect_crop_answer_warning(doc, [{"page": 1, "box": [1, 1, 0, 0]}]), "")
 
     def test_regions_prefers_source_regions_then_primary(self):
         q = ExtractedQuestion(source_regions=[{"page": 2, "box": [0, 0, 1, 1]}], primary_image_region={"page": 1, "box": [0, 0, 1, 1]})
@@ -149,7 +182,7 @@ class ImageFirstPrivatePracticeTests(TestCase):
                 self.client.post(reverse("questions:practice_question_include", args=[question.pk]))
         included = list(paper.extracted_questions.filter(include_in_practice=True))
         response = self.client.post(reverse("questions:practice_settings", args=[paper.pk]), {
-            "duration_minutes": "30", "answer_key_text": keys, "acknowledge_review": "on", "passing_percentage": "0",
+            "duration_minutes": "30", "answer_key_text": keys, "confirm_answer_key": "on", "acknowledge_review": "on", "passing_percentage": "0",
         })
         self.assertEqual(response.status_code, 302, getattr(response, "context", ""))
         paper.refresh_from_db()

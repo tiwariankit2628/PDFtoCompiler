@@ -1,5 +1,5 @@
 from django.urls import path
-from . import views, figure_views, practice_views, practice_bank, answer_views, practice_estimate_views, classroom_views
+from . import views, figure_views, practice_views, practice_bank, answer_views, practice_estimate_views, classroom_views, answer_key_image_views
 
 app_name = "questions"
 
@@ -7,6 +7,7 @@ urlpatterns = [
     # Teacher-owned classroom paper workspace (private storage, local extraction).
     path("classroom/upload/", classroom_views.ClassroomPaperUploadView.as_view(), name="classroom_paper_upload"),
     path("classroom/papers/<int:pk>/review/", classroom_views.ClassroomPaperReviewView.as_view(), name="classroom_paper_review"),
+    path("classroom/papers/<int:pk>/answer-key/image-preview/", answer_key_image_views.ClassroomAnswerImagePreviewView.as_view(), name="classroom_answer_image_preview"),
     path("classroom/papers/<int:pk>/pdf/", classroom_views.ClassroomPdfView.as_view(), name="classroom_paper_pdf"),
     path("classroom/papers/<int:pk>/questions/add/", classroom_views.ClassroomQuestionAddView.as_view(), name="classroom_question_add"),
     path("classroom/papers/<int:pk>/figures/", classroom_views.ClassroomFigurePoolView.as_view(), name="classroom_figure_pool"),
@@ -21,6 +22,7 @@ urlpatterns = [
     path("practice/", practice_views.PracticeListView.as_view(), name="practice_list"),
     path("practice/upload/", practice_views.PracticeUploadView.as_view(), name="practice_upload"),
     path("practice/papers/<int:pk>/settings/", practice_views.PracticeSettingsView.as_view(), name="practice_settings"),
+    path("practice/papers/<int:pk>/answer-key/image-preview/", answer_key_image_views.PracticeAnswerImagePreviewView.as_view(), name="practice_answer_image_preview"),
     path("practice/papers/<int:pk>/pdf/", practice_views.PracticePdfView.as_view(), name="practice_pdf"),
     path("practice/papers/<int:pk>/delete/", practice_views.PracticeDeleteView.as_view(), name="practice_delete"),
     path("practice/papers/<int:pk>/figures/", practice_views.PracticeFigurePoolView.as_view(), name="practice_figure_pool"),
@@ -38,6 +40,7 @@ urlpatterns = [
     path("practice/bank/", practice_bank.BankListView.as_view(), name="practice_bank"),
     path("practice/bank/create-test/", practice_bank.BankTestCreateView.as_view(), name="practice_bank_test"),
     path("practice/bank/<int:pk>/edit/", practice_bank.BankEditView.as_view(), name="practice_bank_edit"),
+    path("practice/bank/<int:pk>/images/", practice_bank.BankOriginalImageView.as_view(), name="practice_bank_images"),
     path("practice/bank/<int:pk>/delete/", practice_bank.BankDeleteView.as_view(), name="practice_bank_delete"),
     path("practice/bank/<int:pk>/image/", practice_views.PracticeBankImageView.as_view(), name="practice_bank_image"),
     path("practice/bank/figures/<int:pk>/file/", practice_views.PracticeBankFigureView.as_view(), name="practice_bank_figure"),
@@ -52,6 +55,7 @@ urlpatterns = [
     path("papers/", views.QuestionPaperListView.as_view(), name="paper_list"),
     path("papers/upload/", views.QuestionPaperUploadView.as_view(), name="paper_upload"),
     path("papers/<int:pk>/review/", views.QuestionPaperReviewView.as_view(), name="paper_review"),
+    path("papers/<int:pk>/answer-key/image-preview/", answer_key_image_views.TeacherAnswerImagePreviewView.as_view(), name="teacher_answer_image_preview"),
     path("papers/<int:pk>/pdf/", views.QuestionPaperDownloadView.as_view(), name="paper_download"),
     path(
         "papers/<int:pk>/bulk-approve/",

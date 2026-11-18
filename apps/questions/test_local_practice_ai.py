@@ -111,6 +111,9 @@ class LocalPracticeEstimateTests(TestCase):
         response = ExamResponse.objects.create(attempt=self.attempt, exam_question=exam_question,
                                                selected_option=selected_option, order=order,
                                                is_correct=True if verified else None,
+                                               key_confirmed_at_grading=verified,
+                                               correct_option_key_at_grading="A" if verified else None,
+                                               selected_option_key_at_grading=selected,
                                                marks_awarded=Decimal("4") if verified else Decimal("0"))
         return response, question
 

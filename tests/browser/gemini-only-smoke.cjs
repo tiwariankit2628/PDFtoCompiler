@@ -20,15 +20,15 @@ const assert = require('assert');
     }
     await Promise.all([page.waitForURL('**/dashboard/**'), page.locator('form').filter({has:page.locator('#id_username')}).locator('button[type=submit]').click()]);
     await page.goto(base + '/questions/practice/upload/');
-    assert.strictEqual(await page.locator('#id_extraction_mode').inputValue(), 'local');
-    assert.strictEqual(await page.locator('#id_extraction_mode option[value="gemini"]').count(), 0);
-    assert(await page.locator('#id_extraction_mode option[value="__more__"]').isDisabled());
+    assert.strictEqual(await page.locator('#id_extraction_mode').count(), 0);
+    assert(await page.getByText('Your PDF is processed on the server and is not sent to an external provider.', {exact:true}).isVisible());
+    assert(!(await page.getByText('Tesseract', {exact:false}).count()));
 
-    // Tamper with the browser select to prove the server rejects a cloud mode.
+    // Forge a hidden field to prove the server rejects a cloud mode.
     await page.evaluate(() => {
-      const select = document.querySelector('#id_extraction_mode');
-      select.add(new Option('Tampered', 'gemini'));
-      select.value = 'gemini';
+      const input = document.createElement('input');
+      input.type = 'hidden'; input.name = 'extraction_mode'; input.value = 'gemini';
+      document.querySelector('form[data-upload-form]').appendChild(input);
     });
     await page.locator('#id_title').fill('Tampered browser paper');
     await page.locator('#id_pdf_file').setInputFiles(source);
@@ -37,11 +37,10 @@ const assert = require('assert');
       page.getByRole('button', {name:/Upload & extract/i}).click(),
     ]);
     assert.strictEqual(rejected.status(), 200);
-    assert(await page.getByText('Select a valid choice', {exact:false}).isVisible());
+    assert(await page.getByText('This upload option is not available', {exact:false}).isVisible());
 
     // The normal path extracts the same PDF locally and reaches human review.
     await page.locator('#id_title').fill('Local-only browser paper');
-    await page.locator('#id_extraction_mode').selectOption('local');
     await page.locator('#id_pdf_file').setInputFiles(source);
     await Promise.all([page.waitForURL('**/settings/'), page.getByRole('button', {name:/Upload & extract/i}).click()]);
     assert(Number((await page.locator('#preview-questions').textContent()).trim()) > 0);

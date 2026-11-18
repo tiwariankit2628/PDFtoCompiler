@@ -137,6 +137,9 @@ class Question(models.Model):
     # Student bank edits use copy-on-write. Archived versions remain attached to
     # existing exams and preserve the text, options and answers of past attempts.
     is_bank_archived = models.BooleanField(default=False, db_index=True)
+    # Public bank questions imported from a PDF also need a confirmed,
+    # single-correct key. Keep the flag if their source paper is later deleted.
+    is_pdf_derived = models.BooleanField(default=False, editable=False)
     # Private keys are explicitly entered/confirmed by the student, never guessed.
     key_verified = models.BooleanField(default=False)
     answer_status = models.CharField(max_length=24, choices=AnswerStatus.choices, default=AnswerStatus.NEEDS_REVIEW)

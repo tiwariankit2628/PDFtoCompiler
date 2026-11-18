@@ -18,7 +18,7 @@ except ImportError:
     pytesseract = None
 
 from .models import ExtractedQuestion, QuestionPaperUpload
-from .pdf_layout import DigitalQuestionLayout, FIGURE_REFERENCE, _normalize_option
+from .pdf_layout import DigitalQuestionLayout, FIGURE_REFERENCE, PREFIXED_QUESTION, _normalize_option
 from .question_types import classify_question
 
 
@@ -94,6 +94,18 @@ class PDFQuestionExtractor:
         dpi = int(72 * math.sqrt(16_000_000 / area))
         return dpi if dpi >= 72 else None
 
+    @staticmethod
+    def _explicit_ocr_numbers(text):
+        """Count printed Q labels, not ambiguous numbered option lines."""
+        numbers = set()
+        for line in text.splitlines():
+            match = PREFIXED_QUESTION.match(line.strip())
+            if match:
+                number = int(next(group for group in match.groups() if group))
+                if number > 0:
+                    numbers.add(number)
+        return numbers
+
     def _ocr_textpages(self, doc, indices):
         """Build transient, geometrically aligned Tesseract text pages locally.
 
@@ -145,7 +157,32 @@ class PDFQuestionExtractor:
             for language in languages:
                 try:
                     textpage = page.get_textpage_ocr(language=language, dpi=dpi, full=True, tessdata=tessdata)
-                    if page.get_text("text", textpage=textpage).strip():
+                    text = page.get_text("text", textpage=textpage)
+                    if text.strip():
+                        if language == "eng+hin" and not re.search(r"[\u0900-\u097f]", text):
+                            # Bilingual OCR can occasionally lose a Q label on an
+                            # apparently English-only scan. Retry only where the
+                            # first page begins after Q1 or an explicit numbered
+                            # sequence has a gap. Do not infer any characters:
+                            # use the alternate OCR only if it retains *all* the
+                            # original Q labels and recognises additional ones.
+                            numbers = self._explicit_ocr_numbers(text)
+                            ordered = sorted(numbers)
+                            suspicious = bool(numbers) and (
+                                (index == 0 and ordered[0] > 1)
+                                or any(b - a > 1 for a, b in zip(ordered, ordered[1:]))
+                            )
+                            if suspicious:
+                                try:
+                                    english_page = page.get_textpage_ocr(language="eng", dpi=dpi, full=True, tessdata=tessdata)
+                                    english_text = page.get_text("text", textpage=english_page)
+                                    if numbers < self._explicit_ocr_numbers(english_text):
+                                        textpage = english_page
+                                        self._log(f"Warning: Page {index + 1}: English-only OCR found additional question labels. Check the original carefully; other language content may be missing.")
+                                except Exception:
+                                    # Keep the usable bilingual result if an
+                                    # optional retry fails.
+                                    pass
                         result = (page, textpage)
                         if language == "eng":
                             self._log(f"Warning: Page {index + 1}: Hindi OCR data unavailable or failed; using English only.")
@@ -325,6 +362,12 @@ class PDFQuestionExtractor:
         crops = render_question_crops(doc, regions)
         if not crops:
             return
+        if any(not box for _, box, _ in crops):
+            issue = "Multiple original regions on one page were joined; check the full question and choice order."
+            extracted.is_flagged = True
+            extracted.flag_reason = " ".join(filter(None, [extracted.flag_reason, issue]))[:255]
+            extracted.extraction_issues = list(extracted.extraction_issues or []) + [issue]
+            extracted.save(update_fields=["is_flagged", "flag_reason", "extraction_issues"])
         warning = detect_crop_answer_warning(doc, regions)
         if warning:
             extracted.crop_warning = warning[:255]

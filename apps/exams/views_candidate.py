@@ -24,6 +24,7 @@ from django.views.generic import DetailView, ListView
 
 from apps.core.permissions import ActiveUserRequiredMixin
 from apps.core.utils import log_audit
+from apps.questions.presentation import missing_crop_pages, primary_question_crops, use_original_image
 from .models import Category, Exam, ExamAttempt, ExamQuestion, ExamResponse, ExamSecurityLog
 
 
@@ -424,13 +425,18 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
             # buttons. The printed choices live inside the image, so options must
             # stay in fixed A..E order (never shuffled) to match the picture.
             all_q_figures = list(q.figures.all())
-            crop_figures = [f for f in all_q_figures if f.option_id is None and f.source == "question_crop"]
+            private_images = bool(exam.is_private_practice or exam.is_classroom_only)
+            wants_crop = use_original_image(q, image_first=exam.image_first_mode, private=private_images)
+            crop_figures = primary_question_crops(q, image_first=wants_crop, private=private_images)
             crop_urls = [u for u in (figure_url(f) for f in crop_figures) if u]
-            question_image_first = bool(exam.image_first_mode and q.is_image_first and crop_urls)
+            question_image_first = bool(crop_urls)
+            missing_pages = missing_crop_pages(q, crop_figures) if question_image_first else []
+            image_missing = bool(wants_crop and not crop_urls)
 
-            # Prepare options (shuffled only when the exam asks AND it is safe).
+            # Never shuffle labels when the printed choices live in the image,
+            # even if this particular exam was otherwise configured as text-first.
             options_list = list(q.options.all())
-            if exam.shuffle_options and not question_image_first:
+            if exam.shuffle_options and not wants_crop:
                 random.shuffle(options_list)
             else:
                 options_list.sort(key=lambda o: (o.option_key or "", o.id))
@@ -438,7 +444,7 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
             sanitized_options = []
             for opt in options_list:
                 option_images = [u for u in (figure_url(f) for f in opt.figures.all()) if u]
-                if not exam.is_private_practice and opt.image:
+                if not (exam.is_private_practice or exam.is_classroom_only) and opt.image:
                     option_images = [opt.image.url] + option_images
                 sanitized_options.append(
                     {
@@ -483,6 +489,8 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
                     "tables": q.tables,
                     "image_first": question_image_first,
                     "crop_urls": crop_urls,
+                    "missing_crop_pages": missing_pages,
+                    "original_image_missing": image_missing,
                     "image_url": question_images[0] if question_images else None,
                     "image_urls": question_images,
                     "source_images": source_images,
@@ -970,5 +978,8 @@ class ExamCompletedView(ActiveUserRequiredMixin, DetailView):
         if attempt.classroom_session_id and context["show_results"]:
             from .classroom_results import classroom_result_summary
             context["classroom_summary"] = classroom_result_summary(attempt)
+        elif context["show_results"] and attempt.has_ungraded_keys:
+            from .pdf_key_results import partial_pdf_result_summary
+            context["partial_summary"] = partial_pdf_result_summary(attempt)
         return context
 

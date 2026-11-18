@@ -55,7 +55,7 @@ def generate_student_scorecard_pdf(attempt, analytics):
     # Watermark / Tag
     page.insert_text(
         fitz.Point(440, 44),
-        "VERIFIED RESULT",
+        "RECORDED RESULT" if attempt.has_legacy_pdf_key_snapshots else "VERIFIED RESULT",
         fontsize=10,
         fontname="helv",
         color=(1, 1, 1),
@@ -116,6 +116,11 @@ def generate_student_scorecard_pdf(attempt, analytics):
     pctl_str = f"{attempt.percentile}%" if attempt.percentile else "N/A"
     page.insert_text(fitz.Point(45 + (card_width + card_gap) * 3, y_scores + 48), pctl_str, fontsize=14, fontname="helv", color=HEADER_BG)
     page.insert_text(fitz.Point(45 + (card_width + card_gap) * 3, y_scores + 64), "Relative Standing", fontsize=8, fontname="helv", color=TEXT_MUTED)
+
+    if attempt.has_legacy_pdf_key_snapshots:
+        page.insert_text(fitz.Point(38, 305),
+                         "Earlier PDF key details were not recorded; the saved result was not recalculated.",
+                         fontsize=7, fontname="helv", color=TEXT_MUTED)
 
     # 4. Question Breakdown Strip
     y_strip = 310

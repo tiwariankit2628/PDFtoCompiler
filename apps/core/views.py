@@ -214,7 +214,7 @@ class StudentDashboardView(StudentRequiredMixin, TemplateView):
         student_attempts = all_exam_attempts.filter(classroom_session__isnull=True)
         visible_results = student_attempts.filter(
             status__in=ExamAttempt.FINAL_STATUSES, exam__show_result_immediately=True,
-        )
+        ).exclude(responses__key_confirmed_at_grading=False)
         context["total_attempts"] = student_attempts.count()
         context["passed_attempts"] = visible_results.filter(is_passed=True).count()
         context["released_result_count"] = visible_results.count()

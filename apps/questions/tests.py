@@ -10,6 +10,7 @@ from apps.exams.models import Category
 from apps.questions.extractor import PDFQuestionExtractor
 from apps.questions.forms import QuestionPaperUploadForm
 from apps.questions.models import (
+    AnswerStatus,
     ExtractedQuestion,
     Question,
     QuestionOption,
@@ -118,7 +119,10 @@ class PDFUploadAndValidationTests(TestCase):
         res = self.client.get(reverse("questions:paper_upload"))
         self.assertEqual(res.status_code, 200)
         self.assertContains(res, "Let's prepare your paper.")
-        self.assertContains(res, "Local PyMuPDF / Tesseract")
+        self.assertContains(res, "Your PDF is processed on the server and is not sent to an external provider.")
+        self.assertNotContains(res, "PyMuPDF")
+        self.assertNotContains(res, "Tesseract")
+        self.assertNotContains(res, 'id="id_extraction_mode"')
 
 
 class PDFQuestionExtractionEngineTests(TestCase):
@@ -238,7 +242,7 @@ class QuestionReviewAndApprovalTests(TestCase):
                 {"key": "C", "text": "O(log n)"},
                 {"key": "D", "text": "O(n)"},
             ],
-            correct_option="A",
+            correct_option="A", answer_status=AnswerStatus.MANUALLY_VERIFIED,
             positive_marks=Decimal("4.00"),
             negative_marks=Decimal("1.00"),
             status=ExtractedQuestion.Status.EXTRACTED,
@@ -296,10 +300,12 @@ class QuestionReviewAndApprovalTests(TestCase):
         self.assertEqual(self.q1.status, ExtractedQuestion.Status.REVIEWED)
 
     def test_bulk_answer_key_mapping(self):
+        self.paper.status = QuestionPaperUpload.ProcessingStatus.EXTRACTED
+        self.paper.save(update_fields=["status"])
         self.client.login(username="cs_teacher", password="Password123!")
         res = self.client.post(
             reverse("questions:paper_import_answer_key", args=[self.paper.pk]),
-            {"answer_key_text": "1: A\n2: B"},
+            {"answer_key_text": "1: A\n2: B", "confirm_checked": "on"},
         )
         self.assertEqual(res.status_code, 302)
         self.q2.refresh_from_db()
@@ -375,7 +381,7 @@ class QuestionReviewAndApprovalTests(TestCase):
             question_number=99,
             question_text=self.q1.question_text,  # Identical text
             options=self.q1.options,
-            correct_option="A",
+            correct_option="A", answer_status=AnswerStatus.MANUALLY_VERIFIED,
             status=ExtractedQuestion.Status.EXTRACTED,
         )
 

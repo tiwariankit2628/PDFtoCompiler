@@ -68,7 +68,7 @@ class StudentPracticeTests(TestCase):
         questions = self.prepare(paper)
         self.assertGreaterEqual(len(questions), 2)
         response = self.client.post(reverse("questions:practice_settings", args=[paper.pk]), {
-            "duration_minutes": str(duration), "answer_key_text": keys, "acknowledge_review": "on",
+            "duration_minutes": str(duration), "answer_key_text": keys, "confirm_answer_key": "on", "acknowledge_review": "on",
         })
         self.assertEqual(response.status_code, 302, getattr(response, "context", ""))
         paper.refresh_from_db()
@@ -176,7 +176,7 @@ class StudentPracticeTests(TestCase):
                 form = PracticeSettingsForm({"duration_minutes": 30, "acknowledge_review": True, "answer_key_text": text}, questions=questions)
                 self.assertFalse(form.is_valid())
                 self.assertIn("answer_key_text", form.errors)
-        form = PracticeSettingsForm({"duration_minutes": 30, "acknowledge_review": True, "answer_key_text": f"{number}: 1"}, questions=questions)
+        form = PracticeSettingsForm({"duration_minutes": 30, "acknowledge_review": True, "answer_key_text": f"{number}: 1", "confirm_answer_key": True}, questions=questions)
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.answer_keys[number], "A")
 
@@ -185,7 +185,7 @@ class StudentPracticeTests(TestCase):
         question = paper.extracted_questions.first()
         response = self.client.post(reverse("questions:practice_question_edit", args=[question.pk]), {
             "question_text": "Checked question?", "option_A": "yes", "option_B": "no", "option_C": "", "option_D": "", "option_E": "",
-            "correct_option": "B", "positive_marks": "2.00", "negative_marks": "0.50", "reviewed": "on", "explanation": "A note",
+            "correct_option": "B", "confirm_answer_key": "on", "positive_marks": "2.00", "negative_marks": "0.50", "reviewed": "on", "explanation": "A note",
         })
         self.assertEqual(response.status_code, 302)
         question.refresh_from_db()

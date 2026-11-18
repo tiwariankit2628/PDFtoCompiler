@@ -63,12 +63,14 @@
                     <div class="col-md-3">
                         <label class="form-label fw-semibold small" for="{{ form.correct_option.id_for_label }}">Correct Option (Key)</label>
                         {{ form.correct_option }}
-                        <small class="text-muted d-block">e.g. A, B, C, or D</small>
+                        <small class="text-muted d-block">e.g. A, B, C, or D. Leave blank if unknown.</small>
+                        {% if form.correct_option.errors %}<div class="text-danger small" role="alert">{{ form.correct_option.errors|striptags }}</div>{% endif %}
                     </div>
+                    <div class="col-12"><div class="form-check">{{ form.confirm_answer_key }}<label class="form-check-label" for="{{ form.confirm_answer_key.id_for_label }}">{{ form.confirm_answer_key.label }}</label><div class="form-text">{{ form.confirm_answer_key.help_text }}</div></div></div>
                     <div class="col-md-3">
                         <label class="form-label fw-semibold small" for="{{ form.detected_type.id_for_label }}">Detected Type</label>
                         {{ form.detected_type }}
-                        <small class="text-muted d-block">Verify; never used for grading.</small>
+                        <small class="text-muted d-block">Verify the type. Only single-correct MCQs are scored; other types stay ungraded.</small>
                     </div>
 
                     <div class="col-12">
@@ -88,7 +90,7 @@
                     <div class="col-md-6">
                         <div class="input-group">
                             <span class="input-group-text bg-light fw-bold">A</span>
-                            <input type="text" name="option_text_A" class="form-control" value="{% for opt in question.options %}{% if opt.key == 'A' %}{{ opt.text }}{% endif %}{% endfor %}" placeholder="Option A content...">
+                            <input type="text" name="option_text_A" class="form-control" value="{% if form.is_bound %}{{ form.data.option_text_A }}{% else %}{% for opt in question.options %}{% if opt.key == 'A' %}{{ opt.text }}{% endif %}{% endfor %}{% endif %}" placeholder="Option A content...">
                         </div>
                     </div>
 
@@ -96,7 +98,7 @@
                     <div class="col-md-6">
                         <div class="input-group">
                             <span class="input-group-text bg-light fw-bold">B</span>
-                            <input type="text" name="option_text_B" class="form-control" value="{% for opt in question.options %}{% if opt.key == 'B' %}{{ opt.text }}{% endif %}{% endfor %}" placeholder="Option B content...">
+                            <input type="text" name="option_text_B" class="form-control" value="{% if form.is_bound %}{{ form.data.option_text_B }}{% else %}{% for opt in question.options %}{% if opt.key == 'B' %}{{ opt.text }}{% endif %}{% endfor %}{% endif %}" placeholder="Option B content...">
                         </div>
                     </div>
 
@@ -104,7 +106,7 @@
                     <div class="col-md-6">
                         <div class="input-group">
                             <span class="input-group-text bg-light fw-bold">C</span>
-                            <input type="text" name="option_text_C" class="form-control" value="{% for opt in question.options %}{% if opt.key == 'C' %}{{ opt.text }}{% endif %}{% endfor %}" placeholder="Option C content...">
+                            <input type="text" name="option_text_C" class="form-control" value="{% if form.is_bound %}{{ form.data.option_text_C }}{% else %}{% for opt in question.options %}{% if opt.key == 'C' %}{{ opt.text }}{% endif %}{% endfor %}{% endif %}" placeholder="Option C content...">
                         </div>
                     </div>
 
@@ -112,14 +114,15 @@
                     <div class="col-md-6">
                         <div class="input-group">
                             <span class="input-group-text bg-light fw-bold">D</span>
-                            <input type="text" name="option_text_D" class="form-control" value="{% for opt in question.options %}{% if opt.key == 'D' %}{{ opt.text }}{% endif %}{% endfor %}" placeholder="Option D content...">
+                            <input type="text" name="option_text_D" class="form-control" value="{% if form.is_bound %}{{ form.data.option_text_D }}{% else %}{% for opt in question.options %}{% if opt.key == 'D' %}{{ opt.text }}{% endif %}{% endfor %}{% endif %}" placeholder="Option D content...">
                         </div>
                     </div>
                     <div class="col-md-6">
                         <div class="input-group"><span class="input-group-text bg-light fw-bold">E</span>
-                        <input type="text" name="option_text_E" class="form-control" value="{% for opt in question.options %}{% if opt.key == 'E' %}{{ opt.text }}{% endif %}{% endfor %}" placeholder="Option E content..."></div>
+                        <input type="text" name="option_text_E" class="form-control" value="{% if form.is_bound %}{{ form.data.option_text_E }}{% else %}{% for opt in question.options %}{% if opt.key == 'E' %}{{ opt.text }}{% endif %}{% endfor %}{% endif %}" placeholder="Option E content..."></div>
                     </div>
                 </div>
+                <fieldset class="mb-4"><legend class="fs-6 fw-semibold">{{ form.visible_crop_choices.label }}</legend>{{ form.visible_crop_choices }}<div class="form-text">{{ form.visible_crop_choices.help_text }}</div>{% if form.visible_crop_choices.errors %}<div class="text-danger small" role="alert">{{ form.visible_crop_choices.errors|striptags }}</div>{% endif %}</fieldset>
 
                 <h5 class="fw-bold mb-3 border-bottom pb-2">Diagram Image & Explanation</h5>
                 <div class="row g-3 mb-4">

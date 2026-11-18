@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="{% static 'vendor/katex/katex.min.css' %}">
 <script defer src="{% static 'vendor/katex/katex.min.js' %}"></script>
 <script defer src="{% static 'vendor/katex/contrib/auto-render.min.js' %}" onload="renderMathInElement(document.body, {delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false},{left:'\\[',right:'\\]',display:true}],throwOnError:false});"></script>
+<script defer src="{% static 'js/question-image-fallback.js' %}"></script>
 {% endblock %}
 
 {% block dashboard_content %}
@@ -89,7 +90,15 @@
                 +{{ eq.positive_marks }} Marks | -{{ eq.negative_marks }}
             </span>
         </div>
-        <div class="card-body p-4">
+        <div class="card-body p-4" data-image-question>
+            {% if not eq.question.display_gradeable_key %}<p class="small text-warning-emphasis">No supported single-correct key; this question will be ungraded. <a href="{% url 'questions:question_edit' eq.question.pk %}">Review key</a></p>{% endif %}
+            {% if eq.question.image_notice %}<p class="small text-danger">{{ eq.question.image_notice }} <a href="{% url 'questions:bank_figure_manage' eq.question.pk %}">Repair images</a></p>{% endif %}
+            {% if eq.question.source_crop_warning %}<p class="small text-warning-emphasis">Source warning: {{ eq.question.source_crop_warning }} <a href="{% url 'questions:bank_figure_manage' eq.question.pk %}">Inspect / recrop</a></p>{% endif %}
+            {% if eq.question.primary_crops %}
+              {% for figure in eq.question.primary_crops %}<figure class="mb-2"><a href="{{ figure.image.url }}" target="_blank" rel="noopener"><img data-primary-question-image src="{{ figure.image.url }}" alt="Original question image{% if eq.question.primary_crops|length > 1 %}, part {{ forloop.counter }}{% endif %}" class="img-fluid rounded border" style="max-height:420px"></a><figcaption class="small text-muted">Original question{% if eq.question.primary_crops|length > 1 %} · part {{ forloop.counter }}{% endif %} · tap to enlarge</figcaption></figure>{% endfor %}
+              <p class="small text-danger" role="status" data-image-error hidden>An original image could not be loaded. Available text and supporting images are shown below.</p>
+              <details data-image-fallback class="mb-3" {% if eq.question.image_notice %}open{% endif %}><summary>Accessible text and supporting images</summary>
+            {% endif %}
             <!-- Statement -->
             <div class="fs-5 text-dark mb-3" style="line-height: 1.6;">
                 {{ eq.question|render_question }}
@@ -101,21 +110,22 @@
             </div>
             {% endif %}
 
-            {% for figure in eq.question.figures.all %}{% if not figure.option_id %}<div class="mb-3 text-center">{% if figure.source == 'option-source' %}<div class="small text-muted">Original choices in printed order (1=A, 2=B, etc.).</div>{% elif figure.source == 'parallel-source' %}<div class="small text-muted">Other original-language region — verify that choices match the printed labels (1=A, 2=B, etc.).</div>{% elif figure.source == 'stem-source' or figure.source == 'table-source' %}<div class="small text-muted">Original question or table region.</div>{% endif %}<img src="{{ figure.image.url }}" alt="Question figure" class="img-fluid rounded border" style="max-height:240px;"></div>{% endif %}{% endfor %}
+            {% for figure in eq.question.figures.all %}{% if figure.image and not figure.option_id and figure.source != 'question_crop' or figure.image and not eq.question.primary_crops and not figure.option_id %}<div class="mb-3 text-center">{% if figure.source == 'option-source' %}<div class="small text-muted">Original choices in printed order (1=A, 2=B, etc.).</div>{% elif figure.source == 'parallel-source' %}<div class="small text-muted">Other original-language region — verify that choices match the printed labels (1=A, 2=B, etc.).</div>{% elif figure.source == 'stem-source' or figure.source == 'table-source' %}<div class="small text-muted">Original question or table region.</div>{% endif %}<img src="{{ figure.image.url }}" alt="Question figure" class="img-fluid rounded border" style="max-height:240px;"></div>{% endif %}{% endfor %}
 
+            {% if eq.question.primary_crops %}</details>{% endif %}
             <!-- Options -->
             <div class="row g-2 mb-3">
                 {% for opt in eq.question.options.all %}
                 <div class="col-md-6">
-                    <div class="p-3 border rounded-3 d-flex align-items-center gap-3 {% if opt.is_correct %}border-success bg-success bg-opacity-10{% else %}bg-light{% endif %}">
-                        <span class="badge {% if opt.is_correct %}bg-success{% else %}bg-secondary{% endif %} fs-6 px-3 py-2">{{ opt.option_key }}</span>
+                    <div class="p-3 border rounded-3 d-flex align-items-center gap-3 {% if opt.is_correct and eq.question.display_gradeable_key %}border-success bg-success bg-opacity-10{% else %}bg-light{% endif %}">
+                        <span class="badge {% if opt.is_correct and eq.question.display_gradeable_key %}bg-success{% else %}bg-secondary{% endif %} fs-6 px-3 py-2">{{ opt.option_key }}</span>
                         <span class="flex-grow-1 text-dark fs-6">{{ opt.option_text|linebreaksbr }}
                             {% if opt.image %}<img src="{{ opt.image.url }}" alt="Option image" class="img-fluid d-block mt-2" style="max-height:140px;">{% endif %}
                             {% for figure in opt.figures.all %}<img src="{{ figure.image.url }}" alt="Option image" class="img-fluid d-block mt-2" style="max-height:140px;">{% endfor %}
                         </span>
-                        {% if opt.is_correct %}
+                        {% if opt.is_correct and eq.question.display_gradeable_key %}
                             <i class="bi bi-check2-circle text-success fs-5" title="Correct Answer Key"></i>
-                        {% endif %}
+                        {% elif opt.is_correct %}<span class="badge text-bg-warning">Ungraded</span>{% endif %}
                     </div>
                 </div>
                 {% endfor %}

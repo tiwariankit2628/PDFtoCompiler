@@ -165,7 +165,7 @@
                         <strong class="d-block text-truncate">{{ attempt.student.get_full_name|default:attempt.student.username }}</strong>
                         <span class="small text-muted text-truncate d-block">{{ attempt.exam.title }} · {{ attempt.started_at|date:"M d, H:i" }}</span>
                     </div>
-                    {% if attempt.status == 'in_progress' %}<span class="badge text-bg-light border flex-shrink-0">In progress</span>{% elif attempt.classroom_session_id %}<a href="{% url 'exams:student_result_detail' attempt.attempt_uuid %}" class="btn btn-sm btn-cbt-outline flex-shrink-0">View result</a>{% else %}<span class="badge text-bg-light border flex-shrink-0">{{ attempt.score_obtained }} / {{ attempt.total_marks }}</span>{% endif %}
+                    {% if attempt.status == 'in_progress' %}<span class="badge text-bg-light border flex-shrink-0">In progress</span>{% elif attempt.classroom_session_id %}<a href="{% url 'exams:student_result_detail' attempt.attempt_uuid %}" class="btn btn-sm btn-cbt-outline flex-shrink-0">View result</a>{% elif attempt.has_ungraded_keys %}<span class="badge text-bg-light border flex-shrink-0">Partial · unranked</span>{% else %}<span class="badge text-bg-light border flex-shrink-0">{{ attempt.score_obtained }} / {{ attempt.total_marks }}</span>{% endif %}
                 </div>
                 {% endfor %}
             </div>

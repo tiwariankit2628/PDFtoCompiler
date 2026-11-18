@@ -7,6 +7,10 @@ uncertainty instead of inferring historical facts from an editable question.
 
 def classroom_response_status(response):
     """Use the saved grading decision even if the selected option was deleted."""
+    if response.key_confirmed_at_grading is False:
+        return ("ungraded" if response.selected_option_id is not None
+                or response.selected_option_key_at_grading is not None
+                or response.is_correct is not None else "unattempted")
     if response.is_correct is True:
         return "correct"
     if response.is_correct is False:

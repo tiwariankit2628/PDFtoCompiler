@@ -104,9 +104,11 @@
                                 <td class="text-muted">{{ att.started_at|date:"M d, Y H:i" }}</td>
                                 <td class="fw-semibold text-dark">{{ att.exam.title }}</td>
                                 <td><span class="badge text-bg-light border">{{ att.get_status_display }}</span></td>
-                                <td class="fw-bold">{{ att.score_obtained }} / {{ att.total_marks }}</td>
+                                <td class="fw-bold">{% if att.has_ungraded_keys %}Partial{% else %}{{ att.score_obtained }} / {{ att.total_marks }}{% endif %}</td>
                                 <td>
-                                    {% if att.is_passed %}
+                                    {% if att.has_ungraded_keys %}
+                                        <span class="badge text-bg-light border">Partial · unranked</span>
+                                    {% elif att.is_passed %}
                                         <span class="badge bg-success">Passed</span>
                                     {% else %}
                                         <span class="badge bg-danger">Failed</span>

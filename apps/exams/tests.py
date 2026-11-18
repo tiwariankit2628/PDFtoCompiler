@@ -347,7 +347,9 @@ class ExamCreationAndManagementTests(TestCase):
             {"selected_questions": [self.questions[0].pk, self.questions[1].pk]},
         )
 
-        # Duplicate
+        # Duplicate without silently disabling the source's image-first setting.
+        self.exam.image_first_mode = True
+        self.exam.save(update_fields=["image_first_mode"])
         res_dup = self.client.post(reverse("exams:exam_duplicate", args=[self.exam.pk]))
         self.assertEqual(res_dup.status_code, 302)
 
@@ -357,6 +359,7 @@ class ExamCreationAndManagementTests(TestCase):
         self.assertEqual(cloned_exam.status, Exam.ExamStatus.DRAFT)
         self.assertEqual(cloned_exam.total_questions_count, 2)
         self.assertEqual(cloned_exam.total_marks, 8.00)
+        self.assertTrue(cloned_exam.image_first_mode)
 
     def test_delete_prevented_when_candidate_attempts_exist(self):
         self.client.login(username="math_teacher", password="Password123!")

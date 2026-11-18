@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="{% static 'vendor/katex/katex.min.css' %}">
 <script defer src="{% static 'vendor/katex/katex.min.js' %}"></script>
 <script defer src="{% static 'vendor/katex/contrib/auto-render.min.js' %}" onload="renderMathInElement(document.body, {delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false},{left:'\\[',right:'\\]',display:true}],throwOnError:false});"></script>
+<script defer src="{% static 'js/question-image-fallback.js' %}"></script>
 {% endblock %}
 
 {% block dashboard_content %}
@@ -44,7 +45,13 @@
                 </div>
                 <span class="text-muted small">Marks: <strong>+{{ question.positive_marks }}</strong> / <strong>-{{ question.negative_marks }}</strong></span>
             </div>
-            <div class="card-body p-4">
+            <div class="card-body p-4" data-image-question>
+                {% if question.image_notice %}<div class="alert alert-warning small">{{ question.image_notice }} <a href="{% url 'questions:bank_figure_manage' question.pk %}">Manage images / recrop</a></div>{% endif %}
+                {% if question.primary_crops %}
+                  {% for figure in question.primary_crops %}<figure class="mb-2"><a href="{{ figure.image.url }}" target="_blank" rel="noopener"><img data-primary-question-image src="{{ figure.image.url }}" alt="Original question image{% if question.primary_crops|length > 1 %}, part {{ forloop.counter }}{% endif %}" class="img-fluid rounded border" style="max-height:420px"></a><figcaption class="small text-muted">Original question{% if question.primary_crops|length > 1 %} · part {{ forloop.counter }}{% endif %} · tap to enlarge</figcaption></figure>{% endfor %}
+                  <p class="small text-danger" role="status" data-image-error hidden>An original image could not be loaded. Available text and supporting images are shown below.</p>
+                  <details data-image-fallback class="mb-3" {% if question.image_notice %}open{% endif %}><summary>Accessible text and supporting images</summary>
+                {% endif %}
                 <!-- Question Text -->
                 <div class="fs-5 text-dark mb-4" style="line-height: 1.6;">
                     {{ question|render_question }}
@@ -56,23 +63,24 @@
                 </div>
                 {% endif %}
 
-                {% for figure in question.figures.all %}{% if not figure.option_id %}<div class="mb-3 text-center">{% if figure.source == 'option-source' %}<div class="small text-muted">Original choices in printed order (1=A, 2=B, etc.).</div>{% elif figure.source == 'parallel-source' %}<div class="small text-muted">Other original-language region — verify that choices match the printed labels (1=A, 2=B, etc.).</div>{% elif figure.source == 'stem-source' or figure.source == 'table-source' %}<div class="small text-muted">Original question or table region.</div>{% endif %}<img src="{{ figure.image.url }}" alt="Question figure" class="img-fluid rounded border" style="max-height:280px;"></div>{% endif %}{% endfor %}
+                {% for figure in question.figures.all %}{% if not figure.option_id and figure.source != 'question_crop' or not question.primary_crops and not figure.option_id %}<div class="mb-3 text-center">{% if figure.source == 'option-source' %}<div class="small text-muted">Original choices in printed order (1=A, 2=B, etc.).</div>{% elif figure.source == 'parallel-source' %}<div class="small text-muted">Other original-language region — verify that choices match the printed labels (1=A, 2=B, etc.).</div>{% elif figure.source == 'stem-source' or figure.source == 'table-source' %}<div class="small text-muted">Original question or table region.</div>{% endif %}<img src="{{ figure.image.url }}" alt="Question figure" class="img-fluid rounded border" style="max-height:280px;"></div>{% endif %}{% endfor %}
 
+                {% if question.primary_crops %}</details>{% endif %}
                 <!-- Options -->
                 <h6 class="fw-bold text-muted small text-uppercase mb-3">Multiple Choice Options:</h6>
                 <div class="d-flex flex-column gap-2 mb-4">
                     {% for opt in question.options.all %}
-                    <div class="p-3 border rounded-3 d-flex align-items-center gap-3 {% if opt.is_correct %}border-success bg-success bg-opacity-10{% else %}bg-light{% endif %}">
-                        <span class="badge {% if opt.is_correct %}bg-success{% else %}bg-secondary{% endif %} fs-6 px-3 py-2">{{ opt.option_key }}</span>
+                    <div class="p-3 border rounded-3 d-flex align-items-center gap-3 {% if opt.is_correct and question.display_gradeable_key %}border-success bg-success bg-opacity-10{% else %}bg-light{% endif %}">
+                        <span class="badge {% if opt.is_correct and question.display_gradeable_key %}bg-success{% else %}bg-secondary{% endif %} fs-6 px-3 py-2">{{ opt.option_key }}</span>
                         <div class="flex-grow-1 fs-6 text-dark">{{ opt.option_text|linebreaksbr }}
                             {% if opt.image %}<img src="{{ opt.image.url }}" alt="Option {{ opt.option_key }} image" class="img-fluid d-block mt-2" style="max-height:140px;">{% endif %}
                             {% for figure in opt.figures.all %}<img src="{{ figure.image.url }}" alt="Option {{ opt.option_key }} image" class="img-fluid d-block mt-2" style="max-height:140px;">{% endfor %}
                         </div>
-                        {% if opt.is_correct %}
+                        {% if opt.is_correct and question.display_gradeable_key %}
                             <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1">
                                 <i class="bi bi-check2-circle me-1"></i> Correct Answer Key
                             </span>
-                        {% endif %}
+                        {% elif opt.is_correct %}<span class="badge text-bg-warning">{% if question.question_type != 'mcq_single' %}Unsupported question type — ungraded{% else %}Unconfirmed suggestion — ungraded{% endif %}</span>{% endif %}
                     </div>
                     {% endfor %}
                 </div>

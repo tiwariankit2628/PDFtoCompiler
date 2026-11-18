@@ -5,6 +5,7 @@ from decimal import Decimal
 from django import forms
 from django.conf import settings
 from django.contrib import messages
+from django.core.files.base import ContentFile
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Q
@@ -16,9 +17,14 @@ from apps.exams.models import Exam, ExamQuestion
 from apps.payments.services import FeatureUnavailable, QuotaExceeded, consume, lock_practice_user, require_feature
 from apps.core.utils import log_audit
 from .forms import BootstrapFormMixin
+from .answer_key_validation import edited_answer_status
+from .figure_utils import page_image, validate_box
+from .figure_views import _png_upload, _safe_id
 from .models import AnswerStatus, ExtractedQuestion, Question, QuestionFigure, QuestionOption
+from .presentation import missing_crop_pages, primary_question_crops, unavailable_crop_pages
+from .private_storage import private_practice_storage
 from .structured_forms import add_tables_editor, clean_tables_editor
-from .practice_views import PrivateStudentMixin, _system_category, active_private_attempt
+from .practice_views import PrivateStudentMixin, _open_private_pdf, _system_category, active_private_attempt
 
 
 def bank_items(user):
@@ -46,19 +52,31 @@ class BankQuestionForm(BootstrapFormMixin, forms.Form):
     option_C = forms.CharField(required=False, label="Option C", widget=forms.Textarea(attrs={"rows": 2}))
     option_D = forms.CharField(required=False, label="Option D", widget=forms.Textarea(attrs={"rows": 2}))
     option_E = forms.CharField(required=False, label="Option E", widget=forms.Textarea(attrs={"rows": 2}))
-    correct_option = forms.ChoiceField(required=False, choices=[("", "No confirmed key — ungraded")] + [(k, k) for k in "ABCDE"], label="Student-confirmed key")
+    correct_option = forms.ChoiceField(required=False, choices=[("", "No confirmed key — ungraded")] + [(k, k) for k in "ABCDE"], label="Answer key (optional)")
+    confirm_answer_key = forms.BooleanField(required=False,
+        label="I checked this answer against the correct paper, set and printed choice order.",
+        help_text="Confirm new answers and changes to the question or choices. Unchanged confirmed answers stay confirmed.")
     positive_marks = forms.DecimalField(min_value=0, max_value=Decimal("999.99"), max_digits=5, decimal_places=2)
     negative_marks = forms.DecimalField(min_value=0, max_value=Decimal("999.99"), max_digits=5, decimal_places=2)
     explanation = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 3}))
 
     def __init__(self, *args, question, **kwargs):
         self.question = question
+        options = list(question.options.all())
+        keys = [o.option_key for o in options if o.is_correct]
+        self.previous_key = keys[0] if len(keys) == 1 else ""
+        self.previous_status = AnswerStatus.STUDENT_CONFIRMED if question.key_verified else AnswerStatus.NEEDS_REVIEW
+        self.previous_content = ((question.question_text or "").strip(), question.tables or [],
+                                 tuple((o.option_key, (o.option_text or "").strip()) for o in options))
+        has_crop = question.is_image_first and question.figures.filter(
+            source="question_crop", option__isnull=True).exclude(private_image="").exists()
+        # Only preserve labels that were already saved by the reviewer; never
+        # infer new choices merely from the existence of a crop.
+        self.crop_only_keys = {o.option_key for o in options if has_crop and not o.option_text.strip()}
         if not args and "data" not in kwargs:
-            options = list(question.options.all())
-            keys = [o.option_key for o in options if o.is_correct]
             kwargs["initial"] = {
                 **{name: getattr(question, name) for name in ("question_text", "subject", "topic", "chapter", "difficulty", "language", "positive_marks", "negative_marks", "explanation")},
-                "correct_option": keys[0] if question.key_verified and len(keys) == 1 else "",
+                "correct_option": keys[0] if len(keys) == 1 else "",
                 **{f"option_{o.option_key}": o.option_text for o in options if o.option_key in "ABCDE"},
             }
         super().__init__(*args, **kwargs)
@@ -69,12 +87,17 @@ class BankQuestionForm(BootstrapFormMixin, forms.Form):
         figures = list(self.question.figures.select_related("option"))
         if not cleaned.get("question_text", "").strip() and not self.question.private_image and not any(not f.option_id and f.private_image for f in figures):
             self.add_error("question_text", "A question statement or question figure is required.")
-        keys = [k for k in "ABCDE" if cleaned.get(f"option_{k}", "").strip()
+        legacy_image_keys = {option.option_key for option in self.question.options.all() if option.image}
+        keys = [k for k in "ABCDE" if cleaned.get(f"option_{k}", "").strip() or k in self.crop_only_keys
+                or k in legacy_image_keys
                 or any(f.option_id and f.option.option_key == k and f.private_image for f in figures)]
         if len(keys) < 2:
             raise forms.ValidationError("At least two options need text or an image.")
         if cleaned.get("correct_option") and cleaned["correct_option"] not in keys:
             self.add_error("correct_option", "Choose an existing option or leave the key blank.")
+        if (cleaned.get("confirm_answer_key") and cleaned.get("correct_option")
+                and self.question.question_type != Question.QuestionType.MCQ_SINGLE):
+            self.add_error("correct_option", "Only single-correct MCQs can use a confirmed key.")
         return cleaned
 
 
@@ -108,15 +131,24 @@ def save_bank_form(form, question):
     for field in ("question_text", "subject", "topic", "chapter", "difficulty", "language", "positive_marks", "negative_marks", "explanation"):
         setattr(question, field, data[field])
     question.tables = data["tables_data"]
-    question.key_verified = bool(data["correct_option"])
-    question.answer_status = AnswerStatus.STUDENT_CONFIRMED if question.key_verified else AnswerStatus.NEEDS_REVIEW
-    question.save()
     existing = {o.option_key: o for o in question.options.all()}
     figure_keys = set(question.figures.filter(option__isnull=False).values_list("option__option_key", flat=True))
+    preserved_keys = figure_keys | form.crop_only_keys | {key for key, option in existing.items() if option.image}
+    choices = tuple((key, data[f"option_{key}"].strip()) for key in "ABCDE"
+                    if data[f"option_{key}"].strip() or key in preserved_keys)
+    content = ((question.question_text or "").strip(), question.tables or [], choices)
+    question.answer_status = edited_answer_status(
+        form.previous_key, form.previous_status, data["correct_option"], data["confirm_answer_key"],
+        AnswerStatus.STUDENT_CONFIRMED, content_changed=content != form.previous_content,
+    )
+    if question.question_type != Question.QuestionType.MCQ_SINGLE:
+        question.answer_status = AnswerStatus.NEEDS_REVIEW
+    question.key_verified = question.answer_status == AnswerStatus.STUDENT_CONFIRMED
+    question.save()
     for index, key in enumerate("ABCDE"):
         text = data[f"option_{key}"].strip()
         opt = existing.get(key)
-        if text or key in figure_keys:
+        if text or key in preserved_keys:
             if not opt:
                 opt = QuestionOption(question=question, option_key=key)
             opt.option_text = text
@@ -136,7 +168,7 @@ class BankListView(PrivateStudentMixin, View):
         if denied:
             return denied
         base = bank_items(request.user)
-        qs = base.prefetch_related("options__figures", "figures")
+        qs = base.select_related("source_paper").prefetch_related("options__figures", "figures", "source_extracted_item")
         search = request.GET.get("q", "").strip()[:200]
         if search:
             qs = qs.filter(Q(question_text__icontains=search) | Q(subject__icontains=search) |
@@ -151,6 +183,22 @@ class BankListView(PrivateStudentMixin, View):
         page_obj = Paginator(qs.order_by("-created_at", "-pk"), 100).get_page(request.GET.get("page"))
         for question in page_obj:
             question.confirmed_key = confirmed_key(question, list(question.options.all()))
+            question.primary_crops = primary_question_crops(question, image_first=True, private=True)
+            question.image_notice = ""
+            if question.is_image_first:
+                if not question.primary_crops:
+                    question.image_notice = "Original question image is missing. Repair it before using image-only choices."
+                else:
+                    unavailable = unavailable_crop_pages(question.primary_crops, private=True)
+                    missing = missing_crop_pages(question, question.primary_crops)
+                    if unavailable:
+                        question.image_notice = "An original image file is unavailable on page " + ", ".join(map(str, unavailable)) + "."
+                    if missing:
+                        question.image_notice += " A possible continuation has no original image on page " + ", ".join(map(str, missing)) + "."
+                    question.image_notice = question.image_notice.strip()
+            staged = next((item for item in question.source_extracted_item.all()
+                           if item.paper_id == question.source_paper_id), None)
+            question.source_crop_warning = staged.crop_warning if staged else ""
         return render(request, "questions/practice_bank.html", {
             "page_obj": page_obj,
             "search": search, "filters": filters,
@@ -187,8 +235,116 @@ class BankEditView(PrivateStudentMixin, View):
                 return render(request, "questions/practice_bank_edit.html", {"question": question, "form": form})
             updated = save_bank_form(form, question)
         log_audit(request.user, "PRIVATE_BANK_EDITED", f"Private bank question {updated.pk} updated.", request=request)
-        messages.success(request, "Question updated. Existing tests and results keep their original version.")
+        if form.cleaned_data["correct_option"] and not updated.key_verified:
+            messages.warning(request, "Question saved. Its answer remains unconfirmed and will be ungraded until checked.")
+        else:
+            messages.success(request, "Question updated. Existing tests and results keep their original version.")
         return redirect("questions:practice_bank_edit", pk=updated.pk)
+
+
+def _private_bank_source(user, question):
+    if not question.source_paper_id:
+        return None
+    return question.source_extracted_item.filter(
+        paper_id=question.source_paper_id, paper__uploaded_by=user, paper__is_student_private=True,
+    ).select_related("paper").first()
+
+
+class BankOriginalImageView(PrivateStudentMixin, View):
+    """Repair originals in a new bank version without changing past tests."""
+    sensitive_during_attempt = True
+
+    def get(self, request, pk):
+        denied = _feature_or_redirect(request)
+        if denied:
+            return denied
+        question = get_object_or_404(bank_items(request.user), pk=pk)
+        staged = _private_bank_source(request.user, question)
+        return render(request, "questions/practice_bank_images.html", {
+            "question": question, "staged": staged,
+            "crops": primary_question_crops(question, image_first=True, private=True),
+            "page_range": range(1, staged.paper.total_pages + 1) if staged else [],
+        })
+
+    def post(self, request, pk):
+        denied = _feature_or_redirect(request)
+        if denied:
+            return denied
+        action = request.POST.get("action", "")
+        saved_file = None
+        try:
+            with transaction.atomic():
+                lock_practice_user(request.user)
+                if active_private_attempt(request.user):
+                    messages.error(request, "Finish your active practice test before changing images.")
+                    return redirect("questions:practice_list")
+                original = get_object_or_404(bank_items(request.user).select_for_update(), pk=pk)
+                figures = list(original.figures.all())
+                figure_id = _safe_id(request.POST.get("replace_id"))
+                source_figure = next((f for f in figures if f.pk == figure_id and
+                                      f.source == "question_crop" and f.option_id is None), None)
+                if figure_id and not source_figure:
+                    raise ValueError("Choose an original question image belonging to this question.")
+                if action == "remove":
+                    if not source_figure:
+                        raise ValueError("Choose an original image to remove.")
+                    png, page_number, box = None, None, None
+                elif action in ("crop", "upload"):
+                    staged = _private_bank_source(request.user, original)
+                    try:
+                        page_number = int(request.POST.get("page_number", ""))
+                        if page_number < 1 or (staged and staged.paper.total_pages and page_number > staged.paper.total_pages):
+                            raise ValueError
+                    except (TypeError, ValueError, OverflowError):
+                        raise ValueError("Choose a valid source page number.") from None
+                    if action == "crop":
+                        if not staged:
+                            raise ValueError("The original PDF is unavailable. Upload a replacement image instead.")
+                        try:
+                            box = validate_box([request.POST.get(k, "") for k in ("x0", "y0", "x1", "y1")])
+                            with _open_private_pdf(staged.paper) as document:
+                                if page_number > len(document):
+                                    raise ValueError("That source page does not exist.")
+                                png = page_image(document[page_number - 1], box, max_side=3200, scale=3)
+                        except Http404:
+                            raise ValueError("The original PDF could not be opened. Upload a replacement image instead.") from None
+                    else:
+                        box = []
+                        png = _png_upload(request.FILES.get("image"))
+                    if not source_figure and any(f.source == "question_crop" and f.option_id is None
+                                                 and f.page_number == page_number for f in figures):
+                        raise ValueError("This page already has an original image. Replace it instead of adding a duplicate.")
+                else:
+                    raise ValueError("Choose an image operation.")
+
+                # Clone only after all input has been validated. Existing exams
+                # keep their own version, option IDs and image files.
+                index = figures.index(source_figure) if source_figure else None
+                question = clone_for_edit(original)
+                figure = list(question.figures.all())[index] if index is not None else None
+                if action == "remove":
+                    figure.delete()  # old file may still be referenced by past tests
+                else:
+                    figure = figure or QuestionFigure(question=question)
+                    figure.page_number, figure.bounding_box, figure.source = page_number, box, "question_crop"
+                    figure.private_image.save(f"bank-{uuid.uuid4().hex}.png", ContentFile(png), save=True)
+                    saved_file = figure.private_image.name
+                    question.is_image_first = True
+                question.key_verified = False
+                question.answer_status = AnswerStatus.NEEDS_REVIEW
+                question.save(update_fields=["is_image_first", "key_verified", "answer_status"])
+        except ValueError as exc:
+            if saved_file:
+                private_practice_storage.delete(saved_file)
+            messages.error(request, str(exc))
+            return redirect("questions:practice_bank_images", pk=pk)
+        except Exception:
+            if saved_file:
+                private_practice_storage.delete(saved_file)
+            raise
+        log_audit(request.user, "PRIVATE_BANK_IMAGE_EDITED", f"Original image for private bank question {question.pk} changed.", request=request)
+        messages.warning(request, "Original image saved for future tests. Check the answer again; existing tests and results were not changed.")
+        return redirect("questions:practice_bank_images", pk=question.pk)
 
 
 class BankDeleteView(PrivateStudentMixin, View):
@@ -243,11 +399,26 @@ class BankTestCreateView(PrivateStudentMixin, View):
                 if active_private_attempt(request.user):
                     messages.error(request, "Finish your active practice test first.")
                     return redirect("questions:practice_list")
-                questions = list(bank_items(request.user).select_for_update().filter(pk__in=ids).prefetch_related("options"))
+                questions = list(bank_items(request.user).select_for_update().filter(pk__in=ids)
+                                 .prefetch_related("options__figures", "figures"))
                 if len(questions) != len(ids):
                     raise Http404()
                 by_id = {q.pk: q for q in questions}
                 questions = [by_id[pk] for pk in ids]
+                for question in questions:
+                    if question.question_type != Question.QuestionType.MCQ_SINGLE:
+                        messages.error(request, "Only single-correct MCQs can be used in a private bank test. Review or exclude the other types.")
+                        return redirect("questions:practice_bank")
+                    options = list(question.options.all())
+                    crops = primary_question_crops(question, image_first=True, private=True)
+                    unavailable = unavailable_crop_pages(crops, private=True)
+                    usable_crop = bool(crops and not unavailable and not missing_crop_pages(question, crops))
+                    incomplete = (len(options) < 2 or any(not option.option_text.strip()
+                        and not any(figure.private_image for figure in option.figures.all()) and not usable_crop
+                        for option in options))
+                    if incomplete:
+                        messages.error(request, "A selected question has missing choices or an unavailable original image. Edit or repair it before creating the test.")
+                        return redirect("questions:practice_bank")
                 positive = sum((q.positive_marks for q in questions), Decimal("0"))
                 negative = sum((q.negative_marks for q in questions), Decimal("0"))
                 if positive > Decimal("9999.99") or negative > Decimal("9999.99"):
@@ -260,7 +431,8 @@ class BankTestCreateView(PrivateStudentMixin, View):
                     status=Exam.ExamStatus.PUBLISHED, is_free=True, max_attempts=0,
                     duration_minutes=form.cleaned_data["duration_minutes"], total_marks=positive,
                     passing_percentage=form.cleaned_data["passing_percentage"] or Decimal("0"),
-                    shuffle_questions=False, shuffle_options=False, show_result_immediately=True, allow_review_answers=True,
+                    shuffle_questions=False, shuffle_options=False, image_first_mode=any(q.is_image_first for q in questions),
+                    show_result_immediately=True, allow_review_answers=True,
                     description="Private test from your question bank. Only confirmed keys are graded.")
                 ExamQuestion.objects.bulk_create([
                     ExamQuestion(exam=exam, question=q, order=i, section=q.subject or "General",

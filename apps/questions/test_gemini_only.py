@@ -175,8 +175,10 @@ class GeminiOnlyWorkflowTests(TestCase):
 
     def test_teacher_screen_is_local_only_and_rejects_crafted_cloud(self):
         response = self.client.get(reverse("questions:paper_upload"))
-        self.assertContains(response, "Local PyMuPDF / Tesseract")
-        self.assertContains(response, "More methods")
+        self.assertContains(response, "Your PDF is processed on the server and is not sent to an external provider.")
+        self.assertNotContains(response, 'id="id_extraction_mode"')
+        self.assertNotContains(response, "PyMuPDF")
+        self.assertNotContains(response, "Tesseract")
         self.assertNotContains(response, "Gemini only")
         self.assertNotContains(response, "Mathpix")
         with patch("apps.questions.tasks.extract_cloud_paper.delay") as delay:
@@ -261,7 +263,7 @@ class GeminiOnlyWorkflowTests(TestCase):
     def test_student_practice_upload_is_local_only_and_rejects_crafted_cloud(self):
         self.client.force_login(self.student)
         response = self.client.get(reverse("questions:practice_upload"))
-        self.assertContains(response, "Local extraction only")
+        self.assertContains(response, "Your PDF is processed on the server and is not sent to an external provider.")
         self.assertNotContains(response, "Gemini only")
         self.assertNotContains(response, "Mathpix")
         # A crafted gemini POST is rejected server-side: no paper, no usage, no task.

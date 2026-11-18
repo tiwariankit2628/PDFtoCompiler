@@ -174,7 +174,9 @@
                     </div>
                     {% if attempt.status != 'in_progress' and attempt.exam.show_result_immediately and not attempt.classroom_session_id %}
                     <div class="mt-1">
-                        {% if attempt.is_passed %}
+                        {% if attempt.has_ungraded_keys %}
+                            <span class="badge text-bg-light border">Partial · unranked</span>
+                        {% elif attempt.is_passed %}
                             <span class="badge bg-success">Passed · {{ attempt.percentage }}%</span>
                         {% else %}
                             <span class="badge" style="background:var(--danger);color:#fff;">Not qualified · {{ attempt.percentage }}%</span>

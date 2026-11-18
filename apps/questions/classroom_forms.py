@@ -19,14 +19,6 @@ class ClassroomPaperUploadForm(QuestionPaperUploadForm):
 
 class ClassroomQuestionForm(PracticeQuestionForm):
     option_error_message = "At least two options need text, an attached image or confirmed crop labels."
-    # The teacher selects only labels actually visible in the original crop.
-    # An empty string is not invented option text, and no answer is inferred.
-    visible_crop_choices = forms.MultipleChoiceField(
-        required=False, choices=[(key, key) for key in "ABCDE"],
-        widget=forms.CheckboxSelectMultiple,
-        label="Choice labels visible in the original question image",
-        help_text="For image-only choices, check only labels you can see in the crop. No text or answer will be guessed.",
-    )
     question_number = forms.IntegerField(min_value=1, label="Question number")
     detected_type = forms.ChoiceField(
         choices=ExtractedQuestion.DetectedType.choices,
@@ -43,18 +35,7 @@ class ClassroomQuestionForm(PracticeQuestionForm):
                                       if isinstance(o, dict) and o.get("visible_in_crop") is True],
             )
         self.fields["visible_crop_choices"].widget.attrs.pop("class", None)
-        self.order_fields(["question_number", "detected_type", "question_text", "tables_json", "option_A", "option_B", "option_C", "option_D", "option_E", "visible_crop_choices", "correct_option", "positive_marks", "negative_marks", "explanation", "reviewed"])
-
-    def available_option_keys(self, cleaned, figures):
-        keys = set(super().available_option_keys(cleaned, figures))
-        selected = set(cleaned.get("visible_crop_choices") or [])
-        has_crop = (self.question.paper.image_first and self.question.is_image_first
-                    and any(f.source == "question_crop" and not f.option_key and f.private_image for f in figures))
-        if selected and not has_crop:
-            self.add_error("visible_crop_choices", "Add an original question crop in image-first mode before confirming labels.")
-        elif has_crop:
-            keys.update(selected)
-        return sorted(keys)
+        self.order_fields(["question_number", "detected_type", "question_text", "tables_json", "option_A", "option_B", "option_C", "option_D", "option_E", "visible_crop_choices", "correct_option", "confirm_answer_key", "positive_marks", "negative_marks", "explanation", "reviewed"])
 
     def clean_question_number(self):
         number = self.cleaned_data["question_number"]
@@ -68,7 +49,7 @@ class ClassroomCreateForm(BootstrapFormMixin, forms.Form):
     duration_minutes = forms.IntegerField(label="Duration (minutes)", min_value=1, max_value=1440, initial=30,
         help_text="1–1,440 minutes. The timer starts when each student begins and never resets on reconnect.")
     answer_key_text = forms.CharField(
-        label="Paste answer key (optional)", required=False,
+        label="Type or paste answer key (optional)", required=False,
         widget=forms.Textarea(attrs={"rows": 3, "placeholder": "1: A, 2: B, 3: D"}),
         help_text="Only enter answers you have checked. Blank keys stay ungraded, not wrong.",
     )

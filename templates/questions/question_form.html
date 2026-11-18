@@ -79,6 +79,7 @@
                         <div class="col-md-4">
                             <label class="form-label small fw-bold">Question Format</label>
                             {{ form.question_type }}
+                            <div class="form-text small">Only single-correct MCQs are scored. Multiple-correct and numerical types remain ungraded.</div>
                         </div>
                     </div>
                 </div>
@@ -192,8 +193,9 @@
                     <label class="form-label small fw-bold">Select Correct Option (optional)</label>
                     {{ form.correct_option }}
                     {% if form.correct_option.errors %}<div class="text-danger small mt-1">{{ form.correct_option.errors.0 }}</div>{% endif %}
+                    {% if form.confirm_answer_key %}<div class="form-check mt-3">{{ form.confirm_answer_key }} <label class="form-check-label small" for="{{ form.confirm_answer_key.id_for_label }}">{{ form.confirm_answer_key.label }}</label><div class="form-text">{{ form.confirm_answer_key.help_text }}</div></div>{% endif %}
                     <div class="form-text small mt-2">
-                        Candidates choosing this option will receive positive marks during automated evaluation.
+                        {% if form.instance.is_pdf_derived %}Only a confirmed single-correct key is graded. Unconfirmed keys stay ungraded.{% else %}Candidates choosing this option will receive positive marks during automated evaluation.{% endif %}
                     </div>
                 </div>
             </div>

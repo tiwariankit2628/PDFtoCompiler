@@ -101,21 +101,22 @@
                 <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="unattempted">
                     Unattempted ({{ unattempted_total }})
                 </button>
-                {% if attempt.classroom_session_id %}<button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="ungraded">Ungraded ({{ ungraded_total }})</button>{% endif %}
+                {% if attempt.classroom_session_id or attempt.has_ungraded_keys %}<button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="ungraded">Ungraded ({{ ungraded_total }})</button>{% endif %}
             </div>
             <div class="small text-muted">
                 {% if attempt.classroom_session_id %}Score on confirmed keys: <strong class="text-dark">{% if classroom_summary.score_available %}{{ attempt.score_obtained }}{% else %}Not available{% endif %}</strong>{% if not classroom_summary.fully_keyed %} · incomplete{% endif %}
+                {% elif attempt.has_ungraded_keys %}Recorded score: <strong class="text-dark">{% if partial_summary.score_available %}{{ attempt.score_obtained }}{% if partial_summary.possible_marks != None %} / {{ partial_summary.possible_marks }}{% endif %}{% else %}Not available{% endif %}</strong> · partial, not ranked
                 {% else %}Score: <strong class="text-dark">{{ attempt.score_obtained }} / {{ attempt.total_marks }}</strong> ({{ attempt.percentage }}%){% endif %}
             </div>
         </div>
     </div>
 
-    {% if attempt.classroom_session_id %}<div class="alert alert-light border small">Outcomes and saved key labels reflect grading when the attempt ended. Question text, options and explanations below are the current version and may have changed since then. Older attempts may not have a saved key label.</div>{% endif %}
+    {% if has_snapshot_reviews %}<div class="alert alert-light border small">Outcomes and saved key labels reflect grading when the attempt ended. Question text, options and explanations below are the current version and may have changed since then. Older attempts may not have a saved key label.</div>{% endif %}
 
     <!-- Questions Review Feed -->
     <div class="d-flex flex-column gap-4" id="questions-feed">
         {% for q_data in reviewed_questions %}
-        <div class="card border-0 shadow-sm rounded-4 p-4 review-card" data-status="{{ q_data.status }}">
+        <div class="card border-0 shadow-sm rounded-4 p-4 review-card" data-status="{{ q_data.status }}" data-image-question>
             <!-- Question Meta Header -->
             <div class="d-flex flex-wrap justify-content-between align-items-center border-bottom pb-3 mb-3 gap-2">
                 <div class="d-flex align-items-center gap-2">
@@ -127,9 +128,9 @@
                     <span class="text-muted"><i class="bi bi-clock me-1"></i> {{ q_data.time_spent }}s spent</span>
                     <span class="badge bg-{{ q_data.badge_class }} px-2.5 py-1.5 fw-bold">
                         {% if q_data.status == 'correct' %}
-                            <i class="bi bi-check-circle-fill me-1"></i> Correct ({% if attempt.classroom_session_id %}{{ q_data.marks_awarded }}{% else %}+{{ q_data.positive_marks }}{% endif %})
+                            <i class="bi bi-check-circle-fill me-1"></i> Correct ({% if q_data.use_snapshot %}{{ q_data.marks_awarded }}{% else %}+{{ q_data.positive_marks }}{% endif %})
                         {% elif q_data.status == 'incorrect' %}
-                            <i class="bi bi-x-circle-fill me-1"></i> Incorrect ({% if attempt.classroom_session_id %}{{ q_data.marks_awarded }}{% else %}-{{ q_data.negative_marks }}{% endif %})
+                            <i class="bi bi-x-circle-fill me-1"></i> Incorrect ({% if q_data.use_snapshot %}{{ q_data.marks_awarded }}{% else %}-{{ q_data.negative_marks }}{% endif %})
                         {% elif q_data.status == 'ungraded' %}
                             <i class="bi bi-clock me-1"></i> Answered, ungraded
                         {% else %}
@@ -139,23 +140,33 @@
                 </div>
             </div>
 
-            <!-- Question Statement -->
-            <div class="fs-6 text-dark mb-3 lh-base">
-                {{ q_data.question|render_question }}
-            </div>
+            {% if q_data.original_image_missing %}<p class="small text-danger">The original question image is unavailable. Available text and supporting images are shown below.</p>{% endif %}
+            {% if q_data.primary_crops %}
+              {% for figure in q_data.primary_crops %}<div class="mb-3 text-center"><a href="{% if attempt.classroom_session_id %}{% url 'exams:classroom_attempt_figure' attempt.attempt_uuid figure.pk %}{% else %}{{ figure.image.url }}{% endif %}" target="_blank" rel="noopener"><img data-primary-question-image loading="lazy" decoding="async" src="{% if attempt.classroom_session_id %}{% url 'exams:classroom_attempt_figure' attempt.attempt_uuid figure.pk %}{% else %}{{ figure.image.url }}{% endif %}" alt="Original question image{% if q_data.primary_crops|length > 1 %}, part {{ forloop.counter }}{% endif %}" class="img-fluid rounded border" style="max-height:420px;"></a></div>{% endfor %}
+              <p class="small text-danger" role="status" data-image-error hidden>An original image could not be loaded. Available text and supporting images are shown below.</p>
+              {% if q_data.missing_crop_pages %}<p class="small text-danger">A question image may be incomplete. Available text and supporting images are shown below.</p>{% endif %}
+              <details data-image-fallback class="small mb-3" {% if q_data.missing_crop_pages %}open{% endif %}><summary>Accessible text and supporting images</summary>
+            {% endif %}
+            <!-- Text-mode or unavailable-image fallback. -->
+            <div class="fs-6 text-dark mb-3 lh-base">{{ q_data.question|render_question }}</div>
 
             <!-- Diagram Image if present -->
             {% if q_data.question.private_image and attempt.classroom_session_id %}
             <div class="mb-3 text-center"><img src="{% url 'exams:classroom_attempt_image' attempt.attempt_uuid q_data.question.pk %}" alt="Question diagram" class="img-fluid rounded border shadow-sm" style="max-height:280px;"></div>
-            {% elif q_data.question.image %}
+            {% elif q_data.question.image and not attempt.classroom_session_id %}
             <div class="mb-3 text-center">
                 <img src="{{ q_data.question.image.url }}" alt="Question Diagram" class="img-fluid rounded border shadow-sm" style="max-height: 280px;">
             </div>
             {% endif %}
 
-            {% for figure in q_data.question.figures.all %}{% if not figure.option_id %}<div class="mb-3 text-center">{% if figure.source == 'option-source' %}<div class="small text-muted">Original choices in printed order (1=A, 2=B, etc.).</div>{% elif figure.source == 'parallel-source' %}<div class="small text-muted">Other original-language region — verify that choices match the printed labels (1=A, 2=B, etc.).</div>{% elif figure.source == 'stem-source' or figure.source == 'table-source' %}<div class="small text-muted">Original question or table region.</div>{% endif %}<img src="{% if figure.private_image and attempt.classroom_session_id %}{% url 'exams:classroom_attempt_figure' attempt.attempt_uuid figure.pk %}{% elif figure.image %}{{ figure.image.url }}{% endif %}" alt="Question figure" class="img-fluid rounded border" style="max-height:280px;"></div>{% endif %}{% endfor %}
+            {% for figure in q_data.question.figures.all %}{% if not figure.option_id and figure.source != 'question_crop' or not q_data.primary_crops and not figure.option_id %}{% if figure.private_image and attempt.classroom_session_id or figure.image and not attempt.classroom_session_id %}<div class="mb-3 text-center">{% if figure.source == 'option-source' %}<div class="small text-muted">Original choices in printed order (1=A, 2=B, etc.).</div>{% elif figure.source == 'parallel-source' %}<div class="small text-muted">Other original-language region — verify that choices match the printed labels (1=A, 2=B, etc.).</div>{% elif figure.source == 'stem-source' or figure.source == 'table-source' %}<div class="small text-muted">Original question or table region.</div>{% endif %}<img loading="lazy" src="{% if attempt.classroom_session_id %}{% url 'exams:classroom_attempt_figure' attempt.attempt_uuid figure.pk %}{% else %}{{ figure.image.url }}{% endif %}" alt="Question figure" class="img-fluid rounded border" style="max-height:280px;"></div>{% endif %}{% endif %}{% endfor %}
+            {% for opt in q_data.options %}
+              {% if opt.image and not attempt.classroom_session_id %}<figure><figcaption>Option {{ opt.option_key }} image</figcaption><img loading="lazy" src="{{ opt.image.url }}" alt="Option {{ opt.option_key }} image" class="img-fluid rounded border" style="max-height:120px;"></figure>{% endif %}
+              {% for figure in opt.figures.all %}{% if figure.private_image and attempt.classroom_session_id or figure.image and not attempt.classroom_session_id %}<figure><figcaption>Option {{ opt.option_key }} image</figcaption><img loading="lazy" src="{% if attempt.classroom_session_id %}{% url 'exams:classroom_attempt_figure' attempt.attempt_uuid figure.pk %}{% else %}{{ figure.image.url }}{% endif %}" alt="Option {{ opt.option_key }} image" class="img-fluid rounded border" style="max-height:120px;"></figure>{% endif %}{% endfor %}
+            {% endfor %}
+            {% if q_data.primary_crops %}</details>{% endif %}
 
-            {% if attempt.classroom_session_id %}
+            {% if q_data.use_snapshot %}
             <div class="small text-muted mb-3">
                 {% if q_data.saved_choice != None %}Choice when graded: <strong>{{ q_data.saved_choice }}</strong>.{% elif q_data.status != 'unattempted' %}Original choice label was not recorded.{% endif %}
                 {% if q_data.saved_key != None %} Key when graded: <strong>{{ q_data.saved_key }}</strong>.{% elif q_data.response.key_confirmed_at_grading == False %} No confirmed key when graded.{% else %} Original key status was not recorded.{% endif %}
@@ -165,21 +176,18 @@
             <!-- Options Review Grid -->
             <div class="mb-3">
                 {% for opt in q_data.options %}
-                <div class="review-opt-card {% if q_data.correct_option.id == opt.id or not attempt.classroom_session_id and opt.is_correct %}review-opt-correct{% elif q_data.selected_option.id == opt.id and q_data.status == 'incorrect' %}review-opt-incorrect{% endif %}">
-                    <span class="review-badge-circle {% if q_data.correct_option.id == opt.id or not attempt.classroom_session_id and opt.is_correct %}bg-success text-white{% elif q_data.selected_option.id == opt.id and q_data.status == 'incorrect' %}bg-danger text-white{% else %}bg-light text-dark border{% endif %}">
+                <div class="review-opt-card {% if q_data.correct_option.id == opt.id or not q_data.use_snapshot and opt.is_correct %}review-opt-correct{% elif q_data.selected_option.id == opt.id and q_data.status == 'incorrect' %}review-opt-incorrect{% endif %}">
+                    <span class="review-badge-circle {% if q_data.correct_option.id == opt.id or not q_data.use_snapshot and opt.is_correct %}bg-success text-white{% elif q_data.selected_option.id == opt.id and q_data.status == 'incorrect' %}bg-danger text-white{% else %}bg-light text-dark border{% endif %}">
                         {{ opt.option_key }}
                     </span>
                     <div class="flex-grow-1 text-dark">
                         {{ opt.option_text|linebreaksbr }}
-                        {% if opt.image %}
-                        <img src="{{ opt.image.url }}" alt="Option Image" class="img-fluid d-block mt-2 rounded border" style="max-height: 120px;">
-                        {% endif %}
-                        {% for figure in opt.figures.all %}<img src="{% if figure.private_image and attempt.classroom_session_id %}{% url 'exams:classroom_attempt_figure' attempt.attempt_uuid figure.pk %}{% elif figure.image %}{{ figure.image.url }}{% endif %}" alt="Option image" class="img-fluid d-block mt-2 rounded border" style="max-height:120px;">{% endfor %}
+
                     </div>
                     <div>
                         {% if q_data.correct_option.id == opt.id and q_data.selected_option.id == opt.id and q_data.status == 'correct' %}
                             <span class="badge bg-success"><i class="bi bi-check2 me-1"></i> Your Answer (Correct)</span>
-                        {% elif q_data.correct_option.id == opt.id or not attempt.classroom_session_id and opt.is_correct %}
+                        {% elif q_data.correct_option.id == opt.id or not q_data.use_snapshot and opt.is_correct %}
                             <span class="badge bg-success bg-opacity-25 text-success border border-success"><i class="bi bi-check2 me-1"></i> {% if attempt.classroom_session_id %}Key at grading{% else %}Correct Answer{% endif %}</span>
                         {% elif q_data.selected_option.id == opt.id and q_data.status == 'ungraded' %}
                             <span class="badge text-bg-light border">Your answer · ungraded</span>
@@ -237,4 +245,5 @@
     {% endif %}
 </div>
 {% endblock %}
+{% block extra_js %}<script src="{% static 'js/question-image-fallback.js' %}"></script>{% endblock %}
 

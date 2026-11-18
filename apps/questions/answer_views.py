@@ -134,6 +134,9 @@ def _decide(request, pk, private):
             if request.POST.get("confirm") != "yes":
                 messages.error(request, "Confirm that you personally checked this answer before saving it.")
                 return redirect(target_name, pk=pk)
+            if question.detected_type != ExtractedQuestion.DetectedType.SINGLE:
+                messages.error(request, "Only single-correct MCQs can use a confirmed answer here. Review the question type first.")
+                return redirect(target_name, pk=pk)
             if suggestion.input_hash != question_fingerprint(question, suggestion.vision_used):
                 messages.error(request, "The question or its images changed after this suggestion. Review it again or request a new suggestion.")
                 return redirect(target_name, pk=pk)

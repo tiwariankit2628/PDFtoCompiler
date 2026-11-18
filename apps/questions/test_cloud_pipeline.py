@@ -262,10 +262,12 @@ class CloudWorkflowTests(TestCase):
             altered = QuestionPaperUploadForm(data={**base, "extraction_mode": mode}, files=fresh_files(), user=self.teacher)
             self.assertFalse(altered.is_valid(), f"mode {mode} should be rejected")
             self.assertIn("extraction_mode", altered.errors)
-        # The rendered screen shows only local + a disabled placeholder, no cloud copy.
+        # The rendered screen explains local processing without a selector or library names.
         screen = self.client.get(reverse("questions:paper_upload"))
-        self.assertContains(screen, "Local PyMuPDF / Tesseract")
-        self.assertContains(screen, "More methods")
+        self.assertContains(screen, "Your PDF is processed on the server and is not sent to an external provider.")
+        self.assertNotContains(screen, 'id="id_extraction_mode"')
+        self.assertNotContains(screen, "PyMuPDF")
+        self.assertNotContains(screen, "Tesseract")
         self.assertNotContains(screen, "Mathpix")
         self.assertNotContains(screen, "Gemini")
 

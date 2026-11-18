@@ -66,6 +66,9 @@ const assert = require('assert');
     await page.getByRole('textbox',{name:'Table 1, row 4, cell 1'}).fill('Reviewed row');
     await page.getByRole('textbox',{name:'Table 1, row 4, cell 2'}).fill('समय');
     if (await page.locator('#id_reviewed').count()) await page.locator('#id_reviewed').check();
+    // Editing a table invalidates the earlier key confirmation; explicitly
+    // check the answer against this edited version before creating the test.
+    await page.locator('#id_confirm_answer_key').check();
     await noOverflow('table editor');
     await Promise.all([page.waitForURL('**/settings/'),page.getByRole('button',{name:'Save question'}).click()]);
     assert(await page.locator('table.question-table').getByText('Reviewed row').isVisible());

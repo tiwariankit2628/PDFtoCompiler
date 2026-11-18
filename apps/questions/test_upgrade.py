@@ -252,6 +252,21 @@ class AISuggestionTests(TestCase):
         self.assertEqual(self.question.answer_status, AnswerStatus.STUDENT_CONFIRMED)
         self.assertEqual(self.question.explanation, "Human edited")
 
+    def test_ai_suggestion_cannot_confirm_an_unsupported_question_type(self):
+        with patch("apps.questions.answer_views.GeminiAnswerClient") as provider:
+            provider.return_value.suggest.return_value = self.fake_result(); provider.return_value.calls = 2
+            self.client.post(self.request_url, {"consent": "yes"})
+        suggestion = AIAnswerSuggestion.objects.get()
+        self.question.detected_type = ExtractedQuestion.DetectedType.MULTIPLE
+        self.question.save(update_fields=["detected_type"])
+        response = self.client.post(self.decision_url, {"suggestion_id": suggestion.pk, "action": "confirm",
+                                   "confirm": "yes", "option_key": "A"}, follow=True)
+        self.assertContains(response, "Only single-correct MCQs can use a confirmed answer")
+        self.question.refresh_from_db(); suggestion.refresh_from_db()
+        self.assertEqual(self.question.answer_status, AnswerStatus.NEEDS_REVIEW)
+        self.assertEqual(self.question.correct_option, "")
+        self.assertEqual(suggestion.status, AIAnswerSuggestion.Status.SUGGESTED)
+
     def test_stale_suggestion_cannot_confirm_and_reject_does_not_change_existing_key(self):
         with patch("apps.questions.answer_views.GeminiAnswerClient") as provider:
             provider.return_value.suggest.return_value = self.fake_result(); provider.return_value.calls = 2

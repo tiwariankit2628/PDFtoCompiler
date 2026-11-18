@@ -31,6 +31,7 @@
     </div>
 </div>
 
+{% if analytics.partial_attempts %}<div class="alert alert-info small">{{ analytics.partial_attempts }} partial attempt{{ analytics.partial_attempts|pluralize }} with missing or unsupported keys are unranked and excluded from the average and pass-rate statistics. They remain in the CSV export.</div>{% endif %}
 <!-- Cohort Performance Metrics Grid -->
 <div class="row g-3 mb-4">
     <div class="col-6 col-md-3">
@@ -43,21 +44,21 @@
     <div class="col-6 col-md-3">
         <div class="card h-100 p-3 border-0 shadow-sm rounded-4 text-center">
             <span class="text-muted small mb-1">Class Average Score</span>
-            <h3 class="fw-bold text-dark mb-0">{{ analytics.avg_score }} <small class="fs-6 text-muted">/ {{ exam.total_marks }}</small></h3>
-            <span class="text-muted small">Average: {{ analytics.avg_percentage }}%</span>
+            <h3 class="fw-bold text-dark mb-0">{% if analytics.ranked_attempts %}{{ analytics.avg_score }} <small class="fs-6 text-muted">/ {{ exam.total_marks }}</small>{% else %}—{% endif %}</h3>
+            <span class="text-muted small">{% if analytics.ranked_attempts %}Average: {{ analytics.avg_percentage }}%{% else %}No complete results yet{% endif %}</span>
         </div>
     </div>
     <div class="col-6 col-md-3">
         <div class="card h-100 p-3 border-0 shadow-sm rounded-4 text-center">
             <span class="text-muted small mb-1">Class Pass Rate</span>
-            <h3 class="fw-bold text-success mb-0">{{ analytics.pass_percentage }}%</h3>
-            <span class="text-muted small">{{ analytics.pass_count }} / {{ analytics.total_attempts }} Passed</span>
+            <h3 class="fw-bold text-success mb-0">{% if analytics.ranked_attempts %}{{ analytics.pass_percentage }}%{% else %}—{% endif %}</h3>
+            <span class="text-muted small">{{ analytics.pass_count }} / {{ analytics.ranked_attempts }} complete results passed</span>
         </div>
     </div>
     <div class="col-6 col-md-3">
         <div class="card h-100 p-3 border-0 shadow-sm rounded-4 text-center">
             <span class="text-muted small mb-1">Score Range</span>
-            <h3 class="fw-bold text-dark mb-0">{{ analytics.lowest_score }} - {{ analytics.highest_score }}</h3>
+            <h3 class="fw-bold text-dark mb-0">{% if analytics.ranked_attempts %}{{ analytics.lowest_score }} - {{ analytics.highest_score }}{% else %}—{% endif %}</h3>
             <span class="text-muted small">Lowest to Highest</span>
         </div>
     </div>
