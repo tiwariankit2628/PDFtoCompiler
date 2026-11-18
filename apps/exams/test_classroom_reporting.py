@@ -34,7 +34,7 @@ class ClassroomReportingTests(ClassroomBase):
         session = self.session_for(exam=self.make_exam(keyed=1, questions=3))
         attempt = self.take(session, {1: "B", 2: "A"})
         summary = classroom_result_summary(attempt)
-        self.assertEqual(summary["counts"], {"correct": 0, "incorrect": 1, "unattempted": 1, "ungraded": 1})
+        self.assertEqual(summary["counts"], {"correct": 0, "partial": 0, "incorrect": 1, "unattempted": 1, "ungraded": 1})
         self.assertEqual(summary["pending_keys"], 2)
         self.assertEqual(summary["unknown_keys"], 0)
         self.assertEqual(summary["percentage"], Decimal("0.00"))

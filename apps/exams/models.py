@@ -296,6 +296,7 @@ class ExamAttempt(models.Model):
     rank = models.PositiveIntegerField("Candidate Rank", null=True, blank=True)
     percentile = models.DecimalField("Percentile", max_digits=5, decimal_places=2, null=True, blank=True)
     correct_count = models.PositiveIntegerField("Correct Count", default=0)
+    partial_count = models.PositiveIntegerField("Partially Correct Count", default=0)
     incorrect_count = models.PositiveIntegerField("Incorrect Count", default=0)
     unattempted_count = models.PositiveIntegerField("Unattempted Count", default=0)
     accuracy_percentage = models.DecimalField("Accuracy Percentage", max_digits=5, decimal_places=2, default=0.0)
@@ -353,11 +354,12 @@ class ExamAttempt(models.Model):
 
     @property
     def answered_count(self):
+        answered = (models.Q(selected_option__isnull=False) | ~models.Q(selected_option_ids=[])
+                    | models.Q(numerical_response__isnull=False))
         if self.status in self.FINAL_STATUSES:
-            return self.responses.filter(models.Q(selected_option__isnull=False)
-                                         | models.Q(selected_option_key_at_grading__isnull=False)
-                                         | models.Q(is_correct__isnull=False)).count()
-        return self.responses.filter(selected_option__isnull=False).count()
+            answered |= (models.Q(selected_option_key_at_grading__isnull=False)
+                         | models.Q(is_correct__isnull=False))
+        return self.responses.filter(answered).count()
 
     @property
     def marked_review_count(self):
@@ -369,7 +371,8 @@ class ExamAttempt(models.Model):
 
     @property
     def not_answered_count(self):
-        return self.responses.filter(is_visited=True, selected_option__isnull=True).count()
+        return self.responses.filter(is_visited=True, selected_option__isnull=True,
+                                     selected_option_ids=[], numerical_response__isnull=True).count()
 
     @property
     def uses_confirmed_key_only(self):
@@ -391,9 +394,18 @@ class ExamAttempt(models.Model):
                                      key_confirmed_at_grading__isnull=True).exists()
 
     @property
+    def has_legacy_key_snapshots(self):
+        """Older PDF or typed attempts may have a score but no recorded key."""
+        return self.responses.filter(
+            models.Q(exam_question__question__is_pdf_derived=True)
+            | models.Q(exam_question__question__question_type__in=("mcq_multiple", "numerical")),
+            key_confirmed_at_grading__isnull=True,
+        ).exists()
+
+    @property
     def graded_possible_marks(self):
         """Possible marks excluding ungraded questions, if the key status is known."""
-        if self.has_legacy_pdf_key_snapshots:
+        if self.has_legacy_key_snapshots:
             return None
         return sum((r.exam_question.positive_marks for r in
                     self.responses.select_related("exam_question").exclude(key_confirmed_at_grading=False)), Decimal("0.00"))
@@ -408,6 +420,7 @@ class ExamAttempt(models.Model):
         total_pos = Decimal("0.00")
         total_neg = Decimal("0.00")
         corr = 0
+        partial = 0
         incorr = 0
         unatt = 0
         graded_marks = Decimal("0.00")
@@ -422,11 +435,43 @@ class ExamAttempt(models.Model):
             # A private key is student-confirmed; a classroom/public PDF key is
             # teacher-confirmed. Unsupported types are never scored as if one
             # option represented the whole answer, even outside PDF workflows.
-            correct_options = [opt for opt in question.options.all() if opt.is_correct]
-            guarded = (confirmed or question.is_pdf_derived or question.question_type != "mcq_single"
-                       or len(correct_options) != 1)
+            options = list(question.options.all())
+            correct_options = [opt for opt in options if opt.is_correct]
             key_confirmed = (question.key_verified if question.is_private_practice
                              else question.answer_status == "manually_verified")
+            if question.question_type in ("mcq_multiple", "numerical"):
+                from .typed_responses import grade_typed_response
+                decision = grade_typed_response(resp, question, options, key_confirmed)
+                resp.typed_grading_snapshot = decision
+                has_key = decision["key_confirmed"]
+                resp.key_confirmed_at_grading = has_key
+                # Multiple/numerical keys are stored only in the typed snapshot.
+                resp.correct_option_key_at_grading = None
+                resp.selected_option_key_at_grading = None
+                outcome = decision["outcome"]
+                marks = Decimal(decision["marks"])
+                resp.marks_awarded = marks
+                resp.is_correct = True if outcome == "correct" else False if outcome == "incorrect" else None
+                if not has_key:
+                    all_required_keys_verified = False
+                else:
+                    graded_marks += resp.exam_question.positive_marks
+                if outcome == "correct":
+                    corr += 1
+                    total_pos += marks
+                elif outcome == "partial":
+                    partial += 1
+                    total_pos += marks
+                elif outcome == "incorrect":
+                    incorr += 1
+                    total_neg -= marks
+                elif outcome == "unattempted":
+                    unatt += 1
+                resp.save(update_fields=["typed_grading_snapshot", "key_confirmed_at_grading",
+                    "correct_option_key_at_grading", "selected_option_key_at_grading", "is_correct", "marks_awarded"])
+                continue
+            guarded = (confirmed or question.is_pdf_derived or question.question_type != "mcq_single"
+                       or len(correct_options) != 1)
             has_key = not guarded or (key_confirmed and question.question_type == "mcq_single" and len(correct_options) == 1)
             snapshot_key = guarded
             if snapshot_key:
@@ -467,10 +512,13 @@ class ExamAttempt(models.Model):
         net_score = total_pos - total_neg
         self.score_obtained = net_score
         self.correct_count = corr
+        self.partial_count = partial
         self.incorrect_count = incorr
         self.unattempted_count = unatt
 
-        attempted_total = corr + incorr
+        # Accuracy is the share of fully correct answers among graded attempts;
+        # partial-credit responses count in the denominator, not as incorrect.
+        attempted_total = corr + partial + incorr
         if attempted_total > 0:
             self.accuracy_percentage = round(Decimal(corr) / Decimal(attempted_total) * Decimal("100.0"), 2)
         else:
@@ -583,21 +631,19 @@ class ExamAttempt(models.Model):
         return True
 
     def auto_timeout_if_expired(self):
-        """Auto-submit once; serialize private/classroom timeout with answer saves."""
-        if self.status != self.AttemptStatus.IN_PROGRESS or not self.is_expired:
+        """Auto-submit once under the attempt lock; never recreate a deleted row."""
+        if self.pk is None or self.status != self.AttemptStatus.IN_PROGRESS or not self.is_expired:
             return False
-        if not self.exam.is_private_practice and not self.classroom_session_id:
-            return self.submit_attempt(is_timeout=True)
         with transaction.atomic():
             from django.db import connection
             from django.db.models import F
-            if self.classroom_session_id and connection.vendor == "sqlite":
+            # SQLite ignores SELECT FOR UPDATE. Acquire its writer lock before
+            # reading the row so concurrent timeout/submit operations serialize.
+            if connection.vendor == "sqlite":
                 type(self).objects.filter(pk=self.pk).update(id=F("id"))
-            # Session controls acquire session then attempt locks. Do not also
-            # lock the joined exam for a classroom attempt: that would invert
-            # the lock order against concurrent end-now on PostgreSQL.
-            lock_scope = ("self",) if self.classroom_session_id else ()
-            locked = type(self).objects.select_for_update(of=lock_scope).select_related("exam").filter(pk=self.pk).first()
+            # Classroom controls acquire session then attempt locks. Do not also
+            # lock the joined exam: that would invert the order against end-now.
+            locked = type(self).objects.select_for_update(of=("self",)).select_related("exam").filter(pk=self.pk).first()
             if not locked:  # The owner may have deleted the practice test.
                 return False
             changed = (locked.status == self.AttemptStatus.IN_PROGRESS and locked.is_expired
@@ -623,6 +669,13 @@ class ExamResponse(models.Model):
         blank=True,
         related_name="selected_in_responses",
     )
+    # The existing FK remains authoritative for single-choice responses.
+    # Multi IDs are validated against this question on every save/submit.
+    selected_option_ids = models.JSONField(default=list, blank=True)
+    numerical_response = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)
+    # Grading-time answer, key, outcome and rule for new typed questions.
+    # NULL deliberately means a legacy/in-progress row, never a reconstructed key.
+    typed_grading_snapshot = models.JSONField(null=True, blank=True, editable=False)
     is_marked_for_review = models.BooleanField("Marked for Review", default=False)
     is_visited = models.BooleanField("Visited", default=False)
     time_spent_seconds = models.PositiveIntegerField("Time Spent (Seconds)", default=0)
@@ -655,11 +708,13 @@ class ExamResponse(models.Model):
         """
         if not self.is_visited:
             return "not_visited"
-        if self.selected_option is not None and self.is_marked_for_review:
+        answered = (self.selected_option_id is not None or bool(self.selected_option_ids)
+                    or self.numerical_response is not None)
+        if answered and self.is_marked_for_review:
             return "answered_and_marked"
         if self.is_marked_for_review:
             return "marked_for_review"
-        if self.selected_option is not None:
+        if answered:
             return "answered"
         return "not_answered"
 

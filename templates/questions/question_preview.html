@@ -66,7 +66,8 @@
                 {% for figure in question.figures.all %}{% if not figure.option_id and figure.source != 'question_crop' or not question.primary_crops and not figure.option_id %}<div class="mb-3 text-center">{% if figure.source == 'option-source' %}<div class="small text-muted">Original choices in printed order (1=A, 2=B, etc.).</div>{% elif figure.source == 'parallel-source' %}<div class="small text-muted">Other original-language region — verify that choices match the printed labels (1=A, 2=B, etc.).</div>{% elif figure.source == 'stem-source' or figure.source == 'table-source' %}<div class="small text-muted">Original question or table region.</div>{% endif %}<img src="{{ figure.image.url }}" alt="Question figure" class="img-fluid rounded border" style="max-height:280px;"></div>{% endif %}{% endfor %}
 
                 {% if question.primary_crops %}</details>{% endif %}
-                <!-- Options -->
+                <!-- Options and confirmed numerical key -->
+                {% if question.question_type == 'numerical' %}<p class="small">Numerical key: {% if question.display_gradeable_key %}<strong>{{ question.numeric_key }}</strong> · tolerance {{ question.numeric_tolerance }}{% else %}unconfirmed / not graded{% endif %}</p>{% endif %}
                 <h6 class="fw-bold text-muted small text-uppercase mb-3">Multiple Choice Options:</h6>
                 <div class="d-flex flex-column gap-2 mb-4">
                     {% for opt in question.options.all %}
@@ -80,7 +81,7 @@
                             <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1">
                                 <i class="bi bi-check2-circle me-1"></i> Correct Answer Key
                             </span>
-                        {% elif opt.is_correct %}<span class="badge text-bg-warning">{% if question.question_type != 'mcq_single' %}Unsupported question type — ungraded{% else %}Unconfirmed suggestion — ungraded{% endif %}</span>{% endif %}
+                        {% elif opt.is_correct %}<span class="badge text-bg-warning">Unconfirmed suggestion — ungraded</span>{% endif %}
                     </div>
                     {% endfor %}
                 </div>

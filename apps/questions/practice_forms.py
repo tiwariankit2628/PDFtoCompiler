@@ -12,7 +12,7 @@ from .forms import (
     clean_local_extraction_mode,
     local_extraction_field,
 )
-from .answer_key_validation import parse_checked_answer_key
+from .answer_key_validation import canonical_answer, parse_checked_answer_key
 from .models import ExtractedQuestion, QuestionPaperUpload
 from .presentation import missing_crop_pages, unavailable_crop_pages
 from .structured_forms import add_tables_editor, clean_tables_editor
@@ -87,12 +87,23 @@ def practice_question_error(question, *, allow_confirmed_crop_choices=False):
                 return f"Option {key} needs text, an image or a checked label in the original crop."
             return f"Option {key} needs text or an image."
         keys.append(key)
-    if len(keys) < 2:
+    if question.detected_type == ExtractedQuestion.DetectedType.SUBJECTIVE:
+        return "Subjective questions cannot be answered in this test; review the type or exclude this question."
+    if question.detected_type != ExtractedQuestion.DetectedType.NUMERICAL and len(keys) < 2:
         return "At least two non-empty options are required."
-    if question.correct_option and question.correct_option.upper() not in keys:
-        return "The answer key must match an existing option."
+    if question.correct_option and (question.detected_type == ExtractedQuestion.DetectedType.SINGLE
+                                    or getattr(question, "typed_key_verified", False)):
+        try:
+            canonical_answer(question.correct_option, question.detected_type, [{"key": key} for key in keys])
+        except ValidationError:
+            return "The answer key does not match the question type or choices; edit this question."
     if question.positive_marks < 0 or question.negative_marks < 0:
         return "Marks cannot be negative."
+    if question.numeric_tolerance < 0 or question.partial_credit_per_choice < 0:
+        return "Scoring settings cannot be negative."
+    if (question.detected_type == ExtractedQuestion.DetectedType.MULTIPLE and question.multi_scoring_mode == "per_correct"
+            and not Decimal("0") < question.partial_credit_per_choice <= question.positive_marks):
+        return "Set a valid partial-credit amount before creating the test."
     return ""
 
 
@@ -106,7 +117,7 @@ class PracticeSettingsForm(BootstrapFormMixin, forms.Form):
     answer_key_text = forms.CharField(
         label="Type or paste answer key (optional)", required=False, max_length=30000,
         widget=forms.Textarea(attrs={"rows": 3, "placeholder": "1: A, 2: B, 3: D"}),
-        help_text="Enter only answers you have checked. Questions without a confirmed key stay ungraded.",
+        help_text="Checked pairs: single 1:1 (option A), multiple 2:[1,3], numerical 3:-2.5. Questions without a confirmed key stay ungraded.",
     )
     confirm_answer_key = forms.BooleanField(
         required=False, label="I checked the entered answers against the correct paper, set and printed choice order."
@@ -143,9 +154,6 @@ class PracticeSettingsForm(BootstrapFormMixin, forms.Form):
             self.add_error("confirm_answer_key", "Confirm that you checked the entered answer key, or leave it blank.")
         if not self.questions:
             raise ValidationError("Include at least one question before creating a test.")
-        unsupported = [q.question_number for q in self.questions if q.detected_type != ExtractedQuestion.DetectedType.SINGLE]
-        if unsupported:
-            raise ValidationError("Only single-correct MCQs can be scored. Review the type or exclude: " + ", ".join(map(str, unsupported[:20])))
         invalid = [q.question_number for q in self.questions if practice_question_error(q, allow_confirmed_crop_choices=True)]
         if invalid:
             raise ValidationError("Edit or exclude invalid questions before creating the test: " + ", ".join(map(str, invalid[:20])) + ("…" if len(invalid) > 20 else ""))
@@ -167,7 +175,7 @@ class PracticeQuestionForm(BootstrapFormMixin, forms.Form):
     detected_type = forms.ChoiceField(
         required=False, choices=ExtractedQuestion.DetectedType.choices,
         label="Question type (check against the PDF)",
-        help_text="Choose single-correct only if exactly one printed choice is selected, even when that choice combines several statements. Multi-select and numerical questions cannot be scored here.",
+        help_text="Choose single-correct for one printed choice, multiple-correct for several choices, or numerical for a number.",
     )
     question_text = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 4}))
     option_A = forms.CharField(label="Option A", required=False, widget=forms.Textarea(attrs={"rows": 2}))
@@ -182,8 +190,17 @@ class PracticeQuestionForm(BootstrapFormMixin, forms.Form):
     )
     correct_option = forms.ChoiceField(
         required=False, choices=[("", "No answer key — ungraded")] + [(k, k) for k in "ABCDE"],
-        label="Correct option (optional)",
+        label="Single-correct answer (optional)",
     )
+    typed_key = forms.CharField(required=False, max_length=64, label="Multiple or numerical answer (optional)",
+        help_text="For multiple-correct, enter [A,C] or [1,3]. For numerical, enter the actual value, e.g. -2.5. Leave blank if unknown.")
+    multi_scoring_mode = forms.ChoiceField(required=False, choices=[("exact", "Exact set only"),
+        ("per_correct", "Partial credit per correct choice")], label="Multiple-correct scoring",
+        help_text="Exact awards full marks only for the complete set. Partial awards the configured amount for each selected correct choice, up to full marks; any wrong choice incurs the negative marks.")
+    partial_credit_per_choice = forms.DecimalField(required=False, min_value=0, max_value=Decimal("999.99"),
+        max_digits=5, decimal_places=2, label="Partial marks per correct choice")
+    numeric_tolerance = forms.DecimalField(required=False, min_value=0, max_digits=18, decimal_places=6,
+        label="Numerical answer tolerance", help_text="0 means exact equality. Set a tolerance only if the paper permits a range.")
     confirm_answer_key = forms.BooleanField(required=False,
         label="I checked this answer against the correct paper, set and printed choice order.",
         help_text="New answers or changes to the question, type, number or choices require confirmation. Unchanged confirmed answers stay confirmed.")
@@ -198,7 +215,12 @@ class PracticeQuestionForm(BootstrapFormMixin, forms.Form):
             options = {str(o.get("key", "")).upper(): o.get("text", "") for o in question.options if isinstance(o, dict)}
             kwargs["initial"] = {
                 "detected_type": question.detected_type,
-                "question_text": question.question_text, "correct_option": question.correct_option,
+                "question_text": question.question_text,
+                "correct_option": question.correct_option if question.detected_type == ExtractedQuestion.DetectedType.SINGLE else "",
+                "typed_key": question.correct_option if question.detected_type in (ExtractedQuestion.DetectedType.MULTIPLE, ExtractedQuestion.DetectedType.NUMERICAL) else "",
+                "multi_scoring_mode": question.multi_scoring_mode,
+                "partial_credit_per_choice": question.partial_credit_per_choice,
+                "numeric_tolerance": question.numeric_tolerance,
                 "positive_marks": question.positive_marks, "negative_marks": question.negative_marks,
                 "explanation": question.explanation, "reviewed": not question.is_flagged,
                 "visible_crop_choices": [o.get("key") for o in question.options
@@ -227,12 +249,34 @@ class PracticeQuestionForm(BootstrapFormMixin, forms.Form):
         if not cleaned.get("question_text", "").strip() and not self.question.private_image and not any(not f.option_key and f.private_image for f in figures):
             self.add_error("question_text", "Add a question statement or attach a question image.")
         keys = self.available_option_keys(cleaned, figures)
-        if len(keys) < 2:
-            raise ValidationError(self.option_error_message)
-        if cleaned.get("correct_option") and cleaned["correct_option"] not in keys:
-            self.add_error("correct_option", "Select an existing option, or leave the answer key blank.")
         question_type = cleaned.get("detected_type") or self.question.detected_type
         cleaned["detected_type"] = question_type
-        if question_type != ExtractedQuestion.DetectedType.SINGLE and cleaned.get("correct_option"):
-            self.add_error("correct_option", "A single-choice key cannot grade this question type. Leave it blank or review the type.")
+        if question_type in (ExtractedQuestion.DetectedType.SINGLE, ExtractedQuestion.DetectedType.MULTIPLE) and len(keys) < 2:
+            raise ValidationError(self.option_error_message)
+        if question_type == ExtractedQuestion.DetectedType.SINGLE:
+            if cleaned.get("correct_option") and cleaned["correct_option"] not in keys:
+                self.add_error("correct_option", "Select an existing option, or leave the answer key blank.")
+            cleaned["answer_key_value"] = cleaned.get("correct_option", "")
+        elif question_type in (ExtractedQuestion.DetectedType.MULTIPLE, ExtractedQuestion.DetectedType.NUMERICAL):
+            if cleaned.get("correct_option"):
+                self.add_error("correct_option", "Use the multiple or numerical answer field for this question type.")
+            try:
+                cleaned["answer_key_value"] = canonical_answer(cleaned.get("typed_key", ""), question_type,
+                                                                [{"key": key} for key in keys])
+            except ValidationError as exc:
+                self.add_error("typed_key", exc)
+        else:
+            cleaned["answer_key_value"] = ""
+            if cleaned.get("correct_option") or cleaned.get("typed_key"):
+                self.add_error("typed_key", "Subjective questions cannot use an automatically scored key.")
+        cleaned["multi_scoring_mode"] = cleaned.get("multi_scoring_mode") or self.question.multi_scoring_mode
+        if cleaned.get("partial_credit_per_choice") is None:
+            cleaned["partial_credit_per_choice"] = self.question.partial_credit_per_choice
+        if cleaned.get("numeric_tolerance") is None:
+            cleaned["numeric_tolerance"] = self.question.numeric_tolerance
+        if (question_type == ExtractedQuestion.DetectedType.MULTIPLE
+                and cleaned["multi_scoring_mode"] == "per_correct"
+                and (cleaned["partial_credit_per_choice"] <= 0
+                     or cleaned.get("positive_marks") is not None and cleaned["partial_credit_per_choice"] > cleaned["positive_marks"])):
+            self.add_error("partial_credit_per_choice", "Set a positive partial mark no greater than the full mark.")
         return cleaned

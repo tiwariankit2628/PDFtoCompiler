@@ -91,7 +91,7 @@
             </span>
         </div>
         <div class="card-body p-4" data-image-question>
-            {% if not eq.question.display_gradeable_key %}<p class="small text-warning-emphasis">No supported single-correct key; this question will be ungraded. <a href="{% url 'questions:question_edit' eq.question.pk %}">Review key</a></p>{% endif %}
+            {% if not eq.question.display_gradeable_key %}<p class="small text-warning-emphasis">No confirmed, valid key or scoring rule; this question will be ungraded. <a href="{% url 'questions:question_edit' eq.question.pk %}">Review key</a></p>{% elif eq.question.question_type == 'numerical' %}<p class="small">Numerical key: <strong>{{ eq.question.numeric_key }}</strong> · tolerance {{ eq.question.numeric_tolerance }}</p>{% endif %}
             {% if eq.question.image_notice %}<p class="small text-danger">{{ eq.question.image_notice }} <a href="{% url 'questions:bank_figure_manage' eq.question.pk %}">Repair images</a></p>{% endif %}
             {% if eq.question.source_crop_warning %}<p class="small text-warning-emphasis">Source warning: {{ eq.question.source_crop_warning }} <a href="{% url 'questions:bank_figure_manage' eq.question.pk %}">Inspect / recrop</a></p>{% endif %}
             {% if eq.question.primary_crops %}

@@ -79,7 +79,7 @@
                         <div class="col-md-4">
                             <label class="form-label small fw-bold">Question Format</label>
                             {{ form.question_type }}
-                            <div class="form-text small">Only single-correct MCQs are scored. Multiple-correct and numerical types remain ungraded.</div>
+                            <div class="form-text small">Choose the format from the paper. Multiple and numerical keys require explicit confirmation.</div>
                         </div>
                     </div>
                 </div>
@@ -117,7 +117,7 @@
             <div class="card border shadow-sm mb-4">
                 <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
                     <h6 class="fw-bold mb-0"><i class="bi bi-ui-radios text-primary me-2"></i> Multiple Choice Options</h6>
-                    <span class="badge bg-light text-dark border">Minimum 2 Options Required</span>
+                    <span class="badge bg-light text-dark border">At least 2 for MCQs; none required for numerical</span>
                 </div>
                 <div class="card-body">
                     <div class="row g-3">
@@ -190,13 +190,10 @@
                     <h6 class="fw-bold mb-0"><i class="bi bi-check2-circle me-2"></i> Answer Key</h6>
                 </div>
                 <div class="card-body">
-                    <label class="form-label small fw-bold">Select Correct Option (optional)</label>
-                    {{ form.correct_option }}
-                    {% if form.correct_option.errors %}<div class="text-danger small mt-1">{{ form.correct_option.errors.0 }}</div>{% endif %}
-                    {% if form.confirm_answer_key %}<div class="form-check mt-3">{{ form.confirm_answer_key }} <label class="form-check-label small" for="{{ form.confirm_answer_key.id_for_label }}">{{ form.confirm_answer_key.label }}</label><div class="form-text">{{ form.confirm_answer_key.help_text }}</div></div>{% endif %}
-                    <div class="form-text small mt-2">
-                        {% if form.instance.is_pdf_derived %}Only a confirmed single-correct key is graded. Unconfirmed keys stay ungraded.{% else %}Candidates choosing this option will receive positive marks during automated evaluation.{% endif %}
-                    </div>
+                    <div data-question-field="correct_option"><label class="form-label small fw-bold" for="{{ form.correct_option.id_for_label }}">{{ form.correct_option.label }}</label>
+                    {{ form.correct_option }}{% if form.correct_option.errors %}<div class="text-danger small mt-1">{{ form.correct_option.errors|striptags }}</div>{% endif %}</div>
+                    <div data-question-field="typed_key"><label class="form-label small fw-bold" for="{{ form.typed_key.id_for_label }}">{{ form.typed_key.label }}</label>{{ form.typed_key }}<div class="form-text">{{ form.typed_key.help_text }}</div>{% if form.typed_key.errors %}<div class="text-danger small">{{ form.typed_key.errors|striptags }}</div>{% endif %}</div>
+                    <div class="form-check mt-3">{{ form.confirm_answer_key }} <label class="form-check-label small" for="{{ form.confirm_answer_key.id_for_label }}">{{ form.confirm_answer_key.label }}</label><div class="form-text">{{ form.confirm_answer_key.help_text }}</div>{% if form.confirm_answer_key.errors %}<div class="text-danger small">{{ form.confirm_answer_key.errors|striptags }}</div>{% endif %}</div>
                 </div>
             </div>
 
@@ -206,6 +203,8 @@
                     <h6 class="fw-bold mb-0"><i class="bi bi-calculator-fill text-primary me-2"></i> Marking Scheme</h6>
                 </div>
                 <div class="card-body">
+                    {% for field in form %}{% if field.name == 'multi_scoring_mode' or field.name == 'partial_credit_per_choice' or field.name == 'numeric_tolerance' %}<div class="mb-3" data-question-field="{{ field.name }}"><label class="form-label small fw-bold" for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{% if field.errors %}<div class="text-danger small">{{ field.errors|striptags }}</div>{% endif %}</div>{% endif %}{% endfor %}
+                    <div class="form-text small mb-3">Multiple: exact set, or a fixed amount per correct choice capped at full marks; any wrong choice incurs the penalty. Numerical tolerance 0 means exact equality.</div>
                     <div class="mb-3">
                         <label class="form-label small fw-bold">Positive Marks (+)</label>
                         {{ form.positive_marks }}
@@ -236,4 +235,5 @@
     </div>
 </form>
 {% endblock %}
+{% block extra_js %}<script src="{% static 'js/question-type-editor.js' %}"></script>{% endblock %}
 

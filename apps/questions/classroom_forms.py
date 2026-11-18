@@ -23,7 +23,7 @@ class ClassroomQuestionForm(PracticeQuestionForm):
     detected_type = forms.ChoiceField(
         choices=ExtractedQuestion.DetectedType.choices,
         label="Question type (check against the PDF)",
-        help_text="Choose single-correct only if exactly one printed choice is selected, even when that choice combines several statements. Multi-select and numerical questions cannot be scored here.",
+        help_text="Choose single-correct for one printed choice, multiple-correct for several choices, or numerical for a number.",
     )
 
     def __init__(self, *args, question, **kwargs):
@@ -35,7 +35,7 @@ class ClassroomQuestionForm(PracticeQuestionForm):
                                       if isinstance(o, dict) and o.get("visible_in_crop") is True],
             )
         self.fields["visible_crop_choices"].widget.attrs.pop("class", None)
-        self.order_fields(["question_number", "detected_type", "question_text", "tables_json", "option_A", "option_B", "option_C", "option_D", "option_E", "visible_crop_choices", "correct_option", "confirm_answer_key", "positive_marks", "negative_marks", "explanation", "reviewed"])
+        self.order_fields(["question_number", "detected_type", "question_text", "tables_json", "option_A", "option_B", "option_C", "option_D", "option_E", "visible_crop_choices", "correct_option", "typed_key", "multi_scoring_mode", "partial_credit_per_choice", "numeric_tolerance", "confirm_answer_key", "positive_marks", "negative_marks", "explanation", "reviewed"])
 
     def clean_question_number(self):
         number = self.cleaned_data["question_number"]
@@ -51,7 +51,7 @@ class ClassroomCreateForm(BootstrapFormMixin, forms.Form):
     answer_key_text = forms.CharField(
         label="Type or paste answer key (optional)", required=False,
         widget=forms.Textarea(attrs={"rows": 3, "placeholder": "1: A, 2: B, 3: D"}),
-        help_text="Only enter answers you have checked. Blank keys stay ungraded, not wrong.",
+        help_text="Checked pairs: single 1:1 (option A), multiple 2:[1,3], numerical 3:-2.5. Blank keys stay ungraded.",
     )
     label = forms.CharField(label="Session label (optional)", max_length=120, required=False)
     allow_retakes = forms.BooleanField(label="Allow retakes", required=False,
@@ -83,9 +83,6 @@ class ClassroomCreateForm(BootstrapFormMixin, forms.Form):
         invalid = [q.question_number for q in self.questions if practice_question_error(q, allow_confirmed_crop_choices=True)]
         if invalid:
             raise ValidationError("Edit or exclude incomplete questions first: " + ", ".join(map(str, invalid[:20])))
-        unsupported = [q.question_number for q in self.questions if q.detected_type != ExtractedQuestion.DetectedType.SINGLE]
-        if unsupported:
-            raise ValidationError("Only single-correct MCQs can be scored. Review the type or exclude: " + ", ".join(map(str, unsupported[:20])))
         if sum((q.positive_marks for q in self.questions), Decimal("0")) > Decimal("9999.99"):
             raise ValidationError("Total marks cannot exceed 9999.99.")
         if sum((q.negative_marks for q in self.questions), Decimal("0")) > Decimal("9999.99"):

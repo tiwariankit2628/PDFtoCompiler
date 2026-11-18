@@ -500,9 +500,16 @@ def _review_questions(exam):
         question = item.question
         wants_crop = use_original_image(question, image_first=exam.image_first_mode, private=False)
         decorate_staged_question(question, image_first=wants_crop, private=False)
-        correct = [option for option in question.options.all() if option.is_correct]
-        question.display_gradeable_key = (question.question_type == Question.QuestionType.MCQ_SINGLE
-            and len(correct) == 1 and (not question.is_pdf_derived or question.answer_status == "manually_verified"))
+        options = list(question.options.all())
+        correct = [option for option in options if option.is_correct]
+        if question.question_type in (Question.QuestionType.MCQ_MULTIPLE, Question.QuestionType.NUMERICAL):
+            from .typed_responses import typed_key_is_gradeable
+            question.display_gradeable_key = typed_key_is_gradeable(
+                question, options, positive=item.positive_marks, negative=item.negative_marks,
+                key_confirmed=question.answer_status == "manually_verified")
+        else:
+            question.display_gradeable_key = (question.question_type == Question.QuestionType.MCQ_SINGLE
+                and len(correct) == 1 and (not question.is_pdf_derived or question.answer_status == "manually_verified"))
         staged = next((source for source in question.source_extracted_item.all()
                        if source.paper_id == question.source_paper_id), None)
         question.source_crop_warning = staged.crop_warning if staged else ""

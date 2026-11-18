@@ -21,7 +21,7 @@ def generate_classroom_report(attempt, summary, *, title="Classroom result summa
     <p>{text(attempt.exam.title)}<br>Candidate: {text(name)}</p>
     <table><tr><th>Score on {label}</th><th>Percentage on {label}</th></tr>
       <tr><td>{text(score)}</td><td>{text(percentage)}</td></tr></table>
-    <p>Correct: {counts["correct"]} | Incorrect: {counts["incorrect"]} | Answered, ungraded: {counts["ungraded"]} | Unattempted: {counts["unattempted"]}</p>
+    <p>Correct: {counts["correct"]} | Partial: {counts["partial"]} | Incorrect: {counts["incorrect"]} | Answered, ungraded: {counts["ungraded"]} | Unattempted: {counts["unattempted"]}</p>
     <p>Without a confirmed key when graded: {summary["pending_keys"]}<br>Key status not recorded at grading: {summary["unknown_keys"]}</p>
     <p class="note">{text(completeness)} This report uses saved grading decisions. An ungraded answer is not marked wrong. Changing a key later does not automatically regrade an attempt.</p>'''
     css = '''@font-face { font-family: Noto; src: url(NotoSansDevanagari.ttf); }

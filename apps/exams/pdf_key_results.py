@@ -11,7 +11,7 @@ from .classroom_results import classroom_response_status
 
 def partial_pdf_result_summary(attempt):
     rows = list(attempt.responses.select_related("exam_question__question", "exam_question", "selected_option"))
-    counts = {"correct": 0, "incorrect": 0, "unattempted": 0, "ungraded": 0}
+    counts = {"correct": 0, "partial": 0, "incorrect": 0, "unattempted": 0, "ungraded": 0}
     pending = 0
     unknown = 0
     possible = Decimal("0.00")
@@ -19,7 +19,9 @@ def partial_pdf_result_summary(attempt):
     for row in rows:
         if row.key_confirmed_at_grading is False:
             pending += 1
-        elif row.exam_question.question.is_pdf_derived and row.key_confirmed_at_grading is None:
+        elif (row.key_confirmed_at_grading is None and
+              (row.exam_question.question.is_pdf_derived or
+               row.exam_question.question.question_type in ("mcq_multiple", "numerical"))):
             unknown += 1  # old attempt, never guessed from today's editable key
         else:
             possible += row.exam_question.positive_marks

@@ -222,7 +222,7 @@ class PublicPdfConfirmedKeyTests(TestCase):
         self.assertContains(review, "Original key status was not recorded")
         self.assertNotContains(review, "CURRENT KEY EXPLANATION SHOULD NOT APPEAR")
         detail = self.client.get(reverse("exams:student_result_detail", args=[attempt.attempt_uuid]))
-        self.assertContains(detail, "before grading-time PDF key details were saved")
+        self.assertContains(detail, "before grading-time key details were saved")
         # SET_NULL must not turn the already graded response into unattempted.
         q2.options.get(option_key="B").delete()
         attempt.refresh_from_db()
@@ -268,7 +268,7 @@ class PublicPdfConfirmedKeyTests(TestCase):
         self.assertContains(review, "Key when graded: <strong>B</strong>")
         detail = self.client.get(reverse("exams:student_result_detail", args=[first.attempt_uuid]))
         self.assertEqual(detail.context["partial_summary"]["counts"],
-                         {"correct": 1, "incorrect": 0, "unattempted": 0, "ungraded": 2})
+                         {"correct": 1, "partial": 0, "incorrect": 0, "unattempted": 0, "ungraded": 2})
         stats = compute_exam_institutional_analytics(self.exam)["question_stats"][1]
         self.assertEqual((stats["attempted_count"], stats["correct_count"]), (2, 2))
 

@@ -3,6 +3,7 @@ from collections import defaultdict
 from decimal import Decimal
 
 from apps.exams.classroom_results import classroom_response_status
+from apps.exams.typed_responses import typed_snapshot_review
 from .models import Question
 from .presentation import missing_crop_pages, primary_question_crops
 
@@ -18,10 +19,10 @@ def compute_practice_result(attempt):
                      .prefetch_related("exam_question__question__options__figures", "exam_question__question__figures")
                      .order_by("order", "id"))
     rows = []
-    groups = {name: defaultdict(lambda: {"total": 0, "correct": 0, "incorrect": 0,
+    groups = {name: defaultdict(lambda: {"total": 0, "correct": 0, "partial": 0, "incorrect": 0,
                                         "unattempted": 0, "ungraded": 0})
               for name in ("subject", "topic", "difficulty")}
-    counts = {"correct": 0, "incorrect": 0, "unattempted": 0, "ungraded": 0}
+    counts = {"correct": 0, "partial": 0, "incorrect": 0, "unattempted": 0, "ungraded": 0}
     graded_marks = Decimal("0.00")
     keyed = unkeyed = legacy_unknown = 0
     for response in responses:
@@ -44,7 +45,7 @@ def compute_practice_result(attempt):
             legacy_unknown += 1
 
         status = classroom_response_status(response)
-        label = {"correct": "Correct", "incorrect": "Incorrect", "unattempted": "Unattempted",
+        label = {"correct": "Correct", "partial": "Partial credit", "incorrect": "Incorrect", "unattempted": "Unattempted",
                  "ungraded": "No answer key — ungraded"}[status]
         if status == "ungraded" and response.key_confirmed_at_grading is None:
             label = "Grading decision not recorded — ungraded"
@@ -54,11 +55,16 @@ def compute_practice_result(attempt):
         current_key = confirmed_key(q, options)
         explanation = q.explanation if (saved_key is not None and current_key
                                          and current_key.option_key == saved_key) else ""
+        typed = typed_snapshot_review(response)
+        if typed:
+            saved_key = typed["key"]
+            explanation = typed["explanation"]
         rows.append({"response": response, "question": q, "options": options,
                      "primary_crops": crops, "missing_crop_pages": incomplete_pages,
                      "original_image_missing": bool(attempt.exam.image_first_mode and q.is_image_first and not crops),
                      "correct": correct, "saved_key": saved_key,
-                     "saved_choice": response.selected_option_key_at_grading,
+                     "saved_choice": typed["answer"] if typed else response.selected_option_key_at_grading,
+                     "typed": typed,
                      "legacy_key_unknown": response.key_confirmed_at_grading is None,
                      "status": status, "label": label, "explanation": explanation})
         labels = {"subject": q.subject or "Not specified", "topic": q.topic or "Not specified",
@@ -70,10 +76,10 @@ def compute_practice_result(attempt):
     for kind, collection in groups.items():
         breakdowns[kind] = []
         for name, bucket in sorted(collection.items(), key=lambda item: item[0].casefold()):
-            attempted_graded = bucket["correct"] + bucket["incorrect"]
+            attempted_graded = bucket["correct"] + bucket["partial"] + bucket["incorrect"]
             accuracy = round(100 * bucket["correct"] / attempted_graded, 1) if attempted_graded else None
             breakdowns[kind].append({"name": name, **bucket, "accuracy": accuracy})
-    attempted_keyed = counts["correct"] + counts["incorrect"]
+    attempted_keyed = counts["correct"] + counts["partial"] + counts["incorrect"]
     fully_keyed = bool(rows) and not unkeyed and not legacy_unknown and graded_marks > 0
     has_target = fully_keyed and attempt.exam.passing_percentage > 0
     return {

@@ -132,7 +132,7 @@ def _session_leaderboard(session):
         board.append({
             "rank": row["rank"], "name": a.student.get_full_name() or a.student.username,
             "username": a.student.username, "score": a.score_obtained,
-            "correct": a.correct_count, "incorrect": a.incorrect_count,
+            "correct": a.correct_count, "partial": a.partial_count, "incorrect": a.incorrect_count,
             "percentage": a.percentage, "attempt_uuid": str(a.attempt_uuid),
         })
     return board
@@ -352,7 +352,7 @@ class ClassroomExportView(ClassroomNoStoreMixin, TeacherRequiredMixin, View):
         response["X-Content-Type-Options"] = "nosniff"
         writer = csv.writer(response)
         writer.writerow(["Rank", "Name", "Username", "Status", "Result completeness", "Joined", "Started", "Submitted",
-                         "Score (confirmed keys)", "Correct", "Incorrect", "Unanswered", "Ungraded",
+                         "Score (confirmed keys)", "Correct", "Partial credit", "Incorrect", "Unanswered", "Ungraded",
                          "Unconfirmed keys at grading", "Unknown key status", "Percentage (confirmed keys)",
                          "Scored attempt status", "Scored attempt UUID"])
         for p in participants:
@@ -369,7 +369,7 @@ class ClassroomExportView(ClassroomNoStoreMixin, TeacherRequiredMixin, View):
                 timezone.localtime(latest.started_at).strftime("%Y-%m-%d %H:%M") if latest and latest.started_at else "",
                 timezone.localtime(latest.submitted_at).strftime("%Y-%m-%d %H:%M") if latest and latest.submitted_at else "",
                 f"{best.score_obtained}" if summary and summary["score_available"] else "",
-                counts.get("correct", ""), counts.get("incorrect", ""), counts.get("unattempted", ""),
+                counts.get("correct", ""), counts.get("partial", ""), counts.get("incorrect", ""), counts.get("unattempted", ""),
                 counts.get("ungraded", ""), summary["pending_keys"] if summary else "",
                 summary["unknown_keys"] if summary else "",
                 f'{summary["percentage"]}' if summary and summary["percentage"] is not None else "",

@@ -41,15 +41,30 @@ def _english_data_directory():
             candidates.append(os.path.join(os.path.dirname(command), "tessdata"))
     except (ImportError, RuntimeError):
         pass
+    # The pip-installed offline language data lives in the active Python
+    # environment (including Windows venvs); no executable or download is
+    # needed at recognition time. Environment/operator overrides come first.
     try:
-        candidates.append(fitz.get_tessdata())
-    except (RuntimeError, OSError, AttributeError):
+        import tessdata
+        candidates.append(tessdata.data_path())
+    except (ImportError, OSError, RuntimeError):
         pass
     for directory in candidates:
         if directory and os.path.isfile(os.path.join(directory, "eng.traineddata")):
             return directory
+    # Consult the executable only if no configured or pip data exists. This
+    # avoids requiring a system command (or emitting warnings about an empty
+    # PATH) for normal answer-key image recognition.
+    try:
+        directory = fitz.get_tessdata()
+        if directory and os.path.isfile(os.path.join(directory, "eng.traineddata")):
+            return directory
+    except (RuntimeError, OSError, AttributeError):
+        pass
     raise AnswerImageError(
-        "Image reading is not available on this server right now. You can still type or paste the key."
+        "Local English OCR data is missing on this server. Install the project requirements "
+        "and restart the app, or set TESSDATA_PREFIX to a folder containing eng.traineddata. "
+        "You can still type or paste the key."
     )
 
 
@@ -111,8 +126,11 @@ def _ocr_words(image_data, tessdata):
     except AnswerImageError:
         raise
     except Exception:
-        # Do not expose filesystem paths or OCR internals to website users.
-        raise AnswerImageError("Could not read that image. Try a clearer photo or type the key instead.") from None
+        # Do not expose filesystem paths or photo contents to website users.
+        raise AnswerImageError(
+            "Local image reading could not run. Check the PyMuPDF installation and English OCR data, "
+            "restart the server, or enter the key manually. No image was sent to a provider."
+        ) from None
 
 
 def _rows(words):
@@ -535,7 +553,8 @@ def suggest_for_questions(pairs, questions, *, exclude_approved=False, unclear_n
                 status = "invalid_option"
         rows.append({"number": number, "options": option_keys, "answer": answer, "status": status,
                      "existing_key": (question.correct_option or "").upper(),
-                     "existing_confirmed": question.answer_status in ("student_confirmed", "manually_verified")})
+                     "existing_confirmed": (question.answer_status in ("student_confirmed", "manually_verified")
+                         and (question.detected_type == "mcq_single" or getattr(question, "typed_key_verified", False)))})
     return {"rows": rows, "unmatched_numbers": unknown[:50], "unmatched_count": len(unknown)}
 
 

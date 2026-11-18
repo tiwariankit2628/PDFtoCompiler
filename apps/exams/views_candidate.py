@@ -11,7 +11,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.contrib import messages
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, OperationalError, connection, transaction
 from django.db.models import F, Q
 from django.http import HttpResponse, JsonResponse
@@ -496,7 +496,14 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
                     "source_images": source_images,
                     "positive_marks": float(eq.positive_marks),
                     "negative_marks": float(eq.negative_marks),
-                    "selected_option_id": resp.selected_option_id,
+                    "question_type": q.question_type,
+                    "multi_scoring_mode": q.multi_scoring_mode,
+                    "partial_credit_per_choice": str(q.partial_credit_per_choice),
+                    # Only the candidate's own response, never a key.
+                    "selected_option_id": resp.selected_option_id if q.question_type == "mcq_single" else None,
+                    "legacy_selection": bool(q.question_type != "mcq_single" and resp.selected_option_id),
+                    "selected_option_ids": resp.selected_option_ids,
+                    "numerical_response": str(resp.numerical_response) if resp.numerical_response is not None else "",
                     "is_marked_for_review": resp.is_marked_for_review,
                     "is_visited": resp.is_visited,
                     "palette_status": resp.palette_status,
@@ -585,10 +592,14 @@ class ExamSaveAnswerView(ActiveUserRequiredMixin, View):
         except (ValueError, TypeError, OverflowError):
             return JsonResponse({"error": "Invalid answer or time spent."}, status=400)
         is_marked = data.get("is_marked_for_review", False)
+        # All saves in a mixed typed exam must serialize with submission, even
+        # when the current response happens to be a single-choice question.
+        has_typed_responses = attempt.responses.filter(
+            exam_question__question__question_type__in=("mcq_multiple", "numerical")).exists()
 
         with transaction.atomic():
-            if attempt.exam.is_private_practice or attempt.classroom_session_id:
-                if attempt.classroom_session_id and connection.vendor == "sqlite":
+            if attempt.exam.is_private_practice or attempt.classroom_session_id or has_typed_responses:
+                if (attempt.classroom_session_id or has_typed_responses) and connection.vendor == "sqlite":
                     ExamAttempt.objects.filter(pk=attempt.pk).update(id=F("id"))
                 # Classroom controls lock the session and then an attempt.
                 # Lock only this attempt on PostgreSQL, not the joined exam row,
@@ -610,33 +621,53 @@ class ExamSaveAnswerView(ActiveUserRequiredMixin, View):
             if not resp:
                 return JsonResponse({"error": "Response record not found."}, status=404)
 
-            if selected_option_id is not None and action != "clear":
-                from apps.questions.models import QuestionOption
-                valid_opt = QuestionOption.objects.filter(id=selected_option_id, question=resp.exam_question.question).first()
-                if not valid_opt:
-                    return JsonResponse({"error": "Invalid option for this question."}, status=400)
+            kind = resp.exam_question.question.question_type
+            is_typed = kind in ("mcq_multiple", "numerical")
+            if is_typed:
+                from .typed_responses import apply_typed_response
+                legacy_client = (selected_option_id is not None and action != "clear"
+                                 and "selected_option_ids" not in data and "numerical_response" not in data)
+                if legacy_client:
+                    # Older clients sent one FK for every type. Preserve that
+                    # response, but never reinterpret it as a confirmed set/value.
+                    from apps.questions.models import QuestionOption
+                    valid_opt = QuestionOption.objects.filter(id=selected_option_id, question=resp.exam_question.question).first()
+                    if not valid_opt:
+                        return JsonResponse({"error": "Invalid option for this question."}, status=400)
+                    resp.selected_option = valid_opt
+                    resp.selected_option_ids = []
+                    resp.numerical_response = None
+                else:
+                    if selected_option_id is not None and action != "clear":
+                        return JsonResponse({"error": "Use the response field for this question type."}, status=400)
+                    try:
+                        apply_typed_response(resp, data, clear=action == "clear")
+                    except ValidationError as exc:
+                        return JsonResponse({"error": exc.messages[0]}, status=400)
             else:
-                valid_opt = None
+                if selected_option_id is not None and action != "clear":
+                    from apps.questions.models import QuestionOption
+                    valid_opt = QuestionOption.objects.filter(id=selected_option_id, question=resp.exam_question.question).first()
+                    if not valid_opt:
+                        return JsonResponse({"error": "Invalid option for this question."}, status=400)
+                else:
+                    valid_opt = None
+                if action == "clear":
+                    resp.selected_option = None
+                elif action == "mark_review":
+                    if selected_option_id is not None or attempt.exam.is_private_practice or attempt.classroom_session_id:
+                        resp.selected_option = valid_opt
+                elif selected_option_id is not None:
+                    resp.selected_option = valid_opt
+                elif action == "save_next":
+                    resp.selected_option = None
 
-            # Mark visited
             resp.is_visited = True
-
-            # Action processing
             if action == "clear":
-                resp.selected_option = None
                 resp.is_marked_for_review = False
             elif action == "mark_review":
                 resp.is_marked_for_review = True
-                if selected_option_id is not None or attempt.exam.is_private_practice or attempt.classroom_session_id:
-                    resp.selected_option = valid_opt
             else:
-                # Normal save or navigate
-                if selected_option_id is not None:
-                    resp.selected_option = valid_opt
-                elif action == "save_next" and not selected_option_id:
-                    # Saved without selecting an option
-                    resp.selected_option = None
-
                 resp.is_marked_for_review = bool(is_marked)
 
             # Accumulate time spent
@@ -655,6 +686,8 @@ class ExamSaveAnswerView(ActiveUserRequiredMixin, View):
                 "response_id": resp.id,
                 "palette_status": resp.palette_status,
                 "selected_option_id": resp.selected_option_id,
+                "selected_option_ids": resp.selected_option_ids,
+                "numerical_response": str(resp.numerical_response) if resp.numerical_response is not None else "",
                 "is_marked_for_review": resp.is_marked_for_review,
                 "remaining_seconds": attempt.remaining_seconds,
                 "counters": {
@@ -841,19 +874,21 @@ class ExamSubmitView(ActiveUserRequiredMixin, View):
 
         data = {}
         is_timeout = False
+        has_typed_responses = attempt.responses.filter(
+            exam_question__question__question_type__in=("mcq_multiple", "numerical")).exists()
         if request.content_type == "application/json":
             try:
                 parsed = json.loads(request.body)
             except (ValueError, TypeError):
                 parsed = None
             if not isinstance(parsed, dict):
-                if attempt.classroom_session_id or attempt.exam.is_private_practice:
+                if attempt.classroom_session_id or attempt.exam.is_private_practice or has_typed_responses:
                     # Never turn a malformed final-answer payload into a
                     # successful submission with missing data.
                     return JsonResponse({"error": "Invalid submission payload."}, status=400)
             else:
                 data = parsed
-                if ((attempt.classroom_session_id or attempt.exam.is_private_practice)
+                if ((attempt.classroom_session_id or attempt.exam.is_private_practice or has_typed_responses)
                         and not isinstance(data.get("is_timeout", False), bool)):
                     return JsonResponse({"error": "Invalid timeout flag."}, status=400)
                 is_timeout = bool(data.get("is_timeout", False))
@@ -863,11 +898,12 @@ class ExamSubmitView(ActiveUserRequiredMixin, View):
         with transaction.atomic():
             # Serialize classroom answer saves, final submit and timeouts even on
             # SQLite, which otherwise ignores SELECT FOR UPDATE.
-            if attempt.classroom_session_id and connection.vendor == "sqlite":
+            if (attempt.classroom_session_id or has_typed_responses) and connection.vendor == "sqlite":
                 ExamAttempt.objects.filter(pk=attempt.pk).update(id=F("id"))
             locked_attempt = ExamAttempt.objects.select_for_update(of=("self",)).select_related("exam").get(id=attempt.id)
             if locked_attempt.status == ExamAttempt.AttemptStatus.IN_PROGRESS:
-                reliable = locked_attempt.exam.is_private_practice or locked_attempt.classroom_session_id is not None
+                reliable = (locked_attempt.exam.is_private_practice or locked_attempt.classroom_session_id is not None
+                            or has_typed_responses)
                 if reliable and is_timeout and not locked_attempt.is_expired:
                     # The browser timer may round down or run fast. Only the
                     # server deadline can turn an active attempt into a timeout.
@@ -888,7 +924,15 @@ class ExamSubmitView(ActiveUserRequiredMixin, View):
                         pk=response_id, attempt=locked_attempt).first()
                     if not response:
                         return JsonResponse({"error": "Final response not found."}, status=400)
-                    if selected_id is not None:
+                    if response.exam_question.question.question_type in ("mcq_multiple", "numerical"):
+                        from .typed_responses import apply_typed_response
+                        if selected_id is not None:
+                            return JsonResponse({"error": "Invalid final answer for this question type."}, status=400)
+                        try:
+                            apply_typed_response(response, last)
+                        except ValidationError as exc:
+                            return JsonResponse({"error": exc.messages[0]}, status=400)
+                    elif selected_id is not None:
                         selected = QuestionOption.objects.filter(pk=selected_id, question=response.exam_question.question).first()
                         if not selected:
                             return JsonResponse({"error": "Invalid final option."}, status=400)
@@ -902,7 +946,8 @@ class ExamSubmitView(ActiveUserRequiredMixin, View):
                     response.time_spent_seconds += seconds
                     response.is_visited = True
                     response.is_marked_for_review = bool(last.get("is_marked_for_review", False))
-                    response.save(update_fields=["selected_option", "time_spent_seconds", "is_visited", "is_marked_for_review"])
+                    response.save(update_fields=["selected_option", "selected_option_ids", "numerical_response",
+                                                 "time_spent_seconds", "is_visited", "is_marked_for_review"])
                 locked_attempt.submit_attempt(is_timeout=is_timeout or (reliable and locked_attempt.is_expired))
 
                 if locked_attempt.classroom_session_id:

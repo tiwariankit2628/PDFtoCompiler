@@ -30,15 +30,16 @@ SUBJECTIVE = "subjective"
 # unambiguous phrase rather than guessing from plural wording such as "are
 # correct", which appears in many ordinary single-answer questions.
 _MULTIPLE_CORRECT = re.compile(
-    r"\bone or more\b"
-    r"|\bmore than one\b"
+    # A count in the science statement is not an instruction to select several
+    # answers (e.g. "one or more storage bodies"). Require answer-shaped words.
+    r"\b(?:one\s+or\s+more(?:\s+than\s+one)?|more\s+than\s+one)\s+"
+    r"(?:of\s+(?:the\s+)?(?:following\s+)?)?(?:correct\s+)?(?:options?|answers?|choices?)\b"
+    r"|\b(?:options?|answers?|choices?)\s+(?:may\s+have\s+|can\s+have\s+|are\s+)?"
+    r"(?:one\s+or\s+more|more\s+than\s+one)\s+(?:correct|right|true)\b"
     r"|\b(?:select|choose|mark|tick)\s+all\s+that\s+apply\b"
     r"|\ball\s+that\s+are\s+correct\b"
-    r"|\bmay\s+be\s+correct\b"
-    r"|\bmultiple\s+(?:correct|answers?|options?)\b"
-    r"|\b(?:one|more)\s+or\s+more\s+of\s+the\s+following\b"
-    r"|एक\s*या\s*अधिक"
-    r"|एक\s*से\s*अधिक",
+    r"|\bmultiple\s+(?:correct|answers?|options?|choices?)\b"
+    r"|(?:एक\s*या\s*अधिक|एक\s*से\s*अधिक)\s*(?:विकल्प|उत्तर|कथन)",
     re.IGNORECASE,
 )
 

@@ -77,12 +77,12 @@
                 {% elif show_results and attempt.has_ungraded_keys %}
                 <div class="card bg-light border p-4 rounded-4 mb-4 text-start">
                     <h5 class="fw-bold">Partial result — not ranked</h5>
-                    <p>Some questions lacked a confirmed, supported single-correct key. Those answers are ungraded, not wrong; this is not a final pass or fail.</p>
+                    <p>Some questions lacked a confirmed, valid key or scoring rule. Those answers are ungraded, not wrong; this is not a final pass or fail.</p>
                     {% if partial_summary.score_available %}<p>{% if partial_summary.unknown_keys %}Recorded score{% else %}Score on graded questions{% endif %}: <strong>{{ attempt.score_obtained }}{% if partial_summary.possible_marks != None %} / {{ partial_summary.possible_marks }}{% endif %}</strong>{% if partial_summary.percentage != None %} ({{ partial_summary.percentage }}% of graded marks){% elif partial_summary.unknown_keys %} (original graded maximum unavailable){% endif %}.</p>{% else %}<p>No score is available yet.</p>{% endif %}
                     <a href="{% url 'exams:student_result_detail' attempt.attempt_uuid %}" class="btn btn-cbt-primary btn-sm">View partial result</a>
                 </div>
                 {% elif show_results %}
-                {% if attempt.has_legacy_pdf_key_snapshots %}<p class="small text-muted text-start">This is a previously recorded result. The original PDF key status and labels were not saved; the score has not been recalculated.</p>{% endif %}
+                {% if attempt.has_legacy_key_snapshots %}<p class="small text-muted text-start">This is a previously recorded result. The original key status and labels were not saved; the score has not been recalculated.</p>{% endif %}
                 <div class="card bg-light border p-4 rounded-4 mb-4 text-start">
                     <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
                         <h5 class="fw-bold text-dark mb-0"><i class="bi bi-award-fill text-primary me-2"></i> Immediate Score Report</h5>

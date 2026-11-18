@@ -5,6 +5,9 @@ Pillow>=10.4.0
 PyMuPDF>=1.24.14,<2.0
 pypdf>=5.0.0
 pytesseract>=0.3.10
+# Offline English language data for local answer-key OCR; installed with the
+# project, so a separate system Tesseract install is not required for this path.
+tessdata.fast-eng==1.0.0
 celery>=5.4.0
 redis>=5.0.0
 razorpay>=1.4.1

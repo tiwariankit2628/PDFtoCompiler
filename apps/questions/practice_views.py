@@ -18,7 +18,7 @@ from apps.core.permissions import StudentRequiredMixin
 from apps.exams.models import Category, Exam, ExamAttempt, ExamQuestion
 from apps.payments.services import QuotaExceeded, FeatureUnavailable, consume, lock_practice_user, require_feature
 from apps.core.utils import log_audit
-from .answer_key_validation import edited_answer_status, staged_question_signature
+from .answer_key_validation import answer_keys_set, confirmed_staged_key, edited_answer_status, staged_question_signature
 from .figure_utils import page_image, validate_box
 from .figure_views import _png_upload, _target
 from .models import AnswerStatus, ExtractedFigure, ExtractedQuestion, Question, QuestionFigure, QuestionOption, QuestionPaperUpload
@@ -192,14 +192,14 @@ class PracticeSettingsView(PrivateStudentMixin, View):
         for question in questions:
             decorate_staged_question(question, image_first=paper.image_first, private=True)
             question.practice_error = practice_question_error(question, allow_confirmed_crop_choices=True)
+            question.preview_confirmed_key = confirmed_staged_key(question, AnswerStatus.STUDENT_CONFIRMED)
             question.latest_ai = next(iter(question.ai_suggestions.all()), None)
         return {
             "paper": paper, "questions": questions, "included": included,
             "total_questions": len(included),
             "answer_key_preview_questions": answer_key_preview_questions(included, student=True),
             "total_marks": sum((q.positive_marks for q in included), Decimal("0.00")),
-            "keyed_count": sum(bool(q.correct_option and q.answer_status == AnswerStatus.STUDENT_CONFIRMED
-                                     and q.detected_type == ExtractedQuestion.DetectedType.SINGLE) for q in included),
+            "keyed_count": sum(bool(confirmed_staged_key(q, AnswerStatus.STUDENT_CONFIRMED)) for q in included),
             "flagged_count": sum(q.is_flagged for q in included),
             "unassigned_figure_count": paper.figures.filter(question__isnull=True).count(),
             "extraction_warnings": [user_diagnostic(line.removeprefix("Warning: ")) for line in paper.extraction_log.splitlines() if line.startswith("Warning: ")],
@@ -249,10 +249,17 @@ class PracticeSettingsView(PrivateStudentMixin, View):
                 # A historical or extracted suggestion is not a confirmation.
                 # Keep it in staging but grade only an explicitly entered key or
                 # one the student previously confirmed in the question editor.
-                saved_key = staged.correct_option if staged.answer_status == AnswerStatus.STUDENT_CONFIRMED else ""
-                correct = form.answer_keys.get(staged.question_number, saved_key).upper()
+                saved_key = confirmed_staged_key(staged, AnswerStatus.STUDENT_CONFIRMED)
+                correct = form.answer_keys.get(staged.question_number, saved_key)
+                is_typed = staged.detected_type in (ExtractedQuestion.DetectedType.MULTIPLE, ExtractedQuestion.DetectedType.NUMERICAL)
+                labels = (set(answer_keys_set(correct)) if staged.detected_type == ExtractedQuestion.DetectedType.MULTIPLE
+                          else {correct} if staged.detected_type == ExtractedQuestion.DetectedType.SINGLE and correct else set())
                 bank = Question.objects.create(
                     is_private_practice=True, key_verified=bool(correct), is_image_first=bool(staged.is_image_first),
+                    question_type=staged.detected_type, typed_key_verified=bool(is_typed and correct),
+                    numeric_key=Decimal(correct) if correct and staged.detected_type == ExtractedQuestion.DetectedType.NUMERICAL else None,
+                    numeric_tolerance=staged.numeric_tolerance, multi_scoring_mode=staged.multi_scoring_mode,
+                    partial_credit_per_choice=staged.partial_credit_per_choice,
                     answer_status=AnswerStatus.STUDENT_CONFIRMED if correct else AnswerStatus.NEEDS_REVIEW, category=paper.category, creator=request.user,
                     source_paper=paper, subject=paper.subject or "General",
                     question_text=staged.question_text, tables=staged.tables, source_regions=staged.source_regions, primary_image_region=staged.primary_image_region, explanation=staged.explanation,
@@ -264,7 +271,7 @@ class PracticeSettingsView(PrivateStudentMixin, View):
                     key = option["key"].upper().strip()
                     options[key] = QuestionOption.objects.create(
                         question=bank, option_key=key, option_text=option.get("text", ""),
-                        is_correct=bool(correct) and key == correct, order=index,
+                        is_correct=key in labels, order=index,
                     )
                 for figure in staged.figures.all():
                     if figure.private_image:
@@ -281,7 +288,8 @@ class PracticeSettingsView(PrivateStudentMixin, View):
                 if correct:
                     staged.correct_option = correct
                     staged.answer_status = AnswerStatus.STUDENT_CONFIRMED
-                    updates.extend(["correct_option", "answer_status"])
+                    staged.typed_key_verified = is_typed
+                    updates.extend(["correct_option", "answer_status", "typed_key_verified"])
                 staged.approved_question = bank
                 staged.status = ExtractedQuestion.Status.APPROVED
                 staged.save(update_fields=updates)
@@ -313,6 +321,7 @@ class PracticeQuestionEditView(PrivateStudentMixin, View):
                 return render(request, "questions/practice_question_edit.html", {"question": question, "form": form})
             data = form.cleaned_data
             previous_content = staged_question_signature(question)
+            previous_key, previous_typed = question.correct_option, question.typed_key_verified
             figure_keys = {f.option_key for f in question.figures.all() if f.private_image}
             question.detected_type = data["detected_type"]
             question.question_text = data["question_text"]
@@ -320,18 +329,26 @@ class PracticeQuestionEditView(PrivateStudentMixin, View):
             crop_keys = set(data.get("visible_crop_choices") or [])
             question.options = [{"key": k, "text": data[f"option_{k}"].strip(), "visible_in_crop": k in crop_keys}
                                 for k in "ABCDE" if data[f"option_{k}"].strip() or k in figure_keys or k in crop_keys]
-            question.answer_status = edited_answer_status(question.correct_option, question.answer_status,
-                data["correct_option"], data["confirm_answer_key"], AnswerStatus.STUDENT_CONFIRMED,
-                content_changed=previous_content != staged_question_signature(question))
-            question.correct_option = data["correct_option"]
+            question.numeric_tolerance = data["numeric_tolerance"]
+            question.multi_scoring_mode = data["multi_scoring_mode"]
+            question.partial_credit_per_choice = data["partial_credit_per_choice"]
+            changed = previous_content != staged_question_signature(question)
+            key = data.get("answer_key_value", "")
+            question.answer_status = edited_answer_status(previous_key, question.answer_status,
+                key, data["confirm_answer_key"], AnswerStatus.STUDENT_CONFIRMED, content_changed=changed)
+            question.typed_key_verified = bool(question.detected_type in (ExtractedQuestion.DetectedType.MULTIPLE, ExtractedQuestion.DetectedType.NUMERICAL)
+                and key and question.answer_status == AnswerStatus.STUDENT_CONFIRMED
+                and (data["confirm_answer_key"] or previous_typed and not changed and previous_key == key))
+            question.correct_option = key
             question.positive_marks = data["positive_marks"]
             question.negative_marks = data["negative_marks"]
             question.explanation = data["explanation"]
             question.is_flagged = not data["reviewed"]
             question.flag_reason = "" if data["reviewed"] else "Not yet checked against source."
             question.status = ExtractedQuestion.Status.REVIEWED
-            question.save(update_fields=["detected_type", "question_text", "tables", "options", "correct_option", "answer_status", "positive_marks", "negative_marks", "explanation", "is_flagged", "flag_reason", "status"])
-        if question.correct_option and question.answer_status != AnswerStatus.STUDENT_CONFIRMED:
+            question.save(update_fields=["detected_type", "question_text", "tables", "options", "correct_option", "answer_status", "typed_key_verified", "numeric_tolerance", "multi_scoring_mode", "partial_credit_per_choice", "positive_marks", "negative_marks", "explanation", "is_flagged", "flag_reason", "status"])
+        if question.correct_option and (question.answer_status != AnswerStatus.STUDENT_CONFIRMED or
+                question.detected_type != ExtractedQuestion.DetectedType.SINGLE and not question.typed_key_verified):
             messages.warning(request, "Question saved. Its answer is unconfirmed and will remain ungraded until you check it.")
         else:
             messages.success(request, "Question saved.")

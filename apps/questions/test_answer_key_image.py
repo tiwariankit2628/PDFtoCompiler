@@ -19,13 +19,20 @@ from django.utils import timezone
 from apps.accounts.models import User
 from apps.exams.models import Category, ClassroomSession, Exam, ExamAttempt
 from .answer_key_image import (AnswerImageError, MAX_COLUMN_RETRIES, MAX_IMAGE_BYTES, MAX_RETRY_PIXELS,
-                               _prepare_image, _read_repeated_columns, _repeated_pair_columns,
+                               _english_data_directory, _prepare_image, _read_repeated_columns, _repeated_pair_columns,
                                parse_positioned_words, preview_answer_images, suggest_for_questions)
 from .answer_key_validation import parse_checked_answer_key
 from .models import AnswerStatus, ExtractedFigure, ExtractedQuestion, Question, QuestionFigure, QuestionOption, QuestionPaperUpload
 
 
 OPTIONS = [{"key": k, "text": f"Choice {k}"} for k in "ABCD"]
+
+
+def local_english_data_available():
+    try:
+        return bool(_english_data_directory())
+    except AnswerImageError:
+        return False
 
 
 def question(number, **kwargs):
@@ -235,8 +242,7 @@ class AnswerImageParserTests(SimpleTestCase):
                 preview_answer_images([png_upload()], [question(1)])
             ocr.assert_not_called()
 
-    @skipUnless(os.path.isfile(os.path.join(os.environ.get("TESSDATA_PREFIX", ""), "eng.traineddata")),
-                "Local English OCR language data not configured")
+    @skipUnless(local_english_data_available(), "Local English OCR language data not configured")
     def test_real_local_ocr_on_a_synthetic_multicolumn_raster_key(self):
         upload = SimpleUploadedFile("columns.png", synthetic_multicolumn_key_png(), content_type="image/png")
         with patch("requests.sessions.Session.request", side_effect=AssertionError("No external request allowed")):
@@ -248,8 +254,7 @@ class AnswerImageParserTests(SimpleTestCase):
             else:
                 self.assertNotEqual(row["status"], "detected")
 
-    @skipUnless(os.path.isfile(os.path.join(os.environ.get("TESSDATA_PREFIX", ""), "eng.traineddata")),
-                "Local English OCR language data not configured")
+    @skipUnless(local_english_data_available(), "Local English OCR language data not configured")
     def test_real_local_ocr_on_a_synthetic_raster_key(self):
         upload = SimpleUploadedFile("key.png", synthetic_key_png(), content_type="image/png")
         with patch("requests.sessions.Session.request", side_effect=AssertionError("No external request allowed")):
@@ -257,6 +262,20 @@ class AnswerImageParserTests(SimpleTestCase):
         self.assertEqual([row["answer"] for row in result["rows"]], list("ABCDAB"))
         self.assertEqual(result["detected_count"], 6)
         self.assertTrue(all(row["status"] == "detected" for row in result["rows"]))
+
+    def test_pip_english_data_supports_local_ocr_without_system_executable(self):
+        try:
+            import tessdata
+        except ImportError:
+            self.skipTest("Optional pip English OCR data is not installed")
+        if not os.path.isfile(os.path.join(tessdata.data_path(), "eng.traineddata")):
+            self.skipTest("Optional pip English OCR data is not installed")
+        upload = SimpleUploadedFile("key.png", synthetic_key_png(), content_type="image/png")
+        with override_settings(TESSERACT_CMD=""), patch.dict(os.environ, {"PATH": "", "TESSDATA_PREFIX": ""}), \
+             patch("requests.sessions.Session.request", side_effect=AssertionError("No external request allowed")):
+            self.assertEqual(_english_data_directory(), tessdata.data_path())
+            result = preview_answer_images([upload], [question(i) for i in range(1, 7)])
+        self.assertEqual([row["answer"] for row in result["rows"]], list("ABCDAB"))
 
 
 @override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"])

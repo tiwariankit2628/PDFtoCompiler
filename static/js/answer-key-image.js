@@ -33,7 +33,7 @@
       ambiguous_question: 'Question number repeats — edit that question individually',
       invalid_option: 'Does not match available choices — check',
       invalid_choices: 'Choices are incomplete or repeated — edit this question',
-      unsupported_type: 'Not a single-correct MCQ — review its type',
+      unsupported_type: 'Multiple/numerical/other type — enter its key manually or review the type',
       already_approved: 'Already in the bank — edit the bank question separately',
     };
     function releasePreviews() {

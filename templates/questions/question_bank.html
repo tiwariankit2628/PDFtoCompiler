@@ -119,6 +119,7 @@
                 </div>
                 {% endif %}
 
+                {% if q.question_type == 'numerical' %}<p class="small mb-2">Numerical key: {% if q.display_gradeable_key %}<strong>{{ q.numeric_key }}</strong> · tolerance {{ q.numeric_tolerance }}{% else %}unconfirmed / not graded{% endif %}</p>{% endif %}
                 <!-- Options Grid -->
                 <div class="row g-2 mb-2">
                     {% for opt in q.options.all %}
@@ -128,7 +129,7 @@
                             <span class="flex-grow-1">{{ opt.option_text }}</span>
                             {% if opt.is_correct and q.display_gradeable_key %}
                                 <i class="bi bi-check-circle-fill text-success" title="Correct Answer"></i>
-                            {% elif opt.is_correct %}<span class="badge text-bg-warning">{% if q.question_type != 'mcq_single' %}Unsupported · ungraded{% else %}Unconfirmed{% endif %}</span>{% endif %}
+                            {% elif opt.is_correct %}<span class="badge text-bg-warning">Unconfirmed · ungraded</span>{% endif %}
                         </div>
                     </div>
                     {% endfor %}

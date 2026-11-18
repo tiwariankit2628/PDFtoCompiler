@@ -59,10 +59,20 @@ class ClassifyQuestionTests(SimpleTestCase):
             "A and B only", "B and C only", "A and C only", "A, B and C only",
         ])]
         for instruction in ("One or more options are correct.", "More than one option is correct.",
-                            "Select all that apply.", "Multiple correct answers.", "एक या अधिक"):
+                            "Select all that apply.", "Multiple correct answers.", "एक या अधिक विकल्प"):
             with self.subTest(instruction=instruction):
                 stem = f"Which statements is/are correct? {instruction}"
                 self.assertEqual(classify_question(stem, combinations)[0], MULTIPLE)
+
+    def test_one_or_more_in_question_content_is_not_a_selection_instruction(self):
+        stem = ("Read the following features and identify the organisms. "
+                "(I) Possess one or more storage bodies located in the chloroplasts. "
+                "(II) Reserve food material resembles amylopectin and glycogen. "
+                "Choose the most appropriate answer from the options given below:")
+        detected, reason = classify_question(stem, FOUR_OPTIONS)
+        self.assertEqual((detected, reason), (SINGLE, ""))
+        self.assertEqual(classify_question("A cell contains more than one nucleus. Choose one option.", FOUR_OPTIONS)[0], SINGLE)
+        self.assertEqual(classify_question("One or more of the following options may be correct.", FOUR_OPTIONS)[0], MULTIPLE)
 
     def test_ordinary_multi_select_prose_is_not_reclassified_as_a_combination(self):
         prose = [{"key": key, "text": text} for key, text in zip("ABCD", [

@@ -14,6 +14,7 @@
     {% if classroom_summary.unknown_keys %}<div class="alert alert-light border small">For {{ classroom_summary.unknown_keys }} unanswered question{{ classroom_summary.unknown_keys|pluralize }} in this older attempt, the key status at grading was not recorded. A complete outcome cannot be determined from the saved data.</div>{% endif %}
     <div class="row g-3 mb-4">
       <div class="col-6 col-lg-3"><div class="tile-3d p-3 h-100"><span class="text-muted small">Correct</span><div class="stat-value fs-3">{{ classroom_summary.counts.correct }}</div></div></div>
+      {% if classroom_summary.counts.partial %}<div class="col-6 col-lg-3"><div class="tile-3d p-3 h-100"><span class="text-muted small">Partial credit</span><div class="stat-value fs-3">{{ classroom_summary.counts.partial }}</div></div></div>{% endif %}
       <div class="col-6 col-lg-3"><div class="tile-3d p-3 h-100"><span class="text-muted small">Incorrect</span><div class="stat-value fs-3">{{ classroom_summary.counts.incorrect }}</div></div></div>
       <div class="col-6 col-lg-3"><div class="tile-3d p-3 h-100"><span class="text-muted small">Answered, ungraded</span><div class="stat-value fs-3">{{ classroom_summary.counts.ungraded }}</div></div></div>
       <div class="col-6 col-lg-3"><div class="tile-3d p-3 h-100"><span class="text-muted small">Unattempted</span><div class="stat-value fs-3">{{ classroom_summary.counts.unattempted }}</div></div></div>

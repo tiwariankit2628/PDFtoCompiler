@@ -1,8 +1,9 @@
 import json
 import re
+from decimal import Decimal
 from django.contrib import messages
 from django.conf import settings
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import Count, Q
 from django.http import FileResponse, Http404
@@ -15,7 +16,8 @@ from django.views.generic import CreateView, DetailView, ListView, UpdateView, V
 from apps.core.permissions import TeacherRequiredMixin
 from apps.core.utils import log_audit
 from .extractor import PDFQuestionExtractor
-from .answer_key_validation import edited_answer_status, staged_question_signature
+from .answer_key_validation import (answer_keys_set, canonical_answer, confirmed_staged_key,
+                                    edited_answer_status, staged_question_signature)
 from .forms import (
     AnswerKeyImportForm,
     ExtractedQuestionEditForm,
@@ -35,6 +37,8 @@ def _approval_error(question):
                        and not missing_crop_pages(question, crops))
     if not question.question_text.strip() and not usable_crop:
         return "Add a question statement or a complete original question image."
+    if question.detected_type == ExtractedQuestion.DetectedType.SUBJECTIVE:
+        return "Subjective questions cannot be automatically scored; review the type or keep this item out of the test."
     options = question.options if isinstance(question.options, list) else []
     if any(not isinstance(option, dict) for option in options):
         return "The options are invalid. Edit them before approval."
@@ -44,14 +48,23 @@ def _approval_error(question):
     image_keys = set(question.figures.exclude(option_key="").values_list("option_key", flat=True))
     if image_keys - set(keys):
         return "An image is assigned to an option that no longer exists."
-    if len(options) < 2 or any(
+    if (question.detected_type != ExtractedQuestion.DetectedType.NUMERICAL and len(options) < 2) or any(
         not isinstance(option.get("text"), str) or (not option["text"].strip() and key not in image_keys
             and not (usable_crop and option.get("visible_in_crop") is True))
         for option, key in zip(options, keys)
     ):
         return "At least two options need text, an image, or checked labels in a complete original crop."
-    if question.correct_option and question.correct_option.strip().upper() not in keys:
-        return "The answer key does not match an option."
+    if question.correct_option and (question.detected_type == ExtractedQuestion.DetectedType.SINGLE
+                                    or question.typed_key_verified):
+        try:
+            canonical_answer(question.correct_option, question.detected_type, options)
+        except ValidationError:
+            return "The answer key does not match the question type or options."
+    if question.numeric_tolerance < 0 or question.partial_credit_per_choice < 0:
+        return "The scoring settings cannot be negative."
+    if (question.detected_type == ExtractedQuestion.DetectedType.MULTIPLE and question.multi_scoring_mode == "per_correct"
+            and not Decimal("0") < question.partial_credit_per_choice <= question.positive_marks):
+        return "Set a valid partial-credit amount before approval."
     return ""
 
 
@@ -79,26 +92,42 @@ def _infer_language(staged):
 
 
 def _confirmed_staging_key(question):
-    """Never promote a suggestion, or a non-single-correct answer, as a key."""
-    if (question.detected_type == ExtractedQuestion.DetectedType.SINGLE
-            and question.answer_status == AnswerStatus.MANUALLY_VERIFIED):
-        return (question.correct_option or "").strip().upper()
-    return ""
+    """Never promote a suggestion or legacy typed value as a grading key."""
+    return confirmed_staged_key(question, AnswerStatus.MANUALLY_VERIFIED)
+
+
+def _bank_key_settings(staged):
+    key = _confirmed_staging_key(staged)
+    typed = staged.detected_type in (ExtractedQuestion.DetectedType.MULTIPLE, ExtractedQuestion.DetectedType.NUMERICAL)
+    return {
+        "typed_key_verified": bool(typed and key),
+        "numeric_key": Decimal(key) if key and staged.detected_type == ExtractedQuestion.DetectedType.NUMERICAL else None,
+        "numeric_tolerance": staged.numeric_tolerance,
+        "multi_scoring_mode": staged.multi_scoring_mode,
+        "partial_credit_per_choice": staged.partial_credit_per_choice,
+    }
 
 
 def _display_gradeable_bank_key(question):
-    """PDF answer flags are only a grading key after a single-answer check."""
-    if (question.question_type != Question.QuestionType.MCQ_SINGLE
-            or sum(option.is_correct for option in question.options.all()) != 1):
+    """Display only keys that the grading path can use."""
+    options = list(question.options.all())
+    correct = sum(option.is_correct for option in options)
+    if question.question_type in (Question.QuestionType.MCQ_MULTIPLE, Question.QuestionType.NUMERICAL):
+        from apps.exams.typed_responses import typed_key_is_gradeable
+        return typed_key_is_gradeable(question, options, positive=question.positive_marks,
+            negative=question.negative_marks, key_confirmed=question.answer_status == AnswerStatus.MANUALLY_VERIFIED)
+    if question.question_type != Question.QuestionType.MCQ_SINGLE or correct != 1:
         return False
     if not question.is_pdf_derived:
-        return True  # retain ordinary manually-authored single-choice behavior
+        return True
     return question.answer_status == AnswerStatus.MANUALLY_VERIFIED
 
 
 def _equivalent_bank_question(question):
     """Only link an existing question when doing so cannot discard content."""
-    if question.image or question.figures.exists() or question.tables or question.source_regions or question.is_image_first:
+    if (question.detected_type != ExtractedQuestion.DetectedType.SINGLE or question.image or question.figures.exists()
+            or question.tables or question.source_regions or question.is_image_first):
+        # Avoid collapsing typed questions with different keys or grading rules.
         return None
     correct = _confirmed_staging_key(question)
     staged = [(o["key"].strip().upper(), o.get("text", ""), o["key"].strip().upper() == correct and bool(correct))
@@ -124,12 +153,14 @@ def _equivalent_bank_question(question):
 
 def _create_bank_options_and_figures(staged, bank):
     correct = _confirmed_staging_key(staged)
+    labels = (set(answer_keys_set(correct)) if staged.detected_type == ExtractedQuestion.DetectedType.MULTIPLE
+              else {correct} if staged.detected_type == ExtractedQuestion.DetectedType.SINGLE and correct else set())
     options = {}
     for index, opt in enumerate(staged.options):
         key = opt["key"].strip().upper()
         options[key] = QuestionOption.objects.create(
             question=bank, option_key=key, option_text=opt.get("text", ""),
-            is_correct=(key == correct and bool(correct)), order=index,
+            is_correct=key in labels, order=index,
         )
     for figure in staged.figures.all():
         QuestionFigure.objects.create(
@@ -278,6 +309,7 @@ class QuestionPaperReviewView(TeacherRequiredMixin, DetailView):
         questions = list(qs)
         for question in questions:
             decorate_staged_question(question, image_first=paper.image_first, private=False)
+            question.preview_confirmed_key = _confirmed_staging_key(question)
         context["questions"] = questions
         context["filter_mode"] = filter_mode
         context["total_extracted"] = paper.extracted_questions.count()
@@ -366,20 +398,24 @@ class ExtractedQuestionEditView(TeacherRequiredMixin, UpdateView):
                     option["visible_in_crop"] = True
                 options.append(option)
 
-        if (extracted_q.detected_type == ExtractedQuestion.DetectedType.SINGLE and extracted_q.correct_option
-                and extracted_q.correct_option not in {option["key"] for option in options}):
-            form.add_error("correct_option", "Choose an existing option, or leave the key blank.")
+        try:
+            extracted_q.correct_option = canonical_answer(extracted_q.correct_option, extracted_q.detected_type, options)
+        except ValidationError as exc:
+            form.add_error("correct_option", exc)
             return self.form_invalid(form)
 
         # Allow all options to be cleared as well as changed. The reviewer
         # controls the flag in the form; unrelated warnings must not be
         # silently cleared merely because two options were entered.
         extracted_q.options = options
+        changed = form.previous_content != staged_question_signature(extracted_q) or "image" in form.changed_data
+        checked = form.cleaned_data["confirm_answer_key"]
         extracted_q.answer_status = edited_answer_status(form.previous_key, form.previous_answer_status,
-            extracted_q.correct_option, form.cleaned_data["confirm_answer_key"], AnswerStatus.MANUALLY_VERIFIED,
-            content_changed=(form.previous_content != staged_question_signature(extracted_q) or "image" in form.changed_data))
-        if extracted_q.detected_type != ExtractedQuestion.DetectedType.SINGLE:
-            extracted_q.answer_status = AnswerStatus.NEEDS_REVIEW
+            extracted_q.correct_option, checked, AnswerStatus.MANUALLY_VERIFIED, content_changed=changed)
+        extracted_q.typed_key_verified = bool(extracted_q.detected_type in
+            (ExtractedQuestion.DetectedType.MULTIPLE, ExtractedQuestion.DetectedType.NUMERICAL)
+            and extracted_q.correct_option and extracted_q.answer_status == AnswerStatus.MANUALLY_VERIFIED
+            and (checked or form.previous_typed_verified and not changed and form.previous_key == extracted_q.correct_option))
         if not extracted_q.is_flagged:
             extracted_q.flag_reason = ""
 
@@ -388,7 +424,8 @@ class ExtractedQuestionEditView(TeacherRequiredMixin, UpdateView):
             extracted_q.status = ExtractedQuestion.Status.REVIEWED
 
         extracted_q.save()
-        if extracted_q.correct_option and extracted_q.answer_status != AnswerStatus.MANUALLY_VERIFIED:
+        if extracted_q.correct_option and (extracted_q.answer_status != AnswerStatus.MANUALLY_VERIFIED or
+                extracted_q.detected_type != ExtractedQuestion.DetectedType.SINGLE and not extracted_q.typed_key_verified):
             messages.warning(self.request, "Question saved. Its answer remains unconfirmed and will not be copied as a grading key unless checked.")
         else:
             messages.success(self.request, f"Question #{extracted_q.question_number} updated successfully.")
@@ -488,6 +525,7 @@ class ExtractedQuestionApproveView(TeacherRequiredMixin, View):
                 language=_infer_language(q),
                 question_type=_bank_question_type(q), is_image_first=q.is_image_first, is_pdf_derived=True,
                 answer_status=AnswerStatus.MANUALLY_VERIFIED if _confirmed_staging_key(q) else AnswerStatus.NEEDS_REVIEW,
+                **_bank_key_settings(q),
                 explanation=q.explanation,
                 positive_marks=q.positive_marks,
                 negative_marks=q.negative_marks,
@@ -569,6 +607,7 @@ class QuestionPaperBulkApproveView(TeacherRequiredMixin, View):
                     language=_infer_language(q),
                     question_type=_bank_question_type(q), is_image_first=q.is_image_first, is_pdf_derived=True,
                     answer_status=AnswerStatus.MANUALLY_VERIFIED if _confirmed_staging_key(q) else AnswerStatus.NEEDS_REVIEW,
+                    **_bank_key_settings(q),
                     explanation=q.explanation,
                     positive_marks=q.positive_marks,
                     negative_marks=q.negative_marks,
@@ -648,7 +687,9 @@ class AnswerKeyImportView(TeacherRequiredMixin, View):
                 if question.question_number in form.answer_keys:
                     question.correct_option = form.answer_keys[question.question_number]
                     question.answer_status = AnswerStatus.MANUALLY_VERIFIED
-                    question.save(update_fields=["correct_option", "answer_status"])
+                    question.typed_key_verified = question.detected_type in (
+                        ExtractedQuestion.DetectedType.MULTIPLE, ExtractedQuestion.DetectedType.NUMERICAL)
+                    question.save(update_fields=["correct_option", "answer_status", "typed_key_verified"])
         log_audit(request.user, "PAPER_ANSWER_KEYS_REVIEWED", f"Checked staging keys for paper {paper.pk}.", request=request)
         messages.success(request, f"Applied checked keys to {len(form.answer_keys)} staging question(s). Approved bank questions were not changed.")
         response = redirect("questions:paper_review", pk=paper.pk)
@@ -742,7 +783,12 @@ class QuestionCreateView(TeacherRequiredMixin, CreateView):
     def form_valid(self, form):
         with transaction.atomic():
             question = form.save(commit=False)
-            question.answer_status = AnswerStatus.MANUALLY_VERIFIED if form.cleaned_data.get("correct_option") else AnswerStatus.NEEDS_REVIEW
+            correct_key = form.cleaned_data.get("answer_key_value", "")
+            typed = question.question_type in (Question.QuestionType.MCQ_MULTIPLE, Question.QuestionType.NUMERICAL)
+            question.typed_key_verified = bool(typed and correct_key and form.cleaned_data.get("confirm_answer_key"))
+            question.numeric_key = Decimal(correct_key) if correct_key and question.question_type == Question.QuestionType.NUMERICAL else None
+            question.answer_status = (AnswerStatus.MANUALLY_VERIFIED if correct_key and (not typed or question.typed_key_verified)
+                                      else AnswerStatus.NEEDS_REVIEW)
             question.creator = self.request.user
             question.save()
 
@@ -753,7 +799,8 @@ class QuestionCreateView(TeacherRequiredMixin, CreateView):
                 "D": form.cleaned_data.get("option_text_D", "").strip(),
                 "E": form.cleaned_data.get("option_text_E", "").strip(),
             }
-            correct_key = form.cleaned_data.get("correct_option")
+            labels = (set(answer_keys_set(correct_key)) if question.question_type == Question.QuestionType.MCQ_MULTIPLE
+                      else {correct_key} if question.question_type == Question.QuestionType.MCQ_SINGLE and correct_key else set())
 
             idx = 0
             for key in ["A", "B", "C", "D", "E"]:
@@ -763,7 +810,7 @@ class QuestionCreateView(TeacherRequiredMixin, CreateView):
                         question=question,
                         option_key=key,
                         option_text=text,
-                        is_correct=(key == correct_key),
+                        is_correct=key in labels,
                         order=idx,
                     )
                     idx += 1
@@ -774,7 +821,10 @@ class QuestionCreateView(TeacherRequiredMixin, CreateView):
                 f"Created Question Bank item #{question.pk} in '{question.category.name}'",
                 request=self.request,
             )
-            messages.success(self.request, "Question successfully created in Question Bank!")
+            if typed and correct_key and not question.typed_key_verified:
+                messages.warning(self.request, "Question created, but its answer remains unconfirmed and will be ungraded until checked.")
+            else:
+                messages.success(self.request, "Question successfully created in Question Bank!")
             return redirect("questions:question_bank")
 
 
@@ -824,48 +874,57 @@ class QuestionUpdateView(TeacherRequiredMixin, UpdateView):
                 "D": form.cleaned_data.get("option_text_D", "").strip(),
                 "E": form.cleaned_data.get("option_text_E", "").strip(),
             }
-            correct_key = form.cleaned_data.get("correct_option")
+            correct_key = form.cleaned_data.get("answer_key_value", "")
             existing = {opt.option_key: opt for opt in question.options.all()}
-            if question.is_pdf_derived:
-                new_choices = tuple(
-                    (key, text) for key, text in opt_map.items()
-                    if text or key in form.crop_only_keys or (key in existing and (existing[key].image or existing[key].figures.exists()))
-                )
-                content = (question.question_type, (question.question_text or "").strip(),
-                           question.tables or [], new_choices)
+            typed = question.question_type in (Question.QuestionType.MCQ_MULTIPLE, Question.QuestionType.NUMERICAL)
+            new_choices = tuple(
+                (key, text) for key, text in opt_map.items()
+                if text or key in form.crop_only_keys or (key in existing and (existing[key].image or existing[key].figures.exists()))
+            )
+            content = (question.question_type, (question.question_text or "").strip(), question.tables or [], new_choices,
+                       question.multi_scoring_mode, question.partial_credit_per_choice, question.numeric_tolerance)
+            changed = content != form.previous_question_content or "image" in form.changed_data
+            checked = form.cleaned_data.get("confirm_answer_key", False)
+            changed_type = form.previous_question_content[0] != question.question_type
+            if question.is_pdf_derived or typed or changed_type:
                 question.answer_status = edited_answer_status(
-                    form.previous_key, form.previous_answer_status, correct_key,
-                    form.cleaned_data.get("confirm_answer_key"), AnswerStatus.MANUALLY_VERIFIED,
-                    content_changed=(content != form.previous_question_content or "image" in form.changed_data),
+                    form.previous_key, form.previous_answer_status, correct_key, checked,
+                    AnswerStatus.MANUALLY_VERIFIED, content_changed=changed,
                 )
-                if question.question_type != Question.QuestionType.MCQ_SINGLE:
-                    question.answer_status = AnswerStatus.NEEDS_REVIEW
-                # Public PDF keys use the teacher-confirmation status, never a
-                # stale private-practice verification flag.
-                question.key_verified = False
             else:
+                # Preserve historical behavior for ordinary single-choice questions.
                 question.answer_status = AnswerStatus.MANUALLY_VERIFIED if correct_key else AnswerStatus.NEEDS_REVIEW
+            question.typed_key_verified = bool(typed and correct_key and question.answer_status == AnswerStatus.MANUALLY_VERIFIED
+                and (checked or form.previous_typed_verified and not changed and form.previous_key == correct_key))
+            if typed and not question.typed_key_verified:
+                question.answer_status = AnswerStatus.NEEDS_REVIEW
+            question.numeric_key = Decimal(correct_key) if correct_key and question.question_type == Question.QuestionType.NUMERICAL else None
+            labels = (set(answer_keys_set(correct_key)) if question.question_type == Question.QuestionType.MCQ_MULTIPLE
+                      else {correct_key} if question.question_type == Question.QuestionType.MCQ_SINGLE and correct_key else set())
+            if question.is_pdf_derived:
+                question.key_verified = False
             question.save()
             form.save_m2m()
 
             # Update options in place: candidate responses and figure
             # associations refer to their IDs and must not be silently lost.
+            active_attempts = question.exam_instances.filter(exam__attempts__status="in_progress").exists()
             for idx, key in enumerate(["A", "B", "C", "D", "E"]):
                 text = opt_map[key]
                 opt = existing.get(key)
                 has_image = bool(opt and (opt.image or opt.figures.exists()))
                 keep_in_crop = key in getattr(form, "crop_only_keys", set())
-                if opt and not text and not has_image and not keep_in_crop and opt.selected_in_responses.exists():
-                    # Preserve historical selections and their original text.
+                if opt and not text and not has_image and not keep_in_crop and (opt.selected_in_responses.exists() or active_attempts):
+                    # Do not discard an option that may be in an active JSON selection.
                     text = opt.option_text
-                    messages.warning(self.request, f"Option {key} was retained because candidates have selected it.")
+                    messages.warning(self.request, f"Option {key} was retained because it may be used by a candidate.")
                 if text or has_image or keep_in_crop:
                     if opt:
-                        opt.option_text, opt.is_correct, opt.order = text, key == correct_key, idx
+                        opt.option_text, opt.is_correct, opt.order = text, key in labels, idx
                         opt.save(update_fields=["option_text", "is_correct", "order"])
                     else:
                         QuestionOption.objects.create(question=question, option_key=key,
-                                                      option_text=text, is_correct=(key == correct_key), order=idx)
+                                                      option_text=text, is_correct=key in labels, order=idx)
                 elif opt:
                     opt.delete()
 
@@ -875,7 +934,7 @@ class QuestionUpdateView(TeacherRequiredMixin, UpdateView):
                 f"Updated Question Bank item #{question.pk}",
                 request=self.request,
             )
-            if question.is_pdf_derived and correct_key and question.answer_status != AnswerStatus.MANUALLY_VERIFIED:
+            if correct_key and (question.is_pdf_derived or typed or changed_type) and question.answer_status != AnswerStatus.MANUALLY_VERIFIED:
                 messages.warning(self.request, "Question saved. Its answer is unconfirmed and will be ungraded until checked.")
             else:
                 messages.success(self.request, f"Question #{question.pk} updated successfully!")

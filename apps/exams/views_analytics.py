@@ -152,6 +152,7 @@ class StudentResultDetailView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
 
             context["score_distribution_json"] = json.dumps({
                 "Correct": analytics["correct_count"],
+                "Partial credit": analytics["partial_count"],
                 "Incorrect": analytics["incorrect_count"],
                 "Unattempted": analytics["unattempted_count"],
             })
@@ -242,6 +243,7 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
             # legacy rows with no key-label snapshot. Today's editable key is
             # not evidence of the key that was used for a past attempt.
             use_snapshot = bool(attempt.classroom_session_id or q.is_pdf_derived
+                                or q.question_type in ("mcq_multiple", "numerical")
                                 or r.key_confirmed_at_grading is not None)
             if use_snapshot:
                 from .classroom_results import classroom_response_status
@@ -268,8 +270,15 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
                     status = "correct"
                 else:
                     status = "incorrect"
+            from .typed_responses import typed_snapshot_review
+            typed = typed_snapshot_review(r)
+            if typed:
+                saved_key = typed["key"]
+                correct_option = None
+                explanation = typed["explanation"]  # grading-time solution, never today's edited value
             status_label, badge_class = {
-                "correct": ("Correct", "success"), "incorrect": ("Incorrect", "danger"),
+                "correct": ("Correct", "success"), "partial": ("Partial credit", "warning"),
+                "incorrect": ("Incorrect", "danger"),
                 "ungraded": ("Answered, ungraded", "secondary"), "unattempted": ("Unattempted", "secondary"),
             }[status]
 
@@ -289,7 +298,8 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
                 "selected_option": r.selected_option,
                 "correct_option": correct_option,
                 "saved_key": saved_key,
-                "saved_choice": r.selected_option_key_at_grading if use_snapshot else None,
+                "saved_choice": typed["answer"] if typed else r.selected_option_key_at_grading if use_snapshot else None,
+                "typed": typed,
                 "use_snapshot": use_snapshot,
                 "status": status,
                 "status_label": status_label,
@@ -305,6 +315,7 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
         context["has_snapshot_reviews"] = any(item["use_snapshot"] for item in reviewed_questions)
         context["total_reviewed"] = len(reviewed_questions)
         context["correct_total"] = sum(1 for q in reviewed_questions if q["status"] == "correct")
+        context["partial_total"] = sum(1 for q in reviewed_questions if q["status"] == "partial")
         context["incorrect_total"] = sum(1 for q in reviewed_questions if q["status"] == "incorrect")
         context["unattempted_total"] = sum(1 for q in reviewed_questions if q["status"] == "unattempted")
         context["ungraded_total"] = sum(1 for q in reviewed_questions if q["status"] == "ungraded")
@@ -507,6 +518,7 @@ class TeacherExportExamResultsCsvView(TeacherRequiredMixin, View):
             "Result Outcome",
             "Percentile",
             "Correct Answers",
+            "Partial-credit Answers",
             "Incorrect Answers",
             "Unattempted",
             "Accuracy %",
@@ -524,13 +536,14 @@ class TeacherExportExamResultsCsvView(TeacherRequiredMixin, View):
                 att.student.target_exam or "N/A",
                 att.score_obtained,
                 (att.graded_possible_marks if att.graded_possible_marks is not None else "Unknown") if att.has_ungraded_keys else att.total_marks,
-                ("Unknown (legacy key details)" if att.has_legacy_pdf_key_snapshots else f"{att.percentage}% (partial)") if att.has_ungraded_keys else f"{att.percentage}%",
+                ("Unknown (legacy key details)" if att.has_legacy_key_snapshots else f"{att.percentage}% (partial)") if att.has_ungraded_keys else f"{att.percentage}%",
                 ("PARTIAL / UNRANKED" if att.has_ungraded_keys else
-                 "PASSED (LEGACY RECORDED)" if att.has_legacy_pdf_key_snapshots and att.is_passed else
-                 "FAILED (LEGACY RECORDED)" if att.has_legacy_pdf_key_snapshots else
+                 "PASSED (LEGACY RECORDED)" if att.has_legacy_key_snapshots and att.is_passed else
+                 "FAILED (LEGACY RECORDED)" if att.has_legacy_key_snapshots else
                  "PASSED" if att.is_passed else "FAILED"),
                 f"{att.percentile}%" if att.percentile else "N/A",
                 att.correct_count,
+                att.partial_count,
                 att.incorrect_count,
                 att.unattempted_count,
                 f"{att.accuracy_percentage}%",

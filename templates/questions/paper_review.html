@@ -68,7 +68,7 @@ document.addEventListener("DOMContentLoaded", function() {
 <div class="alert alert-info small" role="alert">
     <strong>Review against the original PDF before approval.</strong> Formulas, tables and diagrams can require correction,
     and a question may continue on the next page. Source images may include printed answers or unrelated material; remove or recrop these before approval. Flagged or incomplete questions are skipped during bulk approval.
-    If an existing question has combinations of statements but expects one printed choice, edit its type to single-correct only after checking the source, then read its key again. Genuine multi-select and numerical questions are not scored as single-choice.
+    If a question expects one printed combination, choose single-correct only after checking the source. Genuine multiple-correct and numerical questions use their own confirmed keys and marking rules; image reading suggests single-choice keys only.
 </div>
 {% if paper.mathpix_document_id %}<p class="small text-muted">Mathpix document reference: <code>{{ paper.mathpix_document_id }}</code>. Check the extraction log for deletion status.</p>{% endif %}
 {% if extraction_warnings %}
@@ -161,7 +161,7 @@ document.addEventListener("DOMContentLoaded", function() {
 {% include 'questions/_review_filters.html' %}
 <div class="d-flex flex-column gap-3 mb-4">
     {% for q in questions %}
-    <div class="card border shadow-sm {% if q.is_flagged %}border-warning bg-warning bg-opacity-10{% elif q.status == 'approved' %}border-success{% endif %}" data-review-question data-image-question data-number="{{ q.question_number }}" data-needs-review="{% if q.is_flagged or q.image_notice or q.crop_warning or q.detected_type != 'mcq_single' %}1{% else %}0{% endif %}" data-missing-key="{% if q.correct_option and q.answer_status == 'manually_verified' and q.detected_type == 'mcq_single' %}0{% else %}1{% endif %}">
+    <div class="card border shadow-sm {% if q.is_flagged %}border-warning bg-warning bg-opacity-10{% elif q.status == 'approved' %}border-success{% endif %}" data-review-question data-image-question data-number="{{ q.question_number }}" data-needs-review="{% if q.is_flagged or q.image_notice or q.crop_warning %}1{% else %}0{% endif %}" data-missing-key="{% if q.preview_confirmed_key %}0{% else %}1{% endif %}">
         <div class="card-header bg-white py-2 px-3 d-flex justify-content-between align-items-center">
             <div class="d-flex align-items-center gap-2">
                 <span class="badge bg-dark fw-bold">Q{{ q.question_number }}</span>
@@ -193,8 +193,8 @@ document.addEventListener("DOMContentLoaded", function() {
 
             <div class="d-flex align-items-center gap-2">
                 <span class="badge text-bg-light border text-muted small">+{{ q.positive_marks }} / -{{ q.negative_marks }}</span>
-                {% if q.correct_option and q.answer_status == 'manually_verified' and q.detected_type == 'mcq_single' %}
-                    <span class="badge bg-success">Confirmed answer: {{ q.correct_option }}</span>
+                {% if q.preview_confirmed_key %}
+                    <span class="badge bg-success">Confirmed answer: {{ q.preview_confirmed_key }}</span>
                 {% elif q.correct_option %}
                     <span class="badge bg-warning text-dark">Unconfirmed answer: {{ q.correct_option }}</span>
                 {% else %}

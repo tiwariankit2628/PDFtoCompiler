@@ -30,6 +30,7 @@ def compute_student_attempt_analytics(attempt):
 
     total_questions = len(responses)
     correct_count = 0
+    partial_count = 0
     incorrect_count = 0
     unattempted_count = 0
     ungraded_count = 0
@@ -40,22 +41,22 @@ def compute_student_attempt_analytics(attempt):
 
     # Categorized buckets
     subject_data = defaultdict(lambda: {
-        "total": 0, "attempted": 0, "correct": 0, "incorrect": 0, "ungraded": 0,
+        "total": 0, "attempted": 0, "correct": 0, "partial": 0, "incorrect": 0, "ungraded": 0,
         "marks_obtained": Decimal("0.00"), "max_marks": Decimal("0.00"),
         "time_spent": 0,
     })
     topic_data = defaultdict(lambda: {
-        "subject": "", "total": 0, "attempted": 0, "correct": 0, "incorrect": 0,
+        "subject": "", "total": 0, "attempted": 0, "correct": 0, "partial": 0, "incorrect": 0,
         "marks_obtained": Decimal("0.00"), "time_spent": 0,
     })
     chapter_data = defaultdict(lambda: {
-        "subject": "", "total": 0, "attempted": 0, "correct": 0, "incorrect": 0,
+        "subject": "", "total": 0, "attempted": 0, "correct": 0, "partial": 0, "incorrect": 0,
         "marks_obtained": Decimal("0.00"),
     })
     difficulty_data = {
-        "easy": {"total": 0, "correct": 0, "incorrect": 0, "unattempted": 0, "ungraded": 0, "time_spent": 0},
-        "medium": {"total": 0, "correct": 0, "incorrect": 0, "unattempted": 0, "ungraded": 0, "time_spent": 0},
-        "hard": {"total": 0, "correct": 0, "incorrect": 0, "unattempted": 0, "ungraded": 0, "time_spent": 0},
+        "easy": {"total": 0, "correct": 0, "partial": 0, "incorrect": 0, "unattempted": 0, "ungraded": 0, "time_spent": 0},
+        "medium": {"total": 0, "correct": 0, "partial": 0, "incorrect": 0, "unattempted": 0, "ungraded": 0, "time_spent": 0},
+        "hard": {"total": 0, "correct": 0, "partial": 0, "incorrect": 0, "unattempted": 0, "ungraded": 0, "time_spent": 0},
     }
 
     fastest_time = None
@@ -97,7 +98,7 @@ def compute_student_attempt_analytics(attempt):
             ungraded_count += 1
             subject_data[subj]["ungraded"] += 1
             difficulty_data[diff_key]["ungraded"] += 1
-        elif status in ("correct", "incorrect"):
+        elif status in ("correct", "partial", "incorrect"):
             subject_data[subj]["attempted"] += 1
             topic_data[top]["attempted"] += 1
             chapter_data[chap]["attempted"] += 1
@@ -117,6 +118,12 @@ def compute_student_attempt_analytics(attempt):
                 subject_data[subj]["correct"] += 1
                 topic_data[top]["correct"] += 1
                 chapter_data[chap]["correct"] += 1
+            elif status == "partial":
+                partial_count += 1
+                difficulty_data[diff_key]["partial"] += 1
+                subject_data[subj]["partial"] += 1
+                topic_data[top]["partial"] += 1
+                chapter_data[chap]["partial"] += 1
             else:
                 incorrect_count += 1
                 time_spent_incorrect += time_spent
@@ -140,6 +147,7 @@ def compute_student_attempt_analytics(attempt):
             "total": s_info["total"],
             "attempted": att_cnt,
             "correct": s_info["correct"],
+            "partial": s_info["partial"],
             "incorrect": s_info["incorrect"],
             "unattempted": s_info["total"] - att_cnt - s_info["ungraded"],
             "ungraded": s_info["ungraded"],
@@ -164,6 +172,7 @@ def compute_student_attempt_analytics(attempt):
             "total": t_info["total"],
             "attempted": att_cnt,
             "correct": t_info["correct"],
+            "partial": t_info["partial"],
             "incorrect": t_info["incorrect"],
             "marks_obtained": t_info["marks_obtained"],
             "accuracy": acc,
@@ -184,7 +193,7 @@ def compute_student_attempt_analytics(attempt):
     for d_name in ["easy", "medium", "hard"]:
         d_info = difficulty_data[d_name]
         d_tot = d_info["total"]
-        d_att = d_info["correct"] + d_info["incorrect"]
+        d_att = d_info["correct"] + d_info["partial"] + d_info["incorrect"]
         d_acc = round((d_info["correct"] / d_att * 100.0), 1) if d_att > 0 else 0.0
         avg_t = round(d_info["time_spent"] / d_tot, 1) if d_tot > 0 else 0.0
         difficulty_summary.append({
@@ -192,6 +201,7 @@ def compute_student_attempt_analytics(attempt):
             "total": d_tot,
             "attempted": d_att,
             "correct": d_info["correct"],
+            "partial": d_info["partial"],
             "incorrect": d_info["incorrect"],
             "unattempted": d_info["unattempted"],
             "ungraded": d_info["ungraded"],
@@ -219,10 +229,11 @@ def compute_student_attempt_analytics(attempt):
     return {
         "total_questions": total_questions,
         "correct_count": correct_count,
+        "partial_count": partial_count,
         "incorrect_count": incorrect_count,
         "unattempted_count": unattempted_count,
         "ungraded_count": ungraded_count,
-        "attempted_count": correct_count + incorrect_count,
+        "attempted_count": correct_count + partial_count + incorrect_count,
         "accuracy_percentage": attempt.accuracy_percentage,
         "score_obtained": attempt.score_obtained,
         "total_marks": attempt.total_marks,
@@ -328,7 +339,8 @@ def compute_exam_institutional_analytics(exam):
         q_total = responses.count()
         q_correct = responses.filter(is_correct=True).count()
         q_attempted = responses.filter(Q(selected_option__isnull=False) | Q(selected_option_key_at_grading__isnull=False)
-                                       | Q(is_correct__isnull=False)).count()
+                                       | Q(is_correct__isnull=False) | ~Q(selected_option_ids=[])
+                                       | Q(numerical_response__isnull=False)).count()
 
         accuracy = round((q_correct / q_total * 100.0), 1) if q_total > 0 else 0.0
 

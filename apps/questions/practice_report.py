@@ -42,7 +42,7 @@ def generate_practice_report(attempt, result):
         <table><tr><th>Score on confirmed keys</th><th>Percentage</th><th>Accuracy</th><th>Outcome</th></tr>
         <tr><td>{_text(score)}</td><td>{_text(percent)}</td><td>{_text(accuracy)}</td><td>{_text(result["outcome"])}</td></tr></table>
         <p>Total possible marks: {_text(attempt.total_marks)} | Confirmed-key marks: {_text(result["graded_marks"] if result["graded_marks"] is not None else "Unknown")}<br>
-        Attempted: {result["attempted_total"]} / {len(result["rows"])} | Correct: {counts["correct"]} | Incorrect: {counts["incorrect"]} | Unattempted: {counts["unattempted"]} | Answered but ungraded: {counts["ungraded"]}<br>
+        Attempted: {result["attempted_total"]} / {len(result["rows"])} | Correct: {counts["correct"]} | Partial: {counts["partial"]} | Incorrect: {counts["incorrect"]} | Unattempted: {counts["unattempted"]} | Answered but ungraded: {counts["ungraded"]}<br>
         Elapsed time: {attempt.time_taken_seconds} sec | Recorded question time: {result["time_logged_seconds"]} sec</p>
         <p class="muted">Only student-confirmed, unambiguous keys are scored. Unknown keys are not graded. Question time reflects saved browser activity and may be incomplete. Private practice is not an institutional qualification.</p>''']
     if result["legacy_unknown_count"]:
@@ -52,7 +52,7 @@ def generate_practice_report(attempt, result):
         for group in groups:
             acc = f'{group["accuracy"]}%' if group["accuracy"] is not None else "No graded answers"
             parts.append(f'<p><b>{_text(group["name"])}</b> — {_text(acc)}; '
-                         f'{group["correct"]} correct, {group["incorrect"]} incorrect, '
+                         f'{group["correct"]} correct, {group["partial"]} partial, {group["incorrect"]} incorrect, '
                          f'{group["unattempted"]} unattempted, {group["ungraded"]} ungraded</p>')
     parts.append("<h2>Question-wise analysis / प्रश्न अनुसार विवरण</h2>")
     for row in result["rows"]:
@@ -84,17 +84,19 @@ def generate_practice_report(attempt, result):
             parts.append('<p class="muted">Original key status was not recorded.</p>')
         for option in row["options"]:
             flags = []
-            if option.pk == response.selected_option_id:
+            if (row.get("typed") and option.option_key in row["typed"]["answer_labels"] or
+                    not row.get("typed") and option.pk == response.selected_option_id):
                 flags.append("your answer")
-            if row["correct"] and option.pk == row["correct"].pk:
-                flags.append("confirmed key")
+            if (row.get("typed") and option.option_key in row["typed"]["key_labels"] or
+                    row["correct"] and option.pk == row["correct"].pk):
+                flags.append("key at grading")
             flag_text = f' ({", ".join(flags)})' if flags else ""
             parts.append(f'<p class="option"><b>{_text(option.option_key)}.</b> {_text(option.option_text)}{_text(flag_text)}</p>')
             if not use_primary:
                 for fig in option.figures.all():
                     parts.append(image_tag(fig.private_image, "Option image"))
         parts.append(f'<p class="muted">Recorded time: {response.time_spent_seconds} sec'
-                     + (f' | Marks: {_text(response.marks_awarded)}' if row["status"] in ("correct", "incorrect") else "") + '</p>')
+                     + (f' | Marks: {_text(response.marks_awarded)}' if row["status"] in ("correct", "partial", "incorrect") else "") + '</p>')
         if row["explanation"]:
             parts.append(f'<p><b>Explanation:</b> {_text(row["explanation"])}</p>')
         parts.append('</div>')

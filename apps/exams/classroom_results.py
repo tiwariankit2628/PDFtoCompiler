@@ -7,6 +7,10 @@ uncertainty instead of inferring historical facts from an editable question.
 
 def classroom_response_status(response):
     """Use the saved grading decision even if the selected option was deleted."""
+    typed = response.typed_grading_snapshot
+    if isinstance(typed, dict) and typed.get("version") == 1 and typed.get("outcome") in (
+            "correct", "partial", "incorrect", "ungraded", "unattempted"):
+        return typed["outcome"]
     if response.key_confirmed_at_grading is False:
         return ("ungraded" if response.selected_option_id is not None
                 or response.selected_option_key_at_grading is not None
@@ -25,7 +29,7 @@ def classroom_result_summary(attempt):
     # prefetch cache when exporting a large classroom rather than issuing a
     # separate query per participant.
     responses = list(attempt.responses.all())
-    counts = {"correct": 0, "incorrect": 0, "unattempted": 0, "ungraded": 0}
+    counts = {"correct": 0, "partial": 0, "incorrect": 0, "unattempted": 0, "ungraded": 0}
     pending_keys = 0
     unknown_keys = 0
     has_confirmed_keys = False
@@ -58,7 +62,7 @@ def classroom_result_summary(attempt):
         "counts": counts,
         "pending_keys": pending_keys,
         "unknown_keys": unknown_keys,
-        "has_graded_answers": bool(counts["correct"] + counts["incorrect"]),
+        "has_graded_answers": bool(counts["correct"] + counts["partial"] + counts["incorrect"]),
         "score_available": has_confirmed_keys,
         "fully_keyed": fully_keyed,
         # This persisted value was computed from confirmed keys at submission;

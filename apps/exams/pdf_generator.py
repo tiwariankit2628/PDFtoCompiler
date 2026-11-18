@@ -55,7 +55,7 @@ def generate_student_scorecard_pdf(attempt, analytics):
     # Watermark / Tag
     page.insert_text(
         fitz.Point(440, 44),
-        "RECORDED RESULT" if attempt.has_legacy_pdf_key_snapshots else "VERIFIED RESULT",
+        "RECORDED RESULT" if attempt.has_legacy_key_snapshots else "VERIFIED RESULT",
         fontsize=10,
         fontname="helv",
         color=(1, 1, 1),
@@ -117,9 +117,9 @@ def generate_student_scorecard_pdf(attempt, analytics):
     page.insert_text(fitz.Point(45 + (card_width + card_gap) * 3, y_scores + 48), pctl_str, fontsize=14, fontname="helv", color=HEADER_BG)
     page.insert_text(fitz.Point(45 + (card_width + card_gap) * 3, y_scores + 64), "Relative Standing", fontsize=8, fontname="helv", color=TEXT_MUTED)
 
-    if attempt.has_legacy_pdf_key_snapshots:
+    if attempt.has_legacy_key_snapshots:
         page.insert_text(fitz.Point(38, 305),
-                         "Earlier PDF key details were not recorded; the saved result was not recalculated.",
+                         "Earlier key details were not recorded; the saved result was not recalculated.",
                          fontsize=7, fontname="helv", color=TEXT_MUTED)
 
     # 4. Question Breakdown Strip
@@ -128,7 +128,7 @@ def generate_student_scorecard_pdf(attempt, analytics):
     page.draw_rect(strip_rect, color=BORDER_COLOR, fill=LIGHT_GRAY, width=1)
     page.insert_text(
         fitz.Point(45, y_strip + 22),
-        f"Total Questions: {analytics['total_questions']}   |   Correct: {analytics['correct_count']}   |   Incorrect: {analytics['incorrect_count']}   |   Unattempted: {analytics['unattempted_count']}   |   Accuracy: {analytics['accuracy_percentage']}%   |   Time: {analytics['total_time_minutes']} Mins",
+        f"Questions: {analytics['total_questions']}  |  Correct: {analytics['correct_count']}  |  Partial: {analytics['partial_count']}  |  Incorrect: {analytics['incorrect_count']}  |  Unattempted: {analytics['unattempted_count']}  |  Accuracy: {analytics['accuracy_percentage']}%  |  Time: {analytics['total_time_minutes']} min",
         fontsize=8.5,
         fontname="helv",
         color=TEXT_DARK,

@@ -143,6 +143,15 @@ class Question(models.Model):
     # Private keys are explicitly entered/confirmed by the student, never guessed.
     key_verified = models.BooleanField(default=False)
     answer_status = models.CharField(max_length=24, choices=AnswerStatus.choices, default=AnswerStatus.NEEDS_REVIEW)
+    # Legacy non-single option flags were never supported for grading. This is
+    # set only by an explicit confirmation of a typed multi/numerical key.
+    typed_key_verified = models.BooleanField(default=False)
+    numeric_key = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)
+    numeric_tolerance = models.DecimalField(max_digits=18, decimal_places=6, default=0)
+    multi_scoring_mode = models.CharField(max_length=16, default="exact", choices=[
+        ("exact", "Exact set only"), ("per_correct", "Partial credit per correct choice"),
+    ])
+    partial_credit_per_choice = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     private_image = models.ImageField(
         upload_to="question_images/%Y/%m/", storage=private_practice_storage, blank=True
     )
@@ -300,15 +309,23 @@ class ExtractedQuestion(models.Model):
         max_length=20,
         choices=DetectedType.choices,
         default=DetectedType.SINGLE,
-        help_text="Heuristically detected during extraction. Verify before approval; never used for grading.",
+        help_text="Heuristically detected during extraction. Verify the type, key and scoring rules before creating a test or approving.",
     )
     answer_status = models.CharField(max_length=24, choices=AnswerStatus.choices, default=AnswerStatus.NEEDS_REVIEW)
+    # Typed keys are confirmed independently; legacy single-letter values on a
+    # multiple/numerical item must not become gradeable after an upgrade.
+    typed_key_verified = models.BooleanField(default=False)
     correct_option = models.CharField(
         "Answer Key",
-        max_length=10,
+        max_length=64,
         blank=True,
-        help_text="Key of correct option, e.g. 'A', 'B', 'C', 'D'",
+        help_text="Single choice A–E, multiple choices [A,C], or a numerical value, according to question type.",
     )
+    numeric_tolerance = models.DecimalField(max_digits=18, decimal_places=6, default=0)
+    multi_scoring_mode = models.CharField(max_length=16, default="exact", choices=[
+        ("exact", "Exact set only"), ("per_correct", "Partial credit per correct choice"),
+    ])
+    partial_credit_per_choice = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     explanation = models.TextField("Explanation / Notes", blank=True)
     positive_marks = models.DecimalField(
         "Positive Marks", max_digits=5, decimal_places=2, default=4.0

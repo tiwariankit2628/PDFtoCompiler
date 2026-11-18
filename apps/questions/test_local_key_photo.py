@@ -1,8 +1,9 @@
 """Optional end-to-end check on an operator-supplied, locally held key photo.
 
 Neither image nor ground truth is stored in the repository. Set LOCAL_KEY_PHOTO
-and LOCAL_KEY_TRUTH (180 visually checked numeric answers in question order), and
-TESSDATA_PREFIX, to exercise this test with the supplied four-column key.
+and LOCAL_KEY_TRUTH (180 visually checked numeric answers in question order) to
+exercise this test with the supplied four-column key. Local English OCR data is
+found from the environment or the project requirements, without a download.
 """
 import os
 import tempfile
@@ -16,12 +17,16 @@ from django.urls import reverse
 
 from apps.accounts.models import User
 from apps.exams.models import Category, ClassroomSession
+from .answer_key_image import AnswerImageError, _english_data_directory
 from .models import AnswerStatus, ExtractedQuestion, QuestionPaperUpload
 
 
 PHOTO = os.environ.get("LOCAL_KEY_PHOTO", "")
 TRUTH = os.environ.get("LOCAL_KEY_TRUTH", "")
-OCR_DATA = os.path.join(os.environ.get("TESSDATA_PREFIX", ""), "eng.traineddata")
+try:
+    OCR_DATA = os.path.join(_english_data_directory(), "eng.traineddata")
+except AnswerImageError:
+    OCR_DATA = ""
 
 
 @skipUnless(os.path.isfile(PHOTO) and os.path.isfile(TRUTH) and os.path.isfile(OCR_DATA),

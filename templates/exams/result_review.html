@@ -95,6 +95,7 @@
                 <button type="button" class="btn btn-sm btn-outline-success filter-btn" data-filter="correct">
                     Correct ({{ correct_total }})
                 </button>
+                {% if partial_total %}<button type="button" class="btn btn-sm btn-outline-warning filter-btn" data-filter="partial">Partial credit ({{ partial_total }})</button>{% endif %}
                 <button type="button" class="btn btn-sm btn-outline-danger filter-btn" data-filter="incorrect">
                     Incorrect ({{ incorrect_total }})
                 </button>
@@ -129,6 +130,8 @@
                     <span class="badge bg-{{ q_data.badge_class }} px-2.5 py-1.5 fw-bold">
                         {% if q_data.status == 'correct' %}
                             <i class="bi bi-check-circle-fill me-1"></i> Correct ({% if q_data.use_snapshot %}{{ q_data.marks_awarded }}{% else %}+{{ q_data.positive_marks }}{% endif %})
+                        {% elif q_data.status == 'partial' %}
+                            <i class="bi bi-dash-circle-fill me-1"></i> Partial credit ({{ q_data.marks_awarded }})
                         {% elif q_data.status == 'incorrect' %}
                             <i class="bi bi-x-circle-fill me-1"></i> Incorrect ({% if q_data.use_snapshot %}{{ q_data.marks_awarded }}{% else %}-{{ q_data.negative_marks }}{% endif %})
                         {% elif q_data.status == 'ungraded' %}
@@ -170,14 +173,16 @@
             <div class="small text-muted mb-3">
                 {% if q_data.saved_choice != None %}Choice when graded: <strong>{{ q_data.saved_choice }}</strong>.{% elif q_data.status != 'unattempted' %}Original choice label was not recorded.{% endif %}
                 {% if q_data.saved_key != None %} Key when graded: <strong>{{ q_data.saved_key }}</strong>.{% elif q_data.response.key_confirmed_at_grading == False %} No confirmed key when graded.{% else %} Original key status was not recorded.{% endif %}
+                {% if q_data.typed.type == 'mcq_multiple' %} Scoring: {% if q_data.typed.rules.mode == 'per_correct' %}{{ q_data.typed.rules.partial_per_choice }} per correct choice; wrong choice penalty {{ q_data.typed.rules.negative }}{% else %}exact set; wrong-set penalty {{ q_data.typed.rules.negative }}{% endif %}.
+                {% elif q_data.typed.type == 'numerical' %} Numerical tolerance: {{ q_data.typed.rules.tolerance }}.{% endif %}
             </div>
             {% endif %}
 
             <!-- Options Review Grid -->
             <div class="mb-3">
                 {% for opt in q_data.options %}
-                <div class="review-opt-card {% if q_data.correct_option.id == opt.id or not q_data.use_snapshot and opt.is_correct %}review-opt-correct{% elif q_data.selected_option.id == opt.id and q_data.status == 'incorrect' %}review-opt-incorrect{% endif %}">
-                    <span class="review-badge-circle {% if q_data.correct_option.id == opt.id or not q_data.use_snapshot and opt.is_correct %}bg-success text-white{% elif q_data.selected_option.id == opt.id and q_data.status == 'incorrect' %}bg-danger text-white{% else %}bg-light text-dark border{% endif %}">
+                <div class="review-opt-card {% if q_data.typed and opt.option_key in q_data.typed.key_labels or q_data.correct_option.id == opt.id or not q_data.use_snapshot and opt.is_correct %}review-opt-correct{% elif q_data.typed and opt.option_key in q_data.typed.answer_labels and q_data.status == 'incorrect' or q_data.selected_option.id == opt.id and q_data.status == 'incorrect' %}review-opt-incorrect{% endif %}">
+                    <span class="review-badge-circle {% if q_data.typed and opt.option_key in q_data.typed.key_labels or q_data.correct_option.id == opt.id or not q_data.use_snapshot and opt.is_correct %}bg-success text-white{% elif q_data.typed and opt.option_key in q_data.typed.answer_labels and q_data.status == 'incorrect' or q_data.selected_option.id == opt.id and q_data.status == 'incorrect' %}bg-danger text-white{% else %}bg-light text-dark border{% endif %}">
                         {{ opt.option_key }}
                     </span>
                     <div class="flex-grow-1 text-dark">
@@ -185,15 +190,17 @@
 
                     </div>
                     <div>
-                        {% if q_data.correct_option.id == opt.id and q_data.selected_option.id == opt.id and q_data.status == 'correct' %}
+                        {% if q_data.typed and opt.option_key in q_data.typed.answer_labels %}<span class="badge text-bg-primary">Your choice</span> {% endif %}
+                        {% if q_data.typed and opt.option_key in q_data.typed.key_labels %}<span class="badge text-bg-success">Key at grading</span>{% endif %}
+                        {% if not q_data.typed and q_data.correct_option.id == opt.id and q_data.selected_option.id == opt.id and q_data.status == 'correct' %}
                             <span class="badge bg-success"><i class="bi bi-check2 me-1"></i> Your Answer (Correct)</span>
                         {% elif q_data.correct_option.id == opt.id or not q_data.use_snapshot and opt.is_correct %}
                             <span class="badge bg-success bg-opacity-25 text-success border border-success"><i class="bi bi-check2 me-1"></i> {% if attempt.classroom_session_id %}Key at grading{% else %}Correct Answer{% endif %}</span>
-                        {% elif q_data.selected_option.id == opt.id and q_data.status == 'ungraded' %}
+                        {% elif not q_data.typed and q_data.selected_option.id == opt.id and q_data.status == 'ungraded' %}
                             <span class="badge text-bg-light border">Your answer · ungraded</span>
-                        {% elif q_data.selected_option.id == opt.id and q_data.status == 'incorrect' %}
+                        {% elif not q_data.typed and q_data.selected_option.id == opt.id and q_data.status == 'incorrect' %}
                             <span class="badge bg-danger"><i class="bi bi-x me-1"></i> Your Answer</span>
-                        {% elif q_data.selected_option.id == opt.id %}
+                        {% elif not q_data.typed and q_data.selected_option.id == opt.id %}
                             <span class="badge text-bg-light border">Your answer</span>
                         {% endif %}
                     </div>

@@ -2,6 +2,7 @@
 import re
 
 from .models import AnswerStatus, ExtractedQuestion
+from .answer_key_validation import confirmed_staged_key
 
 
 TECHNICAL_NAMES = re.compile(r"pytesseract|tesseract|pymupdf|\bfitz\b", re.I)
@@ -84,11 +85,10 @@ def answer_key_preview_questions(questions, *, student=False, exclude_approved=F
             "number": question.question_number,
             "options": keys,
             "single": question.detected_type == ExtractedQuestion.DetectedType.SINGLE,
+            "type": question.detected_type,
             "approved": bool(exclude_approved and (question.status == ExtractedQuestion.Status.APPROVED
                                                     or question.approved_question_id)),
-            "saved_confirmed": bool(question.correct_option and question.answer_status == confirmed
-                and question.detected_type == ExtractedQuestion.DetectedType.SINGLE
-                and keys.count(question.correct_option.strip().upper()) == 1),
+            "saved_confirmed": bool(confirmed_staged_key(question, confirmed)),
         })
     return rows
 

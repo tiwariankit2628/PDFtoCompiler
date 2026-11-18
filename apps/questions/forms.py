@@ -6,7 +6,8 @@ from django.core.exceptions import ValidationError
 from apps.exams.models import Category
 from .structured_forms import add_tables_editor, clean_tables_editor
 from .models import ExtractedQuestion, QuestionPaperUpload
-from .answer_key_validation import parse_checked_answer_key, staged_question_signature
+from .answer_key_validation import (canonical_answer, format_numeric_value,
+                                    parse_checked_answer_key, staged_question_signature)
 
 
 class BootstrapFormMixin:
@@ -165,6 +166,9 @@ class ExtractedQuestionEditForm(BootstrapFormMixin, forms.ModelForm):
             "question_text",
             "detected_type",
             "correct_option",
+            "multi_scoring_mode",
+            "partial_credit_per_choice",
+            "numeric_tolerance",
             "positive_marks",
             "negative_marks",
             "explanation",
@@ -184,6 +188,7 @@ class ExtractedQuestionEditForm(BootstrapFormMixin, forms.ModelForm):
         # key and status before binding in order to preserve confirmation safely.
         self.previous_key = self.instance.correct_option
         self.previous_answer_status = self.instance.answer_status
+        self.previous_typed_verified = self.instance.typed_key_verified
         self.previous_content = staged_question_signature(self.instance)
         self.has_original_crop = bool(self.instance.pk and self.instance.paper.image_first
             and self.instance.is_image_first and self.instance.figures.filter(
@@ -197,9 +202,12 @@ class ExtractedQuestionEditForm(BootstrapFormMixin, forms.ModelForm):
         # change it, so editing other fields never clears the type.
         self.fields["detected_type"].required = False
         self.fields["detected_type"].help_text = (
-            "Choose single-correct only if exactly one printed choice is selected, even when that choice combines several statements. "
-            "Multi-select and numerical questions are not scored as single-choice questions."
+            "Check the original: select one choice, multiple choices, or a numerical value."
         )
+        for name in ("multi_scoring_mode", "partial_credit_per_choice", "numeric_tolerance"):
+            self.fields[name].required = False
+        self.fields["numeric_tolerance"].min_value = 0
+        self.fields["partial_credit_per_choice"].min_value = 0
         add_tables_editor(self, self.instance)
 
     def clean_detected_type(self):
@@ -210,9 +218,18 @@ class ExtractedQuestionEditForm(BootstrapFormMixin, forms.ModelForm):
         cleaned = clean_tables_editor(self, super().clean())
         if cleaned.get("visible_crop_choices") and not self.has_original_crop:
             self.add_error("visible_crop_choices", "Add an original question crop in image-first mode before checking labels.")
-        if (cleaned.get("confirm_answer_key") and cleaned.get("correct_option")
-                and cleaned.get("detected_type") != ExtractedQuestion.DetectedType.SINGLE):
-            self.add_error("correct_option", "Only single-correct MCQs can use this answer key. Review the type first.")
+        for name in ("multi_scoring_mode", "partial_credit_per_choice", "numeric_tolerance"):
+            if cleaned.get(name) in (None, ""):
+                cleaned[name] = getattr(self.instance, name)
+        tolerance, partial = cleaned["numeric_tolerance"], cleaned["partial_credit_per_choice"]
+        if tolerance < 0:
+            self.add_error("numeric_tolerance", "Tolerance cannot be negative.")
+        if partial < 0:
+            self.add_error("partial_credit_per_choice", "Partial marks cannot be negative.")
+        elif (cleaned.get("detected_type") == ExtractedQuestion.DetectedType.MULTIPLE
+                and cleaned["multi_scoring_mode"] == "per_correct"
+                and (partial <= 0 or cleaned.get("positive_marks") is not None and partial > cleaned["positive_marks"])):
+            self.add_error("partial_credit_per_choice", "Set a positive partial mark no greater than the full mark.")
         return cleaned
 
     def save(self, commit=True):
@@ -224,11 +241,8 @@ class ExtractedQuestionEditForm(BootstrapFormMixin, forms.ModelForm):
         return instance
 
     def clean_correct_option(self):
-        opt = self.cleaned_data.get("correct_option", "").strip().upper()
-        kind = self.cleaned_data.get("detected_type") or self.instance.detected_type
-        if kind == ExtractedQuestion.DetectedType.SINGLE and opt and (len(opt) != 1 or opt not in "ABCDE"):
-            raise ValidationError("Enter one existing choice from A to E, or leave the key blank.")
-        return opt
+        # Type-specific validation uses the edited options in the view.
+        return self.cleaned_data.get("correct_option", "").strip().upper()
 
 
 class AnswerKeyImportForm(BootstrapFormMixin, forms.Form):
@@ -247,7 +261,7 @@ class AnswerKeyImportForm(BootstrapFormMixin, forms.Form):
                 "placeholder": "Paste checked keys e.g.:\n1: A, 2: B, 3: C, 4: D\nor\n1-A\n2-B\n3-C\n4-D",
             }
         ),
-        help_text="Only single-correct answers for unapproved questions are accepted; blank questions remain ungraded.",
+        help_text="For unapproved questions: single 1:1, multiple 2:[1,3], numerical 3:-2.5. Blank keys stay ungraded.",
     )
     confirm_checked = forms.BooleanField(
         required=True,
@@ -306,11 +320,16 @@ class QuestionBankForm(BootstrapFormMixin, forms.ModelForm):
     option_text_E = forms.CharField(label="Option E", required=False,
                                     widget=forms.TextInput(attrs={"placeholder": "Option E statement / formula"}))
     correct_option = forms.ChoiceField(
-        label="Correct Answer (optional)",
+        label="Single-correct answer (optional)",
         choices=[("", "No answer key"), ("A", "Option A"), ("B", "Option B"),
                  ("C", "Option C"), ("D", "Option D"), ("E", "Option E")],
         widget=forms.Select(), required=False,
     )
+    typed_key = forms.CharField(required=False, max_length=64, label="Multiple or numerical answer",
+        help_text="Multiple: [A,C] or [1,3]. Numerical: the actual value, e.g. -2.5. Leave blank if unknown.")
+    confirm_answer_key = forms.BooleanField(required=False,
+        label="I checked this answer and its question type and scoring rules.",
+        help_text="Required for a new or changed multiple/numerical key and for PDF keys. Unconfirmed keys stay ungraded.")
 
     class Meta:
         from .models import Question
@@ -326,6 +345,9 @@ class QuestionBankForm(BootstrapFormMixin, forms.ModelForm):
             "question_type",
             "question_text",
             "image",
+            "multi_scoring_mode",
+            "partial_credit_per_choice",
+            "numeric_tolerance",
             "positive_marks",
             "negative_marks",
             "explanation",
@@ -353,26 +375,31 @@ class QuestionBankForm(BootstrapFormMixin, forms.ModelForm):
         super().__init__(*args, **kwargs)
 
         add_tables_editor(self, self.instance)
-        if self.instance.pk and self.instance.is_pdf_derived:
+        for name in ("multi_scoring_mode", "partial_credit_per_choice", "numeric_tolerance"):
+            self.fields[name].required = False
+        self.previous_key = ""
+        self.previous_answer_status = self.instance.answer_status
+        self.previous_typed_verified = self.instance.typed_key_verified
+        self.crop_only_keys = set()
+        if self.instance.pk:
             original_options = list(self.instance.options.all())
-            original_correct = [opt.option_key for opt in original_options if opt.is_correct]
-            self.previous_key = original_correct[0] if len(original_correct) == 1 else ""
-            self.previous_answer_status = self.instance.answer_status
-            self.has_original_crop = bool(self.instance.is_image_first and self.instance.figures.filter(
+            original_correct = sorted(opt.option_key for opt in original_options if opt.is_correct)
+            if self.instance.question_type == "mcq_multiple":
+                self.previous_key = "[" + ",".join(original_correct) + "]" if original_correct else ""
+            elif self.instance.question_type == "numerical":
+                self.previous_key = format_numeric_value(self.instance.numeric_key) if self.instance.numeric_key is not None else ""
+            else:
+                self.previous_key = original_correct[0] if len(original_correct) == 1 else ""
+            self.has_original_crop = bool(self.instance.is_pdf_derived and self.instance.is_image_first and self.instance.figures.filter(
                 source="question_crop", option__isnull=True).exclude(image="").exists())
             self.crop_only_keys = {opt.option_key for opt in original_options
                                    if self.has_original_crop and not (opt.option_text or "").strip()}
             if self.has_original_crop:
                 self.fields["question_text"].required = False
             self.previous_question_content = (
-                self.instance.question_type, (self.instance.question_text or "").strip(),
-                self.instance.tables or [],
+                self.instance.question_type, (self.instance.question_text or "").strip(), self.instance.tables or [],
                 tuple((opt.option_key, (opt.option_text or "").strip()) for opt in original_options),
-            )
-            self.fields["confirm_answer_key"] = forms.BooleanField(
-                required=False, label="I checked this answer against the correct paper, set and printed choice order.",
-                help_text="Confirm new answers and changes to the question or choices. Unchanged verified answers stay verified.",
-                widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+                self.instance.multi_scoring_mode, self.instance.partial_credit_per_choice, self.instance.numeric_tolerance,
             )
 
         # Scoping categories by user permissions
@@ -399,9 +426,10 @@ class QuestionBankForm(BootstrapFormMixin, forms.ModelForm):
             if "E" in opts:
                 self.fields["option_text_E"].initial = opts["E"].option_text
 
-            correct = self.instance.options.filter(is_correct=True).first()
-            if correct:
-                self.fields["correct_option"].initial = correct.option_key
+            if self.instance.question_type == "mcq_single":
+                self.fields["correct_option"].initial = self.previous_key
+            else:
+                self.fields["typed_key"].initial = self.previous_key
 
     def clean(self):
         cleaned_data = clean_tables_editor(self, super().clean())
@@ -419,17 +447,35 @@ class QuestionBankForm(BootstrapFormMixin, forms.ModelForm):
         crop_keys = getattr(self, "crop_only_keys", set())
         valid_opts = [k for k, v in options_map.items() if v or k in image_keys or k in crop_keys]
 
-        if len(valid_opts) < 2:
+        kind = cleaned_data.get("question_type") or self.instance.question_type
+        if kind != "numerical" and len(valid_opts) < 2:
             raise ValidationError("An MCQ question must provide at least 2 non-empty options.")
-
-        if correct and correct not in valid_opts:
-            raise ValidationError(
-                f"Selected correct answer ({correct}) cannot be empty. Please provide text for Option {correct}."
-            )
-        if (self.instance.pk and self.instance.is_pdf_derived and cleaned_data.get("confirm_answer_key")
-                and correct and cleaned_data.get("question_type") != "mcq_single"):
-            self.add_error("correct_option", "Only single-correct MCQs can use a confirmed key.")
-
+        if kind == "mcq_single":
+            if correct and correct not in valid_opts:
+                raise ValidationError(f"Selected correct answer ({correct}) cannot be empty. Please provide text for Option {correct}.")
+            cleaned_data["answer_key_value"] = correct or ""
+            if (self.instance.pk and not self.instance.is_pdf_derived and self.instance.question_type != kind
+                    and correct and not cleaned_data.get("confirm_answer_key")):
+                self.add_error("confirm_answer_key", "Confirm the answer when changing a question to single-correct.")
+        else:
+            if correct:
+                self.add_error("correct_option", "Use the multiple or numerical answer field for this type.")
+            try:
+                cleaned_data["answer_key_value"] = canonical_answer(cleaned_data.get("typed_key", ""), kind,
+                                                                    [{"key": key} for key in valid_opts])
+            except ValidationError as exc:
+                self.add_error("typed_key", exc)
+        for name in ("multi_scoring_mode", "partial_credit_per_choice", "numeric_tolerance"):
+            if cleaned_data.get(name) in (None, ""):
+                cleaned_data[name] = getattr(self.instance, name)
+        tolerance, partial = cleaned_data["numeric_tolerance"], cleaned_data["partial_credit_per_choice"]
+        if tolerance < 0:
+            self.add_error("numeric_tolerance", "Tolerance cannot be negative.")
+        if partial < 0:
+            self.add_error("partial_credit_per_choice", "Partial marks cannot be negative.")
+        elif (kind == "mcq_multiple" and cleaned_data["multi_scoring_mode"] == "per_correct" and
+              (partial <= 0 or cleaned_data.get("positive_marks") is not None and partial > cleaned_data["positive_marks"])):
+            self.add_error("partial_credit_per_choice", "Set a positive partial mark no greater than the full mark.")
         return cleaned_data
 
     def save(self, commit=True):

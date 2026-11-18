@@ -20,7 +20,7 @@ from django.views import View
 from apps.core.permissions import TeacherRequiredMixin
 from apps.core.utils import log_audit
 from apps.exams.models import Category, ClassroomSession, Exam, ExamQuestion
-from .answer_key_validation import edited_answer_status, staged_question_signature
+from .answer_key_validation import answer_keys_set, confirmed_staged_key, edited_answer_status, staged_question_signature
 from .classroom_forms import ClassroomCreateForm, ClassroomPaperUploadForm, ClassroomQuestionForm
 from .extractor import PDFQuestionExtractor
 from .figure_utils import page_image, validate_box
@@ -117,13 +117,13 @@ def _review_context(paper, form=None):
     for question in questions:
         decorate_staged_question(question, image_first=paper.image_first, private=True)
         question.practice_error = practice_question_error(question, allow_confirmed_crop_choices=True)
+        question.preview_confirmed_key = confirmed_staged_key(question, AnswerStatus.MANUALLY_VERIFIED)
     unassigned = paper.figures.filter(question__isnull=True).count()
     return {
         "paper": paper, "questions": questions, "total_questions": len(included),
         "answer_key_preview_questions": answer_key_preview_questions(included),
         "total_marks": sum((q.positive_marks for q in included), Decimal("0.00")),
-        "keyed_count": sum(bool(q.correct_option and q.answer_status == AnswerStatus.MANUALLY_VERIFIED
-                                 and q.detected_type == ExtractedQuestion.DetectedType.SINGLE) for q in included),
+        "keyed_count": sum(bool(confirmed_staged_key(q, AnswerStatus.MANUALLY_VERIFIED)) for q in included),
         "flagged_count": sum(q.is_flagged for q in included), "unassigned_figure_count": unassigned,
         "extraction_warnings": [user_diagnostic(line.removeprefix("Warning: ")) for line in paper.extraction_log.splitlines() if line.startswith("Warning: ")],
         "extraction_log_display": user_diagnostic(paper.extraction_log),
@@ -180,10 +180,16 @@ class ClassroomPaperReviewView(PrivateClassroomMixin, View):
                 )
                 for position, staged in enumerate(included, 1):
                     supplied = form.answer_keys.get(staged.question_number)
-                    correct = supplied if supplied is not None else (
-                        staged.correct_option.upper() if staged.answer_status == AnswerStatus.MANUALLY_VERIFIED else "")
+                    correct = supplied if supplied is not None else confirmed_staged_key(staged, AnswerStatus.MANUALLY_VERIFIED)
+                    is_typed = staged.detected_type in (ExtractedQuestion.DetectedType.MULTIPLE, ExtractedQuestion.DetectedType.NUMERICAL)
+                    labels = (set(answer_keys_set(correct)) if staged.detected_type == ExtractedQuestion.DetectedType.MULTIPLE
+                              else {correct} if staged.detected_type == ExtractedQuestion.DetectedType.SINGLE and correct else set())
                     snapshot = Question(
                         is_classroom_snapshot=True, is_image_first=staged.is_image_first,
+                        question_type=staged.detected_type, typed_key_verified=bool(is_typed and correct),
+                        numeric_key=Decimal(correct) if correct and staged.detected_type == ExtractedQuestion.DetectedType.NUMERICAL else None,
+                        numeric_tolerance=staged.numeric_tolerance, multi_scoring_mode=staged.multi_scoring_mode,
+                        partial_credit_per_choice=staged.partial_credit_per_choice,
                         answer_status=AnswerStatus.MANUALLY_VERIFIED if correct else AnswerStatus.NEEDS_REVIEW,
                         category=paper.category, creator=request.user, source_paper=paper,
                         subject=paper.subject or "General", topic=paper.target_exam,
@@ -199,7 +205,7 @@ class ClassroomPaperReviewView(PrivateClassroomMixin, View):
                         key = option["key"].strip().upper()
                         options[key] = QuestionOption.objects.create(
                             question=snapshot, option_key=key, option_text=option.get("text", ""),
-                            is_correct=bool(correct) and key == correct, order=index,
+                            is_correct=key in labels, order=index,
                         )
                     for figure in staged.figures.all():
                         if not figure.private_image:
@@ -251,6 +257,7 @@ class ClassroomQuestionEditView(PrivateClassroomMixin, View):
                 return render(request, "questions/classroom_question_edit.html", {"question": question, "form": form})
             data = form.cleaned_data
             previous_content = staged_question_signature(question)
+            previous_key, previous_typed = question.correct_option, question.typed_key_verified
             figure_keys = {f.option_key for f in question.figures.all() if f.private_image}
             question.question_number = data["question_number"]
             question.detected_type = data["detected_type"]
@@ -261,10 +268,17 @@ class ClassroomQuestionEditView(PrivateClassroomMixin, View):
                 {"key": k, "text": data[f"option_{k}"].strip(), "visible_in_crop": k in crop_keys}
                 for k in "ABCDE" if data[f"option_{k}"].strip() or k in figure_keys or k in crop_keys
             ]
-            question.answer_status = edited_answer_status(question.correct_option, question.answer_status,
-                data["correct_option"], data["confirm_answer_key"], AnswerStatus.MANUALLY_VERIFIED,
-                content_changed=previous_content != staged_question_signature(question))
-            question.correct_option = data["correct_option"]
+            question.numeric_tolerance = data["numeric_tolerance"]
+            question.multi_scoring_mode = data["multi_scoring_mode"]
+            question.partial_credit_per_choice = data["partial_credit_per_choice"]
+            changed = previous_content != staged_question_signature(question)
+            key = data.get("answer_key_value", "")
+            question.answer_status = edited_answer_status(previous_key, question.answer_status,
+                key, data["confirm_answer_key"], AnswerStatus.MANUALLY_VERIFIED, content_changed=changed)
+            question.typed_key_verified = bool(question.detected_type in (ExtractedQuestion.DetectedType.MULTIPLE, ExtractedQuestion.DetectedType.NUMERICAL)
+                and key and question.answer_status == AnswerStatus.MANUALLY_VERIFIED
+                and (data["confirm_answer_key"] or previous_typed and not changed and previous_key == key))
+            question.correct_option = key
             question.positive_marks = data["positive_marks"]
             question.negative_marks = data["negative_marks"]
             question.explanation = data["explanation"]
@@ -272,7 +286,8 @@ class ClassroomQuestionEditView(PrivateClassroomMixin, View):
             question.flag_reason = "" if data["reviewed"] else "Not yet checked against the source."
             question.status = ExtractedQuestion.Status.REVIEWED
             question.save()
-        if question.correct_option and question.answer_status != AnswerStatus.MANUALLY_VERIFIED:
+        if question.correct_option and (question.answer_status != AnswerStatus.MANUALLY_VERIFIED or
+                question.detected_type != ExtractedQuestion.DetectedType.SINGLE and not question.typed_key_verified):
             messages.warning(request, "Question saved. Its answer remains unconfirmed and will be ungraded until you check it.")
         else:
             messages.success(request, "Question saved. Previously created tests remain unchanged.")
