@@ -18,7 +18,8 @@ from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.exams.models import Category, ClassroomSession, Exam, ExamAttempt
-from .answer_key_image import (AnswerImageError, MAX_IMAGE_BYTES, _prepare_image,
+from .answer_key_image import (AnswerImageError, MAX_COLUMN_RETRIES, MAX_IMAGE_BYTES, MAX_RETRY_PIXELS,
+                               _prepare_image, _read_repeated_columns, _repeated_pair_columns,
                                parse_positioned_words, preview_answer_images, suggest_for_questions)
 from .answer_key_validation import parse_checked_answer_key
 from .models import AnswerStatus, ExtractedFigure, ExtractedQuestion, Question, QuestionFigure, QuestionOption, QuestionPaperUpload
@@ -55,6 +56,20 @@ def synthetic_key_png():
         return page.get_pixmap(matrix=fitz.Matrix(2, 2)).tobytes("png")
 
 
+def synthetic_multicolumn_key_png():
+    # Three independent vertical Q/answer columns. The raster image does not
+    # contain an embedded text layer when passed to the reader.
+    with fitz.open() as document:
+        page = document.new_page(width=750, height=500)
+        for row in range(12):
+            for column in range(3):
+                number = column * 12 + row + 1
+                x, y = 35 + 235 * column, 50 + 34 * row
+                page.insert_text((x, y), f"{number}.", fontsize=17, fontname="helv")
+                page.insert_text((x + 55, y), f"({number % 4 + 1})", fontsize=17, fontname="helv")
+        return page.get_pixmap(matrix=fitz.Matrix(2, 2)).tobytes("png")
+
+
 class AnswerImageParserTests(SimpleTestCase):
     def test_common_pair_and_horizontal_layouts(self):
         pairs = parse_positioned_words(words(
@@ -86,6 +101,98 @@ class AnswerImageParserTests(SimpleTestCase):
         self.assertIn(3, unclear)
         self.assertNotIn(4, unclear)
         self.assertEqual(count, 1)
+
+    def test_parenthesized_numeric_answer_is_distinct_from_an_ambiguous_numeric_row(self):
+        self.assertEqual(parse_positioned_words(words([(0, "9,"), (30, "(1)")])), [(9, "1")])
+        self.assertEqual(parse_positioned_words(words([(0, "9"), (30, "(1)")])), [(9, "1")])
+        self.assertEqual(parse_positioned_words(words([(0, "9"), (30, "1")])), [])
+
+    def test_stable_columns_isolate_bad_cells_without_guessing_multi_answers(self):
+        positioned = words(
+            [(10, "1."), (45, "(1)"), (200, "11."), (235, "(2)")],
+            [(10, "2."), (45, "(1)"), (200, "12."), (235, "(2)")],
+            [(10, "3."), (45, "(1)"), (200, "13."), (235, "(2)")],
+            [(10, "4."), (45, "A"), (68, "C"), (200, "14."), (235, "(4)")],
+            [(10, "5."), (45, "(2)"), (200, "15."), (235, "(1)")],
+        )
+        self.assertIsNotNone(_repeated_pair_columns(positioned))
+        image = png_upload(size=(500, 250)).read()
+        with patch("apps.questions.answer_key_image._ocr_words", side_effect=AnswerImageError("retry unavailable")):
+            found, unclear, unreadable = _read_repeated_columns(image, positioned, "local", set(range(1, 16)))
+        self.assertIn((14, "4"), found)  # one bad cell did not discard its neighbour
+        self.assertNotIn((4, "A"), found)  # "4 A C" is not a single answer
+        self.assertIn(4, unclear)
+        self.assertNotIn(3, unclear)
+        self.assertGreaterEqual(unreadable, 1)
+        # One isolated bad row cannot establish enough column geometry, so it
+        # is still rejected as a whole rather than partially guessed.
+        one_row = words([(0, "3"), (30, "B"), (100, "#4"), (130, "A")])
+        self.assertIsNone(_repeated_pair_columns(one_row))
+        found, _, _ = _read_repeated_columns(image, one_row, "local", {3, 4})
+        self.assertEqual(found, [])
+
+    def test_unlabelled_numeric_grids_do_not_establish_columns(self):
+        grid = words(*[[(0, str(i)), (30, str(i + 1)), (200, str(i + 2)), (230, str(i + 3))]
+                       for i in range(1, 5)])
+        self.assertIsNone(_repeated_pair_columns(grid))
+
+    def test_column_retry_disagreements_and_duplicate_readings_are_not_silently_accepted(self):
+        positioned = words(
+            [(10, "1."), (45, "(1)"), (200, "11."), (235, "(2)")],
+            [(10, "2."), (45, "(1)"), (200, "12."), (235, "(2)")],
+            [(10, "3."), (45, "(1)"), (200, "13."), (235, "(2)")],
+            [(10, "4."), (45, "?"), (200, "14."), (235, "(4)")],
+        )
+        _, columns = _repeated_pair_columns(positioned)
+        column = columns[0]
+        box_x, box_y = max(0, int(column["left"])), max(0, int(column["top"]))
+        # The retry crop is doubled within the small-image pixel budget. It
+        # disagrees on Q2, proposes Q4 despite its unclear original, misreads
+        # Q3 as Q33, and contains a second Q1. None may be silently trusted.
+        retry_original = words(
+            [(10, "1."), (45, "(1)")],
+            [(10, "2."), (45, "(2)")],
+            [(10, "33."), (45, "(1)")],
+            [(10, "4."), (45, "(1)")],
+            [], [(10, "1."), (45, "(1)")],
+            [], [(10, "14")],  # stray retry token must not flag Q14 in the other column
+        )
+        retry_words = [((w[0] - box_x) * 2, (w[1] - box_y) * 2,
+                        (w[2] - box_x) * 2, (w[3] - box_y) * 2, w[4]) for w in retry_original]
+        image = png_upload(size=(500, 250)).read()
+        with patch("apps.questions.answer_key_image._ocr_words", return_value=retry_words):
+            found, unclear, _ = _read_repeated_columns(image, positioned, "local", {1, 2, 3, 4, 11, 12, 13, 14})
+        result = suggest_for_questions(found, [question(i) for i in (1, 2, 3, 4, 14)], unclear_numbers=unclear)
+        self.assertEqual([row["status"] for row in result["rows"]], ["duplicate", "unclear", "unclear", "unclear", "detected"])
+        self.assertEqual(result["rows"][-1]["answer"], "D")
+        self.assertIn(33, result["unmatched_numbers"])
+
+    def test_retry_count_and_raster_pixels_are_bounded(self):
+        # Stable five-column table with an unreadable entry in every column.
+        # The source is small enough to accept, while retries would exceed a
+        # deliberately reduced budget unless their total area is limited.
+        positioned = []
+        for row in range(8):
+            for column in range(5):
+                x, y = 100 + column * 700, 50 + row * 60
+                positioned.extend([(x, y, x + 30, y + 30, f"{column * 20 + row + 1}."),
+                                   (x + 180, y, x + 230, y + 30, "(?)" if row == 2 else "(1)")])
+        image = io.BytesIO()
+        Image.new("RGB", (3600, 600), "white").save(image, "PNG")
+        retry_sizes = []
+
+        def fake_ocr(crop, tessdata):
+            with Image.open(io.BytesIO(crop)) as decoded:
+                retry_sizes.append(decoded.size)
+            return []
+
+        with patch("apps.questions.answer_key_image.MAX_RETRY_PIXELS", 700_000), \
+                patch("apps.questions.answer_key_image._ocr_words", side_effect=fake_ocr):
+            _read_repeated_columns(image.getvalue(), positioned, "unused", set(range(1, 101)))
+        self.assertLessEqual(len(retry_sizes), MAX_COLUMN_RETRIES)
+        self.assertGreater(len(retry_sizes), 0)
+        self.assertLessEqual(sum(width * height for width, height in retry_sizes), 700_000)
+        self.assertLessEqual(700_000, MAX_RETRY_PIXELS)
 
     def test_duplicates_unknown_unsupported_and_invalid_choices_are_flagged(self):
         qs = [question(1), question(2, options=OPTIONS[:2]), question(3),
@@ -127,6 +234,19 @@ class AnswerImageParserTests(SimpleTestCase):
             with self.assertRaisesMessage(AnswerImageError, "Unavailable"):
                 preview_answer_images([png_upload()], [question(1)])
             ocr.assert_not_called()
+
+    @skipUnless(os.path.isfile(os.path.join(os.environ.get("TESSDATA_PREFIX", ""), "eng.traineddata")),
+                "Local English OCR language data not configured")
+    def test_real_local_ocr_on_a_synthetic_multicolumn_raster_key(self):
+        upload = SimpleUploadedFile("columns.png", synthetic_multicolumn_key_png(), content_type="image/png")
+        with patch("requests.sessions.Session.request", side_effect=AssertionError("No external request allowed")):
+            result = preview_answer_images([upload], [question(i) for i in range(1, 37)])
+        self.assertGreaterEqual(result["detected_count"], 30)
+        for row in result["rows"]:
+            if row["answer"]:
+                self.assertEqual(row["answer"], "ABCD"[row["number"] % 4])
+            else:
+                self.assertNotEqual(row["status"], "detected")
 
     @skipUnless(os.path.isfile(os.path.join(os.environ.get("TESSDATA_PREFIX", ""), "eng.traineddata")),
                 "Local English OCR language data not configured")
@@ -212,6 +332,51 @@ class AnswerImageEndpointTests(TestCase):
         self.client.force_login(self.admin)
         self.assertEqual(self.preview("questions:teacher_answer_image_preview", self.teacher_paper).status_code, 200)
         self.assertEqual(self.preview("questions:classroom_answer_image_preview", self.classroom_paper).status_code, 404)
+
+    def test_existing_combination_type_is_corrected_only_by_reviewer_in_all_three_flows(self):
+        scenarios = (
+            (self.student, self.student_paper, "questions:practice_question_edit", "questions:practice_answer_image_preview", AnswerStatus.STUDENT_CONFIRMED),
+            (self.teacher, self.classroom_paper, "questions:classroom_question_edit", "questions:classroom_answer_image_preview", AnswerStatus.MANUALLY_VERIFIED),
+            (self.teacher, self.teacher_paper, "questions:extracted_edit", "questions:teacher_answer_image_preview", AnswerStatus.MANUALLY_VERIFIED),
+        )
+        combinations = ["A, B and E only", "B, C and D only", "A, B and D only", "A, D and E only"]
+        for owner, paper, edit_view, image_view, verified in scenarios:
+            with self.subTest(view=edit_view):
+                q = ExtractedQuestion.objects.create(paper=paper, question_number=159,
+                    question_text="Which statements is/are correct?", detected_type="mcq_multiple",
+                    options=[{"key": key, "text": text} for key, text in zip("ABCD", combinations)],
+                    correct_option="B", answer_status=verified)
+                self.client.force_login(owner)
+                endpoint = reverse(image_view, args=[paper.pk])
+
+                def read_preview():
+                    with patch("apps.questions.answer_key_image._english_data_directory", return_value="local-test"), \
+                         patch("apps.questions.answer_key_image._ocr_words", return_value=words([(0, "159:3")])):
+                        response = self.client.post(endpoint, {"images": png_upload()})
+                    self.assertEqual(response.status_code, 200)
+                    return next(row for row in response.json()["rows"] if row["number"] == 159)
+
+                row = read_preview()
+                self.assertEqual((row["status"], row["answer"]), ("unsupported_type", ""))
+                q.refresh_from_db()
+                self.assertEqual((q.detected_type, q.correct_option, q.answer_status), ("mcq_multiple", "B", verified))
+                # An explicit type edit invalidates the old confirmation; no
+                # extraction or image preview can change the stored key itself.
+                prefix = "option_text_" if edit_view == "questions:extracted_edit" else "option_"
+                data = {"question_number": 159, "detected_type": "mcq_single", "question_text": q.question_text,
+                        "positive_marks": "4", "negative_marks": "1", "correct_option": "B",
+                        **{f"{prefix}{key}": text for key, text in zip("ABCD", combinations)}}
+                self.assertEqual(self.client.post(reverse(edit_view, args=[q.pk]), data).status_code, 302)
+                q.refresh_from_db()
+                self.assertEqual((q.detected_type, q.correct_option, q.answer_status), ("mcq_single", "B", AnswerStatus.NEEDS_REVIEW))
+                row = read_preview()
+                self.assertEqual((row["status"], row["answer"]), ("detected", "C"))  # printed (3)
+                q.refresh_from_db()
+                self.assertEqual((q.correct_option, q.answer_status), ("B", AnswerStatus.NEEDS_REVIEW))
+                self.assertEqual(self.client.post(reverse(edit_view, args=[q.pk]),
+                                 dict(data, correct_option="C", confirm_answer_key="on")).status_code, 302)
+                q.refresh_from_db()
+                self.assertEqual((q.correct_option, q.answer_status), ("C", verified))
 
     def test_csrf_required_and_upload_error_is_no_store(self):
         client = Client(enforce_csrf_checks=True)

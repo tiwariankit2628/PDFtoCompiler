@@ -68,6 +68,7 @@ document.addEventListener("DOMContentLoaded", function() {
 <div class="alert alert-info small" role="alert">
     <strong>Review against the original PDF before approval.</strong> Formulas, tables and diagrams can require correction,
     and a question may continue on the next page. Source images may include printed answers or unrelated material; remove or recrop these before approval. Flagged or incomplete questions are skipped during bulk approval.
+    If an existing question has combinations of statements but expects one printed choice, edit its type to single-correct only after checking the source, then read its key again. Genuine multi-select and numerical questions are not scored as single-choice.
 </div>
 {% if paper.mathpix_document_id %}<p class="small text-muted">Mathpix document reference: <code>{{ paper.mathpix_document_id }}</code>. Check the extraction log for deletion status.</p>{% endif %}
 {% if extraction_warnings %}

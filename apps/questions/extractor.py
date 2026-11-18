@@ -280,6 +280,21 @@ class PDFQuestionExtractor:
         # subjective item is not reported as a *broken* MCQ, and a
         # multiple-correct item is not silently accepted as single-correct.
         detected_type, type_reason = classify_question(text, options)
+        if (getattr(item, "numerical_section", False)
+                and detected_type in (ExtractedQuestion.DetectedType.SINGLE, ExtractedQuestion.DetectedType.MULTIPLE)):
+            # Statement labels or other extracted material can resemble MCQ
+            # choices in an integer-answer section. Keep the content for review,
+            # but don't make an unsupported item eligible for single scoring.
+            detected_type = ExtractedQuestion.DetectedType.NUMERICAL
+            type_reason = ("Printed section instructions indicate numerical answers; "
+                           "confirm the type before using single-choice scoring.")
+        elif (detected_type == ExtractedQuestion.DetectedType.SINGLE and len(options) >= 2
+              and getattr(item, "multiple_correct_section", False)):
+            # A strong section instruction takes precedence over a local
+            # combination-style guess. Human review is still required.
+            detected_type = ExtractedQuestion.DetectedType.MULTIPLE
+            type_reason = ("Printed section instructions may allow multiple correct choices; "
+                           "confirm the type before using single-choice scoring.")
         if detected_type in (ExtractedQuestion.DetectedType.NUMERICAL,
                              ExtractedQuestion.DetectedType.SUBJECTIVE):
             # These legitimately have no MCQ options; preserve content and flag
@@ -290,7 +305,9 @@ class PDFQuestionExtractor:
                 issues.insert(0, f"Only {len(options)} option(s) detected. Minimum 2 required for MCQ.")
             elif any(not option.get("text", "").strip() for option in options):
                 issues.insert(0, "One or more options are empty; check the source.")
-            if detected_type == ExtractedQuestion.DetectedType.MULTIPLE:
+            if type_reason:
+                # Also flag inferred single-choice combinations: they still
+                # require review, and no answer key is inferred from them.
                 issues.append(type_reason)
         if len({option.get("key") for option in options}) != len(options):
             issues.append("Duplicate option labels detected; compare with the source.")

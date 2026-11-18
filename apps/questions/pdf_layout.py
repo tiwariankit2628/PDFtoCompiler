@@ -62,6 +62,28 @@ MULTIPLE_CORRECT = re.compile(
 SINGLE_CORRECT = re.compile(
     r"\b(?:only|exactly)\s+one\b.{0,80}\b(?:correct|right|true)\b", re.IGNORECASE | re.DOTALL,
 )
+# Section cues need stronger evidence than a phrase in one question. A heading
+# or instruction applying to a group can affect later questions, but text in an
+# individual stem must not silently change the type of subsequent questions.
+SECTION_HEADING = re.compile(
+    r"^\s*(?:section|part)(?:\s*[:\-–—]\s*|\s+(?:[a-z]|\d{1,2}|[ivx]{1,5})(?=\s|[.):\-–—]|$)|\s*$)",
+    re.IGNORECASE,
+)
+SECTION_SCOPE = re.compile(
+    r"\b(?:each|all|these|following)\s+(?:of\s+the\s+)?questions?\b"
+    r"|\bquestions?\s+(?:in|of)\s+(?:this|the)\s+section\b",
+    re.IGNORECASE,
+)
+NUMERICAL_SECTION_TITLE = re.compile(
+    r"^\s*(?:numerical|numeric|integer)(?:[-\s]+(?:answer|value|response))?[-\s]+(?:type|questions?|section)\b",
+    re.IGNORECASE,
+)
+NUMERICAL_SECTION_CUE = re.compile(
+    r"\b(?:numerical|numeric|integer)(?:[-\s]+(?:answer|value|response|type|entry|questions?))\b"
+    r"|\b(?:answer|response|value)s?\s+(?:is|are|as|of)\s+(?:an?\s+)?(?:numerical|numeric|integer)\b",
+    re.IGNORECASE,
+)
+SINGLE_SECTION_CUE = re.compile(r"\bsingle[-\s]+(?:correct|answer|choice)\b", re.IGNORECASE)
 
 TABLE_REFERENCE = re.compile(
     r"\b(?:match\s+(?:the\s+)?(?:list|column)|(?:list|column)[-\s]*[i1]+|table)\b"
@@ -191,6 +213,10 @@ class LayoutQuestion:
     extra_figures: list = field(default_factory=list)
     primary_image_region: dict = field(default_factory=dict)
     needs_source: bool = False
+    # Transient paper-section cues; never a database update to existing items.
+    multiple_correct_section: bool = False
+    numerical_section: bool = False
+    single_correct_section: bool = False
 
 
 def parse_options(text):
@@ -1081,6 +1107,65 @@ class DigitalQuestionLayout:
                 continue
         return counts
 
+    def _section_types_by_anchor(self, by_page):
+        """Find explicit section instructions *before* each question anchor.
+
+        Section headers between questions are often included in the previous
+        question's crop. Reading them as part of that earlier question would
+        change the wrong type. Track their geometric reading order separately;
+        single-question text does not become a paper-wide instruction. This is
+        only a heuristic: review remains necessary when headers are absent,
+        ambiguous, misordered or OCR has damaged the instructions.
+        """
+        contexts = {}
+        active = None
+        heading_text = None
+        for page_index in range(len(self.doc)):
+            for column in self._reading_columns(page_index):
+                x0, x1 = self._column_bounds(page_index, column)
+                events = [(anchor.rect.y0, 1, anchor) for anchor in by_page.get(page_index, [])
+                          if x0 <= anchor.rect.x0 < x1]
+                events.extend((box.y0, 0, text) for text, box, _ in self.lines[page_index]
+                              if x0 <= box.x0 < x1)
+                events.sort(key=lambda event: (event[0], event[1]))
+                for _, kind, item in events:
+                    if kind == 1:
+                        contexts[id(item)] = active
+                        # An instruction after this point belongs to a question
+                        # unless it explicitly identifies a section/group.
+                        heading_text = None
+                        continue
+                    text = item.strip()
+                    if (not text or PREFIXED_QUESTION.match(text) or NUMBERED_QUESTION.match(text)
+                            or OPTION_AT_START.match(text)):
+                        continue
+                    heading = bool(SECTION_HEADING.match(text) or NUMERICAL_SECTION_TITLE.match(text))
+                    if heading:
+                        # Even an unknown new section ends a previous cue.
+                        active = None
+                        heading_text = text
+                    elif heading_text is not None:
+                        # Some printed instructions wrap across adjacent lines.
+                        heading_text = (heading_text + " " + text)[-500:]
+                    if not (heading or heading_text is not None or SECTION_SCOPE.search(text)):
+                        continue
+                    cue = heading_text if heading_text is not None else text
+                    matches = set()
+                    if MULTIPLE_CORRECT.search(cue):
+                        matches.add("multiple")
+                    if SINGLE_CORRECT.search(cue) or SINGLE_SECTION_CUE.search(cue):
+                        matches.add("single")
+                    if (NUMERICAL_SECTION_CUE.search(cue) or NUMERICAL_SECTION_TITLE.match(cue)
+                            or heading and re.search(r"\b(?:numerical|numeric|integer)\b", cue, re.I)):
+                        matches.add("numerical")
+                    # A summary mentioning multiple types is not enough to
+                    # assign either type to every question in the section.
+                    if len(matches) == 1:
+                        active = next(iter(matches))
+                    elif len(matches) > 1:
+                        active = None
+        return contexts
+
     def extract(self):
         anchors = self._anchors()
         if not anchors:
@@ -1092,6 +1177,7 @@ class DigitalQuestionLayout:
         by_page = {}
         for anchor in anchors:
             by_page.setdefault(anchor.page_index, []).append(anchor)
+        section_types = self._section_types_by_anchor(by_page)
         modes = {self._columns_on(index) for index in range(len(self.doc))}
         description = ({1: "single column", 2: "two columns", 3: "three columns"}.get(next(iter(modes)))
                        if len(modes) == 1 else "mixed page columns")
@@ -1122,6 +1208,10 @@ class DigitalQuestionLayout:
                     if current and cut > start:
                         current.segments.append(self._segment(page_index, fitz.Rect(x0, start, x1, cut)))
                     current = LayoutQuestion(anchor.number, page_index + 1, anchor.label)
+                    section_type = section_types.get(id(anchor))
+                    current.multiple_correct_section = section_type == "multiple"
+                    current.numerical_section = section_type == "numerical"
+                    current.single_correct_section = section_type == "single"
                     if anchor.inferred:
                         current.issues.append("Question numbering was inferred from nearby labels; verify the source and choices.")
                     questions.append(current)
@@ -1129,7 +1219,7 @@ class DigitalQuestionLayout:
                 if current and bottom > start and (page_anchors or current.segments):
                     current.segments.append(self._segment(page_index, fitz.Rect(x0, start, x1, bottom)))
 
-        multi_section = False
+        possible_multi = False
         essay_instructions = self._explicit_essay_instructions()
         if essay_instructions:
             self.log("Warning: The paper specifies essay and short-note answers. Single-choice CBT grading does not support these questions.")
@@ -1151,17 +1241,25 @@ class DigitalQuestionLayout:
                     if figure.get("option_key"):
                         figure["option_key"] = None
                 question.issues.insert(0, "Printed essay/short-note questions cannot be graded as single-choice answers; review or exclude this item.")
-            # The application scores one selected option only. Explicit
-            # multi-answer instructions apply until a later explicit
-            # single-answer instruction; never infer or verify an answer key.
-            multi = MULTIPLE_CORRECT.search(source_text)
-            single = SINGLE_CORRECT.search(source_text)
+            # A section instruction found before this anchor is a safety cue,
+            # not an answer key. Later/unknown sections end the earlier cue.
+            # A phrase in one question can also be a section instruction whose
+            # heading was lost. Continue to warn, but don't force later types
+            # without explicit evidence that it applies to the whole section.
+            if question.single_correct_section or question.numerical_section:
+                possible_multi = False
+            multi = MULTIPLE_CORRECT.search(question.text)
+            single = SINGLE_CORRECT.search(question.text)
             if single and (not multi or single.start() > multi.start()):
-                multi_section = False
+                possible_multi = False
             elif multi:
-                multi_section = True
-            if multi_section:
-                question.issues.append("Printed instructions may allow multiple correct choices; this test supports single-choice grading only. Review or exclude this question.")
+                possible_multi = True
+            if question.multiple_correct_section:
+                question.issues.append("Printed section instructions may allow multiple correct choices; this test supports single-choice grading only. Review or exclude this question.")
+            elif question.numerical_section:
+                question.issues.append("Printed section instructions indicate numerical answers; this test supports single-choice grading only. Review or exclude this question.")
+            elif possible_multi:
+                question.issues.append("Earlier instructions may allow multiple correct choices. Check whether they apply here; this test supports single-choice grading only.")
             if len(question.options) < 2:
                 question.issues.append("A complete supported answer-choice list was not found; image-only, numerical or incomplete questions need manual review.")
             elif len(question.options) < 5:

@@ -23,7 +23,7 @@ class ClassroomQuestionForm(PracticeQuestionForm):
     detected_type = forms.ChoiceField(
         choices=ExtractedQuestion.DetectedType.choices,
         label="Question type (check against the PDF)",
-        help_text="Classroom scoring currently supports one correct choice only.",
+        help_text="Choose single-correct only if exactly one printed choice is selected, even when that choice combines several statements. Multi-select and numerical questions cannot be scored here.",
     )
 
     def __init__(self, *args, question, **kwargs):

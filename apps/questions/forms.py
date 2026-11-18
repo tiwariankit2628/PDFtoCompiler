@@ -196,6 +196,10 @@ class ExtractedQuestionEditForm(BootstrapFormMixin, forms.ModelForm):
         # Advisory field: keep the detected value when the reviewer does not
         # change it, so editing other fields never clears the type.
         self.fields["detected_type"].required = False
+        self.fields["detected_type"].help_text = (
+            "Choose single-correct only if exactly one printed choice is selected, even when that choice combines several statements. "
+            "Multi-select and numerical questions are not scored as single-choice questions."
+        )
         add_tables_editor(self, self.instance)
 
     def clean_detected_type(self):

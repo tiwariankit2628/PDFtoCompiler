@@ -38,6 +38,43 @@ class ClassifyQuestionTests(SimpleTestCase):
                 self.assertEqual(detected, MULTIPLE)
                 self.assertIn("Multiple-correct", reason)
 
+    def test_ambiguous_statements_with_combination_choices_are_one_choice_and_flagged(self):
+        stem = "Which of the following statements is/are correct? A. First. B. Second. C. Third. D. Fourth. E. Fifth."
+        combinations = [{"key": key, "text": text} for key, text in zip("ABCD", [
+            "A, B and E only", "B, C and D only", "A, B and D only", "A, D and E only",
+        ])]
+        detected, reason = classify_question(stem, combinations)
+        self.assertEqual(detected, SINGLE)
+        self.assertIn("combinations of statements", reason)
+        self.assertIn("confirm", reason)
+        # Roman-numeral references and parenthesized statements are not tied to
+        # one NEET paper; these remain human-reviewed in other exam layouts.
+        roman = [{"key": key, "text": text} for key, text in zip("ABCD", [
+            "(I) and (II) only", "(II) and (III) only", "(I) and (III) only", "I, II and III only",
+        ])]
+        self.assertEqual(classify_question("Which statements is/are correct?", roman)[0], SINGLE)
+
+    def test_explicit_multi_select_wins_even_when_choices_are_combinations(self):
+        combinations = [{"key": key, "text": text} for key, text in zip("ABCD", [
+            "A and B only", "B and C only", "A and C only", "A, B and C only",
+        ])]
+        for instruction in ("One or more options are correct.", "More than one option is correct.",
+                            "Select all that apply.", "Multiple correct answers.", "एक या अधिक"):
+            with self.subTest(instruction=instruction):
+                stem = f"Which statements is/are correct? {instruction}"
+                self.assertEqual(classify_question(stem, combinations)[0], MULTIPLE)
+
+    def test_ordinary_multi_select_prose_is_not_reclassified_as_a_combination(self):
+        prose = [{"key": key, "text": text} for key, text in zip("ABCD", [
+            "The value of A and B is positive", "Only compound C is stable", "B and C react in water", "A is larger than B",
+        ])]
+        self.assertEqual(classify_question("Which statements is/are correct?", prose)[0], MULTIPLE)
+        incomplete = [dict(FOUR_OPTIONS[0]), {"key": "B", "text": "A and B"},
+                      {"key": "C", "text": "B and C"}, dict(FOUR_OPTIONS[3])]
+        self.assertEqual(classify_question("Which statements is/are correct?", incomplete)[0], MULTIPLE)
+        image_only = [{"key": key, "text": ""} for key in "ABCD"]
+        self.assertEqual(classify_question("Which statements is/are correct?", image_only)[0], MULTIPLE)
+
     def test_numerical_phrases_detected_without_options(self):
         phrases = [
             "Find the value of x. Give the answer to the nearest integer.",
@@ -139,6 +176,124 @@ def mixed_types_pdf():
     data = doc.write()
     doc.close()
     return data
+
+
+def combination_types_pdf():
+    """Synthetic statement combinations followed by a genuine multi-select."""
+    with fitz.open() as doc:
+        page = doc.new_page(width=600, height=800)
+        page.insert_text((40, 60), "Q159 Which of the following statements is/are correct?")
+        for index, label in enumerate("ABCDE"):
+            page.insert_text((60, 80 + index * 18), f"{label}. Statement text {index + 1}.")
+        for index, text in enumerate(("A, B and E only", "B, C and D only", "A, B and D only", "A, D and E only")):
+            page.insert_text((60, 190 + index * 18), f"({index + 1}) {text}")
+        page.insert_text((40, 320), "Q160 Which statements is/are correct? One or more options are correct.")
+        for index, text in enumerate(("A and B only", "B and C only", "A and C only", "A, B and C only")):
+            page.insert_text((60, 340 + index * 18), f"({index + 1}) {text}")
+        return doc.write()
+
+
+class CombinationExtractionTests(_ExtractionFixture):
+    def test_explicit_numerical_section_keeps_later_combination_question_unscored(self):
+        with fitz.open() as document:
+            page = document.new_page(width=600, height=800)
+            page.insert_text((40, 40), "SECTION: NUMERICAL ANSWER TYPE")
+            page.insert_text((40, 60), "Q1 Find the numerical value. Give your answer as an integer.")
+            page.insert_text((40, 180), "Q2 Which statements is/are correct?")
+            for index, label in enumerate("ABCD"):
+                page.insert_text((60, 200 + index * 18), f"{label}. Statement {index + 1}")
+            for index, text in enumerate(("A and B only", "B and C only", "A and C only", "A, B and C only")):
+                page.insert_text((60, 285 + index * 18), f"({index + 1}) {text}")
+            page.insert_text((40, 380), "SECTION B: SINGLE-CORRECT QUESTIONS")
+            page.insert_text((40, 410), "Q3 Which statements is/are correct?")
+            for index, text in enumerate(("A and B only", "B and C only", "A and C only", "A, B and C only")):
+                page.insert_text((60, 430 + index * 18), f"({index + 1}) {text}")
+            paper = self.paper(document.write())
+        self.assertEqual(PDFQuestionExtractor(paper).extract(), 3)
+        questions = list(paper.extracted_questions.order_by("question_number"))
+        self.assertEqual([question.detected_type for question in questions],
+                         [ExtractedQuestion.DetectedType.NUMERICAL, ExtractedQuestion.DetectedType.NUMERICAL,
+                          ExtractedQuestion.DetectedType.SINGLE])
+        self.assertTrue(questions[1].is_flagged)
+        self.assertEqual(questions[1].correct_option, "")
+        self.assertEqual(len(questions[1].options), 4)  # never drop source choices
+
+    def test_section_header_between_questions_applies_to_the_next_question_not_the_previous(self):
+        with fitz.open() as document:
+            page = document.new_page(width=600, height=800)
+            page.insert_text((40, 60), "Q1 Which gas is the lightest?")
+            for index in range(4):
+                page.insert_text((60, 80 + index * 18), f"({index + 1}) Gas {index + 1}")
+            page.insert_text((40, 185), "SECTION B")
+            page.insert_text((40, 205), "Each question has ONE or MORE THAN ONE correct choices.")
+            page.insert_text((40, 235), "Q2 Which statements is/are correct?")
+            for index, text in enumerate(("A and B only", "B and C only", "A and C only", "A, B and C only")):
+                page.insert_text((60, 255 + index * 18), f"({index + 1}) {text}")
+            # An unrecognized new section must end the previous scope.
+            page.insert_text((40, 360), "SECTION C")
+            page.insert_text((40, 390), "Q3 Which statements is/are correct?")
+            for index, text in enumerate(("A and B only", "B and C only", "A and C only", "A, B and C only")):
+                page.insert_text((60, 410 + index * 18), f"({index + 1}) {text}")
+            paper = self.paper(document.write())
+        self.assertEqual(PDFQuestionExtractor(paper).extract(), 3)
+        self.assertEqual([q.detected_type for q in paper.extracted_questions.order_by("question_number")],
+                         [ExtractedQuestion.DetectedType.SINGLE, ExtractedQuestion.DetectedType.MULTIPLE,
+                          ExtractedQuestion.DetectedType.SINGLE])
+
+    def test_individual_question_multi_select_instruction_does_not_change_the_next_question(self):
+        with fitz.open() as document:
+            page = document.new_page(width=600, height=800)
+            page.insert_text((40, 60), "Q1 One or more options are correct.")
+            for index in range(4):
+                page.insert_text((60, 80 + index * 18), f"({index + 1}) Choice {index + 1}")
+            page.insert_text((40, 200), "Q2 Which statements is/are correct?")
+            for index, text in enumerate(("A and B only", "B and C only", "A and C only", "A, B and C only")):
+                page.insert_text((60, 220 + index * 18), f"({index + 1}) {text}")
+            paper = self.paper(document.write())
+        self.assertEqual(PDFQuestionExtractor(paper).extract(), 2)
+        self.assertEqual([q.detected_type for q in paper.extracted_questions.order_by("question_number")],
+                         [ExtractedQuestion.DetectedType.MULTIPLE, ExtractedQuestion.DetectedType.SINGLE])
+
+    def test_section_multi_select_instruction_takes_priority_over_combination_heuristic(self):
+        with fitz.open() as document:
+            page = document.new_page(width=600, height=800)
+            page.insert_text((40, 35), "SECTION A: ONE or MORE THAN ONE choices are correct.")
+            page.insert_text((40, 60), "Q1 Choose the applicable choices.")
+            for index in range(4):
+                page.insert_text((60, 80 + index * 18), f"({index + 1}) Choice {index + 1}")
+            page.insert_text((40, 210), "Q2 Which statements is/are correct?")
+            for index, label in enumerate("ABCD"):
+                page.insert_text((60, 230 + index * 18), f"{label}. Statement {index + 1}")
+            for index, text in enumerate(("A and B only", "B and C only", "A and C only", "A, B and C only")):
+                page.insert_text((60, 315 + index * 18), f"({index + 1}) {text}")
+            page.insert_text((40, 425), "SECTION B: ONLY ONE answer is correct.")
+            page.insert_text((40, 450), "Q3 Choose the applicable choice.")
+            for index in range(4):
+                page.insert_text((60, 470 + index * 18), f"({index + 1}) Last choice {index + 1}")
+            paper = self.paper(document.write())
+        self.assertEqual(PDFQuestionExtractor(paper).extract(), 3)
+        self.assertEqual([q.detected_type for q in paper.extracted_questions.order_by("question_number")],
+                         [ExtractedQuestion.DetectedType.MULTIPLE, ExtractedQuestion.DetectedType.MULTIPLE,
+                          ExtractedQuestion.DetectedType.SINGLE])
+        second = paper.extracted_questions.get(question_number=2)
+        self.assertIn("section instructions", second.flag_reason)
+        self.assertEqual(second.correct_option, "")
+
+    def test_numbered_combination_choices_remain_four_and_need_human_review(self):
+        paper = self.paper(combination_types_pdf())
+        self.assertEqual(PDFQuestionExtractor(paper).extract(), 2)
+        q = paper.extracted_questions.get(question_number=159)
+        self.assertEqual(q.detected_type, ExtractedQuestion.DetectedType.SINGLE)
+        self.assertEqual([option["key"] for option in q.options], list("ABCD"))
+        self.assertEqual([option["text"] for option in q.options], [
+            "A, B and E only", "B, C and D only", "A, B and D only", "A, D and E only",
+        ])
+        self.assertTrue(q.is_flagged)
+        self.assertIn("combinations of statements", q.flag_reason)
+        self.assertEqual(q.correct_option, "")
+        self.assertNotEqual(q.answer_status, "manually_verified")
+        explicit_multiple = paper.extracted_questions.get(question_number=160)
+        self.assertEqual(explicit_multiple.detected_type, ExtractedQuestion.DetectedType.MULTIPLE)
 
 
 class MixedTypeExtractionTests(_ExtractionFixture):

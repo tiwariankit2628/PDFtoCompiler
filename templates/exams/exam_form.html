@@ -1,4 +1,5 @@
 {% extends 'dashboard_base.html' %}
+{% load static %}
 
 {% block title %}{% if form.instance.pk %}Edit Examination: {{ form.instance.title }}{% else %}Create Examination{% endif %} | {{ PLATFORM_NAME }}{% endblock %}
 
@@ -44,10 +45,26 @@
                             {% if form.title.errors %}<div class="text-danger small mt-1">{{ form.title.errors.0 }}</div>{% endif %}
                         </div>
 
-                        <div class="col-md-6">
-                            <label class="form-label small fw-bold">Examination Category <span class="text-danger">*</span></label>
+                        <div class="col-md-6" data-exam-category>
+                            <label class="form-label small fw-bold" for="{{ form.category.id_for_label }}">Examination Category <span class="text-danger">*</span></label>
                             {{ form.category }}
-                            {% if form.category.errors %}<div class="text-danger small mt-1">{{ form.category.errors.0 }}</div>{% endif %}
+                            {% if form.category.errors %}<div class="text-danger small mt-1" data-category-error>{{ form.category.errors.0 }}</div>{% endif %}
+                            {% if form.category_choices_empty %}
+                            <div class="alert alert-warning small mt-2 mb-1" role="note" data-category-empty>
+                                <strong>No examination categories are available.</strong>
+                                {% if request.user.is_admin_role %}
+                                    <a href="{% url 'exams:category_create' %}" target="_blank" rel="noopener">Create an active category</a> or
+                                    <a href="{% url 'exams:category_list' %}" target="_blank" rel="noopener">manage existing categories</a> in a new tab.
+                                {% else %}
+                                    Ask an administrator to create or activate a category and check your category access.
+                                {% endif %}
+                                Then recheck the list below. Without JavaScript, copy your form entries before reloading this page.
+                                <button type="button" class="btn btn-sm btn-outline-dark d-block mt-2" data-category-refresh hidden>Recheck categories</button>
+                            </div>
+                            <div class="small mt-1" role="status" aria-live="polite" data-category-status></div>
+                            {% elif form.category_current_unavailable %}
+                            <div class="form-text">This exam's current category is inactive or outside your available selection. You may keep it, or select an available category; no other unavailable categories can be chosen.</div>
+                            {% endif %}
                         </div>
 
                         <div class="col-md-6">
@@ -270,4 +287,6 @@
     </div>
 </form>
 {% endblock %}
+
+{% block extra_js %}<script src="{% static 'js/exam-category.js' %}"></script>{% endblock %}
 

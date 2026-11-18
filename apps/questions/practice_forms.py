@@ -167,7 +167,7 @@ class PracticeQuestionForm(BootstrapFormMixin, forms.Form):
     detected_type = forms.ChoiceField(
         required=False, choices=ExtractedQuestion.DetectedType.choices,
         label="Question type (check against the PDF)",
-        help_text="Scoring supports one correct choice only. Review or exclude other types.",
+        help_text="Choose single-correct only if exactly one printed choice is selected, even when that choice combines several statements. Multi-select and numerical questions cannot be scored here.",
     )
     question_text = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 4}))
     option_A = forms.CharField(label="Option A", required=False, widget=forms.Textarea(attrs={"rows": 2}))

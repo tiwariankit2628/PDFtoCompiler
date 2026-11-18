@@ -20,6 +20,7 @@
     <h4 class="fw-bold">Set your duration</h4>
     <form method="post" id="create-practice-form" novalidate>{% csrf_token %}
       {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors|striptags }}</div>{% endif %}
+      <p class="small text-muted">If a flagged question offers combinations of statements but expects one printed choice, open <strong>Edit</strong> below and change its type to single-correct after checking the PDF. Then read the answer-key image again. Genuine multi-select and numerical questions must be excluded.</p>
       <label class="form-label fw-semibold" for="{{ form.duration_minutes.id_for_label }}">Test duration (minutes) *</label>
       <div class="d-flex flex-wrap gap-2 mb-2">{% for minutes in presets %}<button type="button" class="btn btn-outline-primary btn-sm duration-preset" data-minutes="{{ minutes }}" aria-pressed="false">{{ minutes }} min</button>{% endfor %}</div>
       {{ form.duration_minutes }}<div class="form-text">{{ form.duration_minutes.help_text }} Choose a preset or enter your own whole minutes.</div>

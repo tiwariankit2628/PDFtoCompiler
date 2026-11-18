@@ -36,12 +36,59 @@ _MULTIPLE_CORRECT = re.compile(
     r"|\ball\s+that\s+are\s+correct\b"
     r"|\bmay\s+be\s+correct\b"
     r"|\bmultiple\s+(?:correct|answers?|options?)\b"
-    r"|\bis\s*/\s*are\s+correct\b"
     r"|\b(?:one|more)\s+or\s+more\s+of\s+the\s+following\b"
     r"|एक\s*या\s*अधिक"
     r"|एक\s*से\s*अधिक",
     re.IGNORECASE,
 )
+
+# "Which statements is/are correct?" is ambiguous: it may describe genuine
+# multi-select choices OR one choice containing a combination of statements.
+_AMBIGUOUS_CORRECT = re.compile(r"\bis\s*/\s*are\s+correct\b", re.IGNORECASE)
+_COMBINATION_REFERENCE = re.compile(r"(?<![A-Za-z0-9])(?:[A-E]|I{1,3}|IV|V|[1-5])(?![A-Za-z0-9])")
+_COMBINATION_WORDS = re.compile(
+    r"\b(?:and|or|only|both|either|neither|all|none|of|the|above|following|"
+    r"statements?|options?|are|is|correct|true)\b", re.IGNORECASE,
+)
+_STATEMENT_CONTEXT = re.compile(r"\b(?:statements?|assertions?)\b", re.IGNORECASE)
+_STATEMENT_LABEL = re.compile(r"(?<!\w)[A-E][.)](?=\s|$)")
+
+
+def _combination_references(value):
+    """Recognize a short choice made only of statement references/connectors.
+
+    Do not use general prose or try to interpret the correctness of a
+    statement. Printed letter references are case-sensitive to avoid matching
+    ordinary articles; roman numerals and digits are supported as references.
+    """
+    if not isinstance(value, str) or len(value) > 100:
+        return None
+    references = _COMBINATION_REFERENCE.findall(value)
+    rest = _COMBINATION_REFERENCE.sub(" ", value)
+    rest = _COMBINATION_WORDS.sub(" ", rest)
+    rest = re.sub(r"[\s,.;:()\[\]{}+&/\-–—]+", "", rest)
+    if rest or not references:
+        return None
+    return frozenset(references)
+
+
+def _combination_choice_set(text, options):
+    """Strong evidence that the options are combinations, not statements.
+
+    This is still a heuristic. Explicit one-or-more instructions take
+    precedence, and extraction flags the conclusion for a person to verify.
+    """
+    if not (_STATEMENT_CONTEXT.search(text) or len(set(_STATEMENT_LABEL.findall(text))) >= 2):
+        return False
+    if not isinstance(options, list) or not 3 <= len(options) <= 5:
+        return False
+    references = [_combination_references(option.get("text", "")) if isinstance(option, dict) else None
+                  for option in options]
+    readable = [reference for reference in references if reference]
+    return (len(readable) >= max(3, len(options) - 1)
+            and sum(len(reference) >= 2 for reference in readable) >= 2
+            and len(set(readable)) >= 2)
+
 
 # Numerical / integer value answers. These are strong, answer-shaped cues that do
 # not normally appear in prose MCQ stems.
@@ -96,15 +143,29 @@ def _usable_option_count(options):
 def classify_question(text, options):
     """Return ``(detected_type, reason)`` for a staged question.
 
-    ``reason`` is a short review note when the type is not an ordinary
-    single-correct MCQ, otherwise an empty string. Content is never modified.
+    ``reason`` is a review note for non-single types and for a combination-style
+    single-choice inference; otherwise it is empty. Content is never modified.
     """
     text = text or ""
     option_count = _usable_option_count(options)
 
-    # With real options present the item is an MCQ; decide single vs multiple.
+    # With options present, explicit multi-select instructions take priority
+    # over any apparent combination of statements. The ambiguous "is/are"
+    # phrase alone remains MULTIPLE unless the *choices* strongly look like
+    # combinations, in which case flag the single-choice inference for review.
     if option_count >= 2:
         if _MULTIPLE_CORRECT.search(text):
+            return MULTIPLE, (
+                "Multiple-correct question detected: the bank grades one correct "
+                "option, so confirm the question type and intended answers before "
+                "approval."
+            )
+        if _AMBIGUOUS_CORRECT.search(text):
+            if _combination_choice_set(text, options):
+                return SINGLE, (
+                    "Choices appear to be combinations of statements. Check the "
+                    "original and confirm that exactly one printed choice is selected."
+                )
             return MULTIPLE, (
                 "Multiple-correct question detected: the bank grades one correct "
                 "option, so confirm the question type and intended answers before "

@@ -1,4 +1,5 @@
 from django import forms
+from django.db.models import Q
 from django.utils.text import slugify
 from .models import Category
 
@@ -48,12 +49,20 @@ class CategoryForm(BootstrapFormMixin, forms.ModelForm):
             ),
         }
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The UI promises an auto-generated slug, but the model's non-blank
+        # field otherwise rejects an empty input before clean_slug runs.
+        self.fields["slug"].required = False
+
     def clean_slug(self):
         slug = self.cleaned_data.get("slug")
         if not slug:
             slug = slugify(self.cleaned_data.get("name", ""))
         else:
             slug = slugify(slug)
+        if not slug:
+            raise forms.ValidationError("Enter a URL slug containing letters or numbers.")
 
         qs = Category.objects.filter(slug=slug)
         if self.instance.pk:
@@ -63,6 +72,18 @@ class CategoryForm(BootstrapFormMixin, forms.ModelForm):
             raise forms.ValidationError("A category with this URL slug already exists.")
 
         return slug
+
+
+class ExamCategoryChoiceField(forms.ModelChoiceField):
+    """Distinguish an existing exam's category when it is no longer selectable."""
+
+    current_unavailable_id = None
+
+    def label_from_instance(self, obj):
+        label = super().label_from_instance(obj)
+        if obj.pk == self.current_unavailable_id:
+            return f"{label} (current; unavailable for new exams)"
+        return label
 
 
 class ExamForm(BootstrapFormMixin, forms.ModelForm):
@@ -75,6 +96,7 @@ class ExamForm(BootstrapFormMixin, forms.ModelForm):
         from .models import Exam
 
         model = Exam
+        field_classes = {"category": ExamCategoryChoiceField}
         fields = [
             "title",
             "category",
@@ -120,15 +142,30 @@ class ExamForm(BootstrapFormMixin, forms.ModelForm):
         user = kwargs.pop("user", None)
         super().__init__(*args, **kwargs)
 
-        # Scoping categories by user permissions
+        # Preserve the existing policy: a teacher with active assignments sees
+        # those categories; otherwise they see all active categories. The server
+        # validates POSTs against the same scoped queryset, not the browser list.
+        categories = Category.objects.filter(is_active=True)
         if user and user.is_teacher and not user.is_admin_role:
             assigned = user.assigned_categories.filter(is_active=True)
             if assigned.exists():
-                self.fields["category"].queryset = assigned
-            else:
-                self.fields["category"].queryset = Category.objects.filter(is_active=True)
-        else:
-            self.fields["category"].queryset = Category.objects.filter(is_active=True)
+                categories = assigned
+
+        field = self.fields["category"]
+        field.empty_label = "Select an examination category"
+        field.error_messages["required"] = "Select an examination category. If none are available, see the guidance below."
+        self.category_current_unavailable = False
+        if self.instance.pk and self.instance.category_id:
+            current_id = self.instance.category_id
+            if not categories.filter(pk=current_id).exists():
+                # Only the current category is added back. This permits an
+                # authorized edit without reassigning an old exam, but does not
+                # permit switching to another inactive or unassigned category.
+                self.category_current_unavailable = True
+                field.current_unavailable_id = current_id
+                categories = Category.objects.filter(Q(pk__in=categories.values("pk")) | Q(pk=current_id))
+        field.queryset = categories
+        self.category_choices_empty = not categories.exists()
 
     def clean(self):
         cleaned_data = super().clean()

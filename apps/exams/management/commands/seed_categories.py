@@ -1,4 +1,5 @@
 from django.core.management.base import BaseCommand
+from django.db import IntegrityError, transaction
 from apps.exams.models import Category
 
 
@@ -74,10 +75,29 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         created_count = 0
         for item in self.DEFAULT_CATEGORIES:
-            cat, created = Category.objects.get_or_create(
-                slug=item["slug"],
-                defaults=item,
-            )
+            # A site may already use the default name under a different slug,
+            # or the slug for a differently named/inactive category. Never
+            # rename, reactivate or overwrite either record.
+            try:
+                with transaction.atomic():
+                    cat = Category.objects.filter(slug=item["slug"]).first()
+                    if cat:
+                        self.stdout.write(f"Category '{cat.name}' already uses slug '{item['slug']}'.")
+                        continue
+                    cat = Category.objects.filter(name=item["name"]).first()
+                    if cat:
+                        self.stdout.write(self.style.WARNING(
+                            f"Skipped '{item['name']}': that name already uses slug '{cat.slug}'."
+                        ))
+                        continue
+                    cat, created = Category.objects.get_or_create(slug=item["slug"], defaults=item)
+            except IntegrityError:
+                # A concurrent insert may win either unique constraint between
+                # the checks and create. Only suppress a genuine collision.
+                if not Category.objects.filter(slug=item["slug"]).exists() and not Category.objects.filter(name=item["name"]).exists():
+                    raise
+                self.stdout.write(self.style.WARNING(f"Skipped '{item['name']}': another category was created concurrently."))
+                continue
             if created:
                 created_count += 1
                 self.stdout.write(self.style.SUCCESS(f"Created category: {cat.name}"))
