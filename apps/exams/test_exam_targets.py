@@ -238,6 +238,64 @@ class ExamTargetAccessTests(TestCase):
         question.refresh_from_db(); exam.refresh_from_db()
         self.assertEqual((question.target_type, exam.target_type), ("", ""))
 
+    def test_legacy_public_paper_waits_for_all_linked_active_tests(self):
+        self.client.force_login(self.teacher)
+        for suffix, exam_target in (("unknown", ""), ("tagged", "jee_main")):
+            with self.subTest(exam_target=exam_target):
+                exam, question, eq = self.make_exam("Paper active " + suffix, exam_target, "")
+                paper = QuestionPaperUpload.objects.create(title="Legacy " + suffix, uploaded_by=self.teacher,
+                    category=self.category, status="extracted")
+                question.source_paper = paper
+                question.save(update_fields=["source_paper"])
+                attempt = self.active_attempt(exam, self.jee, eq)
+                deadline = attempt.expires_at
+                url = reverse("questions:paper_set_target", args=[paper.pk])
+                response = self.client.post(url, {"target_type": "jee_main"}, follow=True)
+                self.assertContains(response, "Wait for the paper&#x27;s active tests to finish")
+                paper.refresh_from_db(); question.refresh_from_db(); exam.refresh_from_db(); attempt.refresh_from_db()
+                self.assertEqual((paper.target_type, question.target_type, exam.target_type, attempt.expires_at),
+                                 ("", "", exam_target, deadline))
+                attempt.status = "submitted"; attempt.save(update_fields=["status"])
+                self.assertEqual(self.client.post(url, {"target_type": "jee_main"}).status_code, 302)
+                paper.refresh_from_db(); question.refresh_from_db(); exam.refresh_from_db(); attempt.refresh_from_db()
+                self.assertEqual((paper.target_type, question.target_type, exam.target_type, attempt.expires_at),
+                                 ("jee_main", "jee_main", exam_target, deadline))
+
+    def test_legacy_public_paper_conflicts_are_reported_without_guessing(self):
+        exam, question, _ = self.make_exam("Conflicting public exam", "neet", "")
+        paper = QuestionPaperUpload.objects.create(title="Conflicting public paper", uploaded_by=self.teacher,
+            category=self.category, status="extracted")
+        question.source_paper = paper; question.save(update_fields=["source_paper"])
+        self.client.force_login(self.teacher)
+        response = self.client.post(reverse("questions:paper_set_target", args=[paper.pk]),
+                                    {"target_type": "jee_main"}, follow=True)
+        self.assertContains(response, "remain unclassified because another test has a conflicting target")
+        paper.refresh_from_db(); question.refresh_from_db(); exam.refresh_from_db()
+        self.assertEqual((paper.target_type, question.target_type, exam.target_type), ("jee_main", "", "neet"))
+        self.client.force_login(self.neet)
+        self.assertEqual(self.client.post(reverse("exams:exam_start", args=[exam.slug])).status_code, 404)
+        self.assertFalse(exam.attempts.exists())
+
+    def test_legacy_exam_target_waits_for_active_attempt(self):
+        exam, question, eq = self.make_exam("Legacy exam active", "", "jee_main")
+        attempt = self.active_attempt(exam, self.jee, eq)
+        deadline = attempt.expires_at
+        self.client.force_login(self.teacher)
+        data = {"title": exam.title, "category": self.category.pk, "target_type": "jee_main",
+                "duration_minutes": 30, "total_marks": 4, "passing_percentage": 40,
+                "default_positive_marks": 4, "default_negative_marks": 1,
+                "max_attempts": 1, "status": "draft", "is_free": "on"}
+        url = reverse("exams:exam_edit", args=[exam.pk])
+        response = self.client.post(url, data)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("target_type", response.context["form"].errors)
+        exam.refresh_from_db(); attempt.refresh_from_db()
+        self.assertEqual((exam.target_type, attempt.expires_at), ("", deadline))
+        attempt.status = "submitted"; attempt.save(update_fields=["status"])
+        self.assertEqual(self.client.post(url, data).status_code, 302)
+        exam.refresh_from_db(); attempt.refresh_from_db()
+        self.assertEqual((exam.target_type, attempt.expires_at), ("jee_main", deadline))
+
     def test_legacy_question_target_cannot_change_during_a_live_attempt(self):
         exam, question, eq = self.make_exam("Legacy question active", "", "")
         attempt = self.active_attempt(exam, self.jee, eq)

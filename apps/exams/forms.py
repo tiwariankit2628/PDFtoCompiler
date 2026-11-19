@@ -1,5 +1,6 @@
 from django import forms
 from django.db.models import Q
+from django.utils import timezone
 from django.utils.text import slugify
 from apps.core.exam_targets import ExamTarget, track_for_target, targets_for_track
 from .models import Category
@@ -173,8 +174,12 @@ class ExamForm(BootstrapFormMixin, forms.ModelForm):
     def clean_target_type(self):
         target = self.cleaned_data["target_type"]
         if self.instance.pk:
-            if self.previous_target_type and self.previous_target_type != target and self.instance.has_attempts:
-                raise forms.ValidationError("The target cannot be changed after attempts exist. Duplicate the test for a different target.")
+            if self.previous_target_type != target:
+                if self.previous_target_type and self.instance.has_attempts:
+                    raise forms.ValidationError("The target cannot be changed after attempts exist. Duplicate the test for a different target.")
+                if self.instance.attempts.filter(
+                        Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()), status="in_progress").exists():
+                    raise forms.ValidationError("Wait for active attempts to finish before classifying this test.")
             allowed = targets_for_track(track_for_target(target))
             if self.instance.exam_questions.exclude(question__target_type="").exclude(question__target_type__in=allowed).exists():
                 raise forms.ValidationError("This test contains questions tagged for the other exam. Remove or review those questions first.")

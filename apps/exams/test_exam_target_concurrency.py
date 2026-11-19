@@ -488,6 +488,96 @@ class ExamTargetConcurrencyTests(TransactionTestCase):
             self.client.force_login(self.student)
             self.assertNotContains(self.client.get(reverse("questions:practice_list")), "Old private source")
 
+    def race_public_paper_classification_against_exam_edit(self, first):
+        from apps.exams import views as exam_views
+        from apps.exams.forms import ExamForm
+        from apps.questions import target_views
+
+        paper = QuestionPaperUpload.objects.create(title="Public race source", category=self.category,
+                                                    uploaded_by=self.teacher, status="extracted")
+        question = Question.objects.create(category=self.category, creator=self.teacher, source_paper=paper,
+                                           subject="Math", question_text="Old unclassified question")
+        exam = Exam.objects.create(title="Old public exam", slug="old-public-exam", category=self.category,
+                                   creator=self.teacher, target_type="", status="draft", duration_minutes=30)
+        ExamQuestion.objects.create(exam=exam, question=question, order=1)
+        edit_data = {"title": exam.title, "category": self.category.pk, "target_type": "neet",
+                     "duration_minutes": 30, "total_marks": 4, "passing_percentage": 40,
+                     "default_positive_marks": 4, "default_negative_marks": 1,
+                     "max_attempts": 1, "status": "draft"}
+        classify_client, edit_client = self.client_for(self.teacher), self.client_for(self.teacher)
+        acquired, attempted, release = Event(), Event(), Event()
+        actor = local()
+        original_classify = target_views.PaperTargetView._classify
+        original_active = target_views._live_attempts
+        original_exam = exam_views._lock_public_exam
+        original_clean = ExamForm.clean_target_type
+
+        def controlled_classify(view, request, pk):
+            if getattr(actor, "name", "") == "classify" and first == "edit":
+                attempted.set()
+            return original_classify(view, request, pk)
+
+        def controlled_active(queryset):
+            if getattr(actor, "name", "") == "classify" and first == "classify":
+                acquired.set()
+                if not release.wait(timeout=12):
+                    raise AssertionError("Competing exam edit was not released")
+            return original_active(queryset)
+
+        def controlled_exam(pk):
+            if getattr(actor, "name", "") == "edit" and first == "classify":
+                attempted.set()
+            return original_exam(pk)
+
+        def controlled_clean(form):
+            if getattr(actor, "name", "") == "edit" and first == "edit":
+                acquired.set()
+                if not release.wait(timeout=12):
+                    raise AssertionError("Competing paper classification was not released")
+            return original_clean(form)
+
+        def post(name, client, url, data):
+            close_old_connections(); actor.name = name
+            try:
+                return client.post(url, data)
+            finally:
+                close_old_connections()
+
+        operations = {
+            "classify": (classify_client, reverse("questions:paper_set_target", args=[paper.pk]), {"target_type": "jee_main"}),
+            "edit": (edit_client, reverse("exams:exam_edit", args=[exam.pk]), edit_data),
+        }
+        second = "edit" if first == "classify" else "classify"
+        with patch.object(target_views.PaperTargetView, "_classify", controlled_classify), \
+             patch.object(target_views, "_live_attempts", controlled_active), \
+             patch.object(exam_views, "_lock_public_exam", controlled_exam), \
+             patch.object(ExamForm, "clean_target_type", controlled_clean):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first_future = pool.submit(post, first, *operations[first])
+                try:
+                    self.assertTrue(acquired.wait(timeout=10), "first request never acquired its locks")
+                    second_future = pool.submit(post, second, *operations[second])
+                    self.assertTrue(attempted.wait(timeout=10), "second request never attempted its lock")
+                finally:
+                    release.set()
+                results = {first: first_future.result(timeout=20), second: second_future.result(timeout=20)}
+        exam.refresh_from_db(); paper.refresh_from_db(); question.refresh_from_db()
+        self.assertEqual(results["classify"].status_code, 302)
+        self.assertEqual(paper.target_type, "jee_main")
+        if first == "classify":
+            self.assertEqual(results["edit"].status_code, 200)
+            self.assertIn("target_type", results["edit"].context["form"].errors)
+            self.assertEqual((exam.target_type, question.target_type), ("", "jee_main"))
+        else:
+            self.assertEqual(results["edit"].status_code, 302)
+            self.assertEqual((exam.target_type, question.target_type), ("neet", ""))
+
+    def test_public_paper_classification_wins_before_exam_target_edit(self):
+        self.race_public_paper_classification_against_exam_edit("classify")
+
+    def test_exam_target_edit_wins_before_public_paper_classification(self):
+        self.race_public_paper_classification_against_exam_edit("edit")
+
     def test_paper_delete_wins_before_track_change(self):
         self.race_owned_paper_against_profile("delete", "work")
 
