@@ -17,7 +17,7 @@ from django.utils import timezone
 
 from apps.accounts.models import User
 from . import gateway, pack_gateway
-from .models import CreditGrant, CreditUse, PackCheckout, PackPayment, PackRefund, PracticeEntitlement
+from .models import CreditGrant, CreditUse, PackCheckout, PackPayment, PackRefund, PracticeEntitlement, WebhookEvent
 from .packs import PRODUCTS, balances, debit, has_series_access, usable_grants
 from .services import QuotaExceeded
 from .test_helpers import sandbox_grant
@@ -190,7 +190,8 @@ class PackGatewayTests(TestCase):
         grant.refresh_from_db()
         self.assertEqual(grant.remaining, 19)
         partial = {"event": "refund.processed", "payload": {"refund": {"entity":
-                    {"id": "rfnd_Part1", "payment_id": payment["id"], "amount": 10000}}}}
+                    {"id": "rfnd_Part1", "payment_id": payment["id"], "amount": 10000,
+                     "currency": "INR", "status": "processed"}}}}
         self.assertEqual(self.webhook(partial, "partial").status_code, 200)
         self.assertEqual(self.webhook(partial, "partial-duplicate").status_code, 200)
         grant.refresh_from_db()
@@ -201,12 +202,15 @@ class PackGatewayTests(TestCase):
             with transaction.atomic():
                 debit(self.student, "pdf", "after-refund")
         full = {"event": "refund.processed", "payload": {"refund": {"entity":
-                 {"id": "rfnd_Part2", "payment_id": payment["id"], "amount": 19900}}}}
+                 {"id": "rfnd_Part2", "payment_id": payment["id"], "amount": 19900,
+                  "currency": "INR", "status": "processed"}}}}
         self.assertEqual(self.webhook(full, "full").status_code, 200)
         self.assertEqual(PackRefund.objects.count(), 2)
         checkout.refresh_from_db()
         self.assertEqual(checkout.status, PackCheckout.Status.REFUNDED)
-        self.assertEqual(self.webhook(captured, "after-refund-replay").status_code, 400)
+        self.assertEqual(self.webhook(captured, "after-refund-replay").status_code, 200)
+        grant.refresh_from_db()
+        self.assertTrue(grant.is_revoked)
         self.assertTrue(CreditUse.objects.filter(pk=paid_use.pk).exists())
 
     def test_failure_retry_and_uncertain_order_do_not_activate_or_create_duplicate_orders(self):
@@ -228,6 +232,202 @@ class PackGatewayTests(TestCase):
         self.client.post(reverse("payments:pack_start", args=["pdf"]), {"accept_terms": "yes"})
         self.assertEqual(self.api.order.create.call_count, calls)
         self.assertFalse(CreditGrant.objects.filter(product="pdf").exists())
+
+    def test_late_capture_of_same_failed_payment_is_granted_once(self):
+        checkout = self.checkout("classroom")
+        failed = {"event": "payment.failed", "payload": {"payment": {"entity":
+                  self.payment(checkout, status="failed")}}}
+        self.assertEqual(self.webhook(failed, "same-id-failed").status_code, 200)
+        self.assertEqual(PackPayment.objects.get().status, "failed")
+        self.assertFalse(CreditGrant.objects.exists())
+        captured = {"event": "payment.captured", "payload": {"payment": {"entity": self.payment(checkout)}}}
+        self.assertEqual(self.webhook(captured, "same-id-captured").status_code, 200)
+        self.assertEqual(self.webhook(captured, "same-id-captured-again").status_code, 200)
+        # Delayed failure cannot downgrade a captured payment or grant again.
+        self.assertEqual(self.webhook(failed, "same-id-late-failure").status_code, 200)
+        self.assertEqual(PackPayment.objects.count(), 1)
+        self.assertEqual(PackPayment.objects.get().status, "captured")
+        self.assertEqual(CreditGrant.objects.get(checkout=checkout).remaining, 20)
+        self.assertEqual(CreditGrant.objects.count(), 1)
+
+    def test_late_capture_of_same_failed_payment_via_verified_checkout(self):
+        checkout = self.checkout("classroom")
+        failed = {"event": "payment.failed", "payload": {"payment": {"entity":
+                  self.payment(checkout, status="failed")}}}
+        self.assertEqual(self.webhook(failed, "verify-after-failure").status_code, 200)
+        self.api.payment.fetch.return_value = self.payment(checkout)
+        self.assertEqual(self.verify(checkout).status_code, 200)
+        self.assertEqual(self.verify(checkout).status_code, 200)
+        self.assertEqual(PackPayment.objects.count(), 1)
+        self.assertEqual(PackPayment.objects.get().status, "captured")
+        self.assertEqual(CreditGrant.objects.get(checkout=checkout).remaining, 20)
+
+    def test_refund_arriving_before_capture_never_exposes_credits(self):
+        checkout = self.checkout("pdf")
+        payment = self.payment(checkout, status="refunded", captured=True, amount_refunded=29900)
+        refund = {"id": "rfnd_BeforeCapture", "payment_id": payment["id"], "amount": 29900,
+                  "currency": "INR", "status": "processed"}
+        event = {"event": "refund.processed", "payload": {"payment": {"entity": payment}, "refund": {"entity": refund}}}
+        self.assertEqual(self.webhook(event, "refund-before-capture").status_code, 200)
+        self.assertEqual(self.webhook(event, "refund-before-capture-retry").status_code, 200)
+        checkout.refresh_from_db()
+        self.assertEqual(checkout.status, PackCheckout.Status.REFUNDED)
+        self.assertEqual(PackPayment.objects.get(checkout=checkout).status, "refunded")
+        self.assertTrue(CreditGrant.objects.get(checkout=checkout).is_revoked)
+        self.assertEqual(PackRefund.objects.count(), 1)
+        captured = {"event": "payment.captured", "payload": {"payment": {"entity":
+                    self.payment(checkout, captured=True)}}}
+        # A valid old provider snapshot should be acknowledged but never revive a refund.
+        self.assertEqual(self.webhook(captured, "capture-after-early-refund").status_code, 200)
+        self.assertTrue(CreditGrant.objects.get(checkout=checkout).is_revoked)
+        self.api.payment.fetch.return_value = self.payment(checkout)
+        self.assertEqual(self.verify(checkout).status_code, 400)
+
+    def test_partial_refund_after_failure_and_before_capture_stays_revoked(self):
+        checkout = self.checkout("classroom")
+        failed = {"event": "payment.failed", "payload": {"payment": {"entity":
+                  self.payment(checkout, status="failed")}}}
+        self.assertEqual(self.webhook(failed, "early-refund-failure").status_code, 200)
+        payment = self.payment(checkout, captured=True, amount_refunded=100)
+        refund = {"id": "rfnd_EarlyPartial", "payment_id": payment["id"], "amount": 100,
+                  "currency": "INR", "status": "processed"}
+        event = {"event": "refund.processed", "payload": {"payment": {"entity": payment}, "refund": {"entity": refund}}}
+        self.assertEqual(self.webhook(event, "early-partial-refund").status_code, 200)
+        self.assertEqual(PackPayment.objects.get(checkout=checkout).status, "partial_refund")
+        self.assertTrue(CreditGrant.objects.get(checkout=checkout).is_revoked)
+        self.assertEqual(PackPayment.objects.count(), 1)
+        captured = {"event": "payment.captured", "payload": {"payment": {"entity": self.payment(checkout)}}}
+        self.assertEqual(self.webhook(captured, "capture-after-early-partial").status_code, 200)
+        self.assertTrue(CreditGrant.objects.get(checkout=checkout).is_revoked)
+
+    def test_api_refund_snapshot_freezes_access_before_late_capture_webhook(self):
+        checkout = self.checkout("classroom")
+        self.api.payment.fetch.return_value = self.payment(
+            checkout, captured=True, amount_refunded=100, refund_status="partial")
+        self.assertEqual(self.verify(checkout).status_code, 400)
+        self.assertEqual(PackPayment.objects.get(checkout=checkout).status, "partial_refund")
+        self.assertTrue(CreditGrant.objects.get(checkout=checkout).is_revoked)
+        self.assertFalse(PackRefund.objects.exists())  # No invented refund ID/amount.
+        old_capture = {"event": "payment.captured", "payload": {"payment": {"entity":
+                       self.payment(checkout, captured=True, amount_refunded=0)}}}
+        self.assertEqual(self.webhook(old_capture, "late-capture-after-api-refund").status_code, 200)
+        self.assertTrue(CreditGrant.objects.get(checkout=checkout).is_revoked)
+        refund = {"id": "rfnd_ApiPartial", "payment_id": "pay_Unit123", "amount": 100,
+                  "currency": "INR", "status": "processed"}
+        event = {"event": "refund.processed", "payload": {"refund": {"entity": refund}}}
+        self.assertEqual(self.webhook(event, "api-refund-event").status_code, 200)
+        self.assertEqual(PackRefund.objects.count(), 1)
+        self.assertTrue(CreditGrant.objects.get(checkout=checkout).is_revoked)
+
+    def test_api_refund_freezes_existing_grant_and_never_downgrades_full_refund(self):
+        checkout = self.checkout("pdf")
+        self.api.payment.fetch.return_value = self.payment(checkout, captured=True, amount_refunded=0)
+        self.assertEqual(self.verify(checkout).status_code, 200)
+        self.api.payment.fetch.return_value = self.payment(
+            checkout, status="refunded", captured=True, amount_refunded=29900, refund_status="full")
+        self.assertEqual(self.verify(checkout).status_code, 400)
+        self.assertTrue(CreditGrant.objects.get(checkout=checkout).is_revoked)
+        self.assertEqual(PackPayment.objects.get(checkout=checkout).status, "refunded")
+        checkout.refresh_from_db()
+        self.assertEqual(checkout.status, "refunded")
+        partial_event = {"event": "refund.processed", "payload": {"refund": {"entity": {
+            "id": "rfnd_ApiPart", "payment_id": "pay_Unit123", "amount": 100,
+            "currency": "INR", "status": "processed"}}}}
+        self.assertEqual(self.webhook(partial_event, "one-of-many-refunds").status_code, 200)
+        self.assertEqual(PackPayment.objects.get(checkout=checkout).status, "refunded")
+        self.assertTrue(CreditGrant.objects.get(checkout=checkout).is_revoked)
+
+    def test_invalid_or_inconsistent_refund_snapshot_does_not_create_a_grant(self):
+        checkout = self.checkout("pdf")
+        for payment in (self.payment(checkout, captured=False, amount_refunded=100),
+                        self.payment(checkout, captured=True, amount_refunded=30000),
+                        self.payment(checkout, captured=True, amount_refunded=-1),
+                        self.payment(checkout, captured=True, amount_refunded="100"),
+                        self.payment(checkout, captured=True, amount_refunded=0, refund_status="partial"),
+                        self.payment(checkout, captured=True, amount_refunded=100, order_id="order_Wrong")):
+            with self.subTest(payment=payment):
+                self.api.payment.fetch.return_value = payment
+                self.assertEqual(self.verify(checkout).status_code, 400)
+                self.assertFalse(PackPayment.objects.exists())
+                self.assertFalse(CreditGrant.objects.exists())
+
+    def test_capture_snapshot_already_reporting_refund_waits_for_refund_event(self):
+        checkout = self.checkout("pdf")
+        payment = self.payment(checkout, captured=True, amount_refunded=100, refund_status="partial")
+        event = {"event": "payment.captured", "payload": {"payment": {"entity": payment}}}
+        self.assertEqual(self.webhook(event, "capture-with-refund").status_code, 400)
+        self.assertFalse(PackPayment.objects.exists())
+        self.assertFalse(CreditGrant.objects.exists())
+        self.assertFalse(WebhookEvent.objects.filter(event_id="capture-with-refund").exists())
+        refund = {"id": "rfnd_Snapshot", "payment_id": payment["id"], "amount": 100,
+                  "currency": "INR", "status": "processed"}
+        refund_event = {"event": "refund.processed", "payload": {
+            "payment": {"entity": payment}, "refund": {"entity": refund}}}
+        self.assertEqual(self.webhook(refund_event, "refund-with-snapshot").status_code, 200)
+        self.assertEqual(self.webhook(event, "capture-with-refund").status_code, 200)
+        self.assertTrue(CreditGrant.objects.get(checkout=checkout).is_revoked)
+
+    def test_invalid_or_excess_refunds_do_not_change_the_ledger(self):
+        checkout = self.checkout("pdf")
+        self.api.payment.fetch.return_value = self.payment(checkout, captured=True)
+        self.assertEqual(self.verify(checkout).status_code, 200)
+        valid = {"id": "rfnd_Amount", "payment_id": "pay_Unit123", "amount": 10000,
+                 "currency": "INR", "status": "processed"}
+        invalid = [{**valid, "amount": value} for value in (0, -1, True, "100", 29901)] + [
+            {**valid, "currency": "USD"}, {**valid, "status": "failed"}, {**valid, "id": "not-a-refund"}]
+        for i, refund in enumerate(invalid):
+            event = {"event": "refund.processed", "payload": {"refund": {"entity": refund}}}
+            with self.subTest(refund=refund):
+                self.assertEqual(self.webhook(event, f"invalid-refund-{i}").status_code, 400)
+                self.assertFalse(WebhookEvent.objects.filter(event_id=f"invalid-refund-{i}").exists())
+                self.assertFalse(PackRefund.objects.exists())
+                self.assertFalse(CreditGrant.objects.get(checkout=checkout).is_revoked)
+        event = {"event": "refund.processed", "payload": {"refund": {"entity": valid}}}
+        self.assertEqual(self.webhook(event, "valid-partial-refund").status_code, 200)
+        for i, bad in enumerate(({**valid, "amount": 9999}, {**valid, "id": "rfnd_Excess", "amount": 19901})):
+            event = {"event": "refund.processed", "payload": {"refund": {"entity": bad}}}
+            self.assertEqual(self.webhook(event, f"bad-refund-after-partial-{i}").status_code, 400)
+        self.assertEqual(PackRefund.objects.count(), 1)
+        self.assertEqual(PackRefund.objects.get().amount_paise, 10000)
+        self.assertEqual(PackPayment.objects.get(checkout=checkout).status, "partial_refund")
+        self.assertTrue(CreditGrant.objects.get(checkout=checkout).is_revoked)
+
+    def test_existing_payment_rejects_mismatched_refund_payment_snapshot(self):
+        checkout = self.checkout("classroom")
+        self.api.payment.fetch.return_value = self.payment(checkout, captured=True)
+        self.assertEqual(self.verify(checkout).status_code, 200)
+        refund = {"id": "rfnd_Mismatch", "payment_id": "pay_Unit123", "amount": 9900,
+                  "currency": "INR", "status": "processed"}
+        for snapshot in (self.payment(checkout, id="pay_Other", captured=True),
+                         self.payment(checkout, order_id="order_Other", captured=True),
+                         self.payment(checkout, amount=1, captured=True),
+                         self.payment(checkout, currency="USD", captured=True),
+                         self.payment(checkout, status="refunded", captured=False)):
+            event = {"event": "refund.processed", "payload": {
+                "payment": {"entity": snapshot}, "refund": {"entity": refund}}}
+            self.assertEqual(self.webhook(event, f"refund-mismatch-{len(str(snapshot))}").status_code, 400)
+            self.assertFalse(CreditGrant.objects.get(checkout=checkout).is_revoked)
+            self.assertFalse(PackRefund.objects.exists())
+
+    def test_uncaptured_auto_refund_cannot_create_pack_credits(self):
+        checkout = self.checkout("pdf")
+        payment = self.payment(checkout, status="refunded", captured=False)
+        refund = {"id": "rfnd_Auto", "payment_id": payment["id"], "amount": 29900,
+                  "currency": "INR", "status": "processed"}
+        event = {"event": "refund.processed", "payload": {"payment": {"entity": payment}, "refund": {"entity": refund}}}
+        self.assertEqual(self.webhook(event, "uncaptured-auto-refund").status_code, 400)
+        self.assertFalse(PackPayment.objects.exists())
+        self.assertFalse(CreditGrant.objects.exists())
+
+    def test_invalid_early_refund_rolls_back_capture_and_grant(self):
+        checkout = self.checkout("pdf")
+        payment = self.payment(checkout, captured=True)
+        refund = {"id": "rfnd_Invalid", "payment_id": payment["id"], "amount": 29900,
+                  "currency": "USD", "status": "processed"}
+        event = {"event": "refund.processed", "payload": {"payment": {"entity": payment}, "refund": {"entity": refund}}}
+        self.assertEqual(self.webhook(event, "wrong-refund-currency").status_code, 400)
+        self.assertFalse(PackPayment.objects.exists())
+        self.assertFalse(CreditGrant.objects.exists())
 
     def test_reconciliation_links_only_matching_test_order_and_never_grants_access(self):
         self.api.order.create.side_effect = TimeoutError("lost response")

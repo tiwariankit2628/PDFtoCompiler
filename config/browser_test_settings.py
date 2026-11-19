@@ -13,6 +13,10 @@ from uuid import uuid4
 from .settings import *  # noqa: F401,F403
 
 DATABASES = deepcopy(DATABASES)  # noqa: F405
+# Concurrent tests create short-lived threads. Production keeps connections
+# open, but a test thread must release its connection before Django drops the
+# disposable PostgreSQL test database.
+DATABASES["default"]["CONN_MAX_AGE"] = 0
 if DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3":
     test_database = Path(gettempdir()) / f"pdftocompiler-test-{uuid4().hex}.sqlite3"
     DATABASES["default"]["TEST"] = {**DATABASES["default"].get("TEST", {}), "NAME": str(test_database)}

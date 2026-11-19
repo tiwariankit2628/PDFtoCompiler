@@ -106,5 +106,5 @@ class VerifyPackCheckout(PackMixin, View):
             pack_gateway.verify_checkout(checkout, pid, oid, signature, request=request)
         except Exception:
             log_audit(request.user, "PACK_PAYMENT_VERIFY_REJECTED", f"Unverified confirmation for {checkout.reference}.", request=request)
-            return JsonResponse({"status": "pending", "message": "Payment was not verified as captured. Credits remain unchanged; check billing history later."}, status=400)
+            return JsonResponse({"status": "pending", "message": "Payment could not be verified as active and captured. Check billing history or contact support."}, status=400)
         return JsonResponse({"status": "verified", "message": "Test payment verified on the server."})

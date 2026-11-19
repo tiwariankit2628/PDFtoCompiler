@@ -11,7 +11,7 @@ import pymupdf as fitz
 from PIL import Image
 from django.core.exceptions import ImproperlyConfigured
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -543,6 +543,13 @@ class StudentPracticeTests(TestCase):
                 raise OperationalError("database is locked")
             return original(view, request, exam)
         with patch.object(ExamStartView, "_start_private_once", locked_once), patch("apps.exams.views_candidate.time.sleep"):
+            if connection.vendor != "sqlite":
+                # A fabricated SQLite error must not be hidden on PostgreSQL.
+                with self.assertRaises(OperationalError):
+                    self.client.post(reverse("exams:exam_start", args=[exam.slug]))
+                self.assertEqual(len(calls), 1)
+                self.assertFalse(ExamAttempt.objects.filter(exam=exam).exists())
+                return
             attempt = self.start(exam)
         self.assertEqual(len(calls), 2)
         self.assertEqual(attempt.expires_at - attempt.started_at, timedelta(minutes=37))

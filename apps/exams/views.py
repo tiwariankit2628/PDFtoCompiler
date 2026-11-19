@@ -27,7 +27,9 @@ def _lock_public_exam(pk):
     candidates = Exam.objects.filter(pk=pk, is_private_practice=False, is_classroom_only=False, series_slot__isnull=True)
     if connection.vendor == "sqlite":
         candidates.update(id=F("id"))  # SQLite has no row-level FOR UPDATE.
-    return get_object_or_404(candidates.select_for_update())
+    # The series exclusion is a LEFT OUTER JOIN. PostgreSQL cannot lock the
+    # nullable side, and only the exam row is needed to serialize mutations.
+    return get_object_or_404(candidates.select_for_update(of=("self",)))
 
 
 def _lock_exam_question_selection(exam, ids):

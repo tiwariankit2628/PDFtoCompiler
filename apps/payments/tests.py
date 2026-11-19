@@ -131,9 +131,9 @@ class RazorpayPhase7Tests(TestCase):
         access.refresh_from_db(); self.assertEqual(access.valid_until, first_end)
         self.assertEqual(Payment.objects.count(), 1)
         partial = {"event":"refund.processed", "payload":{"refund":{"entity":{
-            "id":"rfnd_Part1", "payment_id":"pay_Unit123", "amount":5000}}}}
+            "id":"rfnd_Part1", "payment_id":"pay_Unit123", "amount":5000, "currency":"INR", "status":"processed"}}}}
         full = {"event":"refund.processed", "payload":{"refund":{"entity":{
-            "id":"rfnd_Part2", "payment_id":"pay_Unit123", "amount":9950}}}}
+            "id":"rfnd_Part2", "payment_id":"pay_Unit123", "amount":9950, "currency":"INR", "status":"processed"}}}}
         self.assertEqual(self.webhook(partial, "refund-1").status_code, 200)
         access.refresh_from_db(); self.assertFalse(access.is_revoked)
         self.assertEqual(self.webhook(full, "refund-2").status_code, 200)
@@ -142,7 +142,7 @@ class RazorpayPhase7Tests(TestCase):
         self.assertEqual(checkout.status, "refunded")
         self.assertEqual(Refund.objects.count(), 2)
         self.assertTrue(current_plan(self.user).is_default)
-        self.assertEqual(self.webhook(event, "replay-after-refund").status_code, 400)
+        self.assertEqual(self.webhook(event, "replay-after-refund").status_code, 200)
         self.assertTrue(PracticeEntitlement.objects.get(checkout=checkout).is_revoked)
 
     def test_webhook_rejects_wrong_amount_and_missing_order_without_activation(self):
@@ -172,6 +172,100 @@ class RazorpayPhase7Tests(TestCase):
         self.assertEqual(current_plan(self.user), self.plan)
         self.client.post(reverse("payments:checkout_start", args=[self.plan.slug]), {"accept_terms":"yes"})
         self.assertEqual(Checkout.objects.count(), 1)
+
+    def test_same_failed_legacy_payment_can_be_captured_later(self):
+        checkout = self.start()
+        failed = {"event":"payment.failed", "payload":{"payment":{"entity":self.one_payment(status="failed")}}}
+        self.assertEqual(self.webhook(failed, "legacy-failed").status_code, 200)
+        self.assertFalse(PracticeEntitlement.objects.exists())
+        capture = {"event":"payment.captured", "payload":{"payment":{"entity":self.one_payment()}}}
+        self.assertEqual(self.webhook(capture, "legacy-late-capture").status_code, 200)
+        self.assertEqual(self.webhook(capture, "legacy-late-capture-again").status_code, 200)
+        self.assertEqual(checkout.payments.count(), 1)
+        self.assertEqual(checkout.payments.get().status, "captured")
+        self.assertEqual(PracticeEntitlement.objects.filter(checkout=checkout).count(), 1)
+
+    def test_legacy_api_full_refund_blocks_a_late_capture_without_fake_refund(self):
+        checkout = self.start()
+        self.api.payment.fetch.return_value = {**self.one_payment(status="refunded"), "captured":True,
+                                               "amount_refunded":14950, "refund_status":"full"}
+        self.assertEqual(self.verify(checkout, "pay_Unit123", "order_Unit123").status_code, 400)
+        self.assertEqual(Payment.objects.get(checkout=checkout).status, "refunded")
+        self.assertTrue(PracticeEntitlement.objects.get(checkout=checkout).is_revoked)
+        self.assertFalse(Refund.objects.exists())
+        capture = {"event":"payment.captured", "payload":{"payment":{"entity":self.one_payment()}}}
+        self.assertEqual(self.webhook(capture, "legacy-api-late-capture").status_code, 200)
+        self.assertTrue(PracticeEntitlement.objects.get(checkout=checkout).is_revoked)
+        refund = {"event":"refund.processed", "payload":{"refund":{"entity":{
+            "id":"rfnd_LegacyApi", "payment_id":"pay_Unit123", "amount":5000, "currency":"INR", "status":"processed"}}}}
+        self.assertEqual(self.webhook(refund, "legacy-api-first-refund").status_code, 200)
+        self.assertEqual(Payment.objects.get(checkout=checkout).status, "refunded")
+        self.assertTrue(PracticeEntitlement.objects.get(checkout=checkout).is_revoked)
+
+    def test_legacy_capture_snapshot_reporting_refund_waits_for_refund_event(self):
+        self.start()
+        payment = {**self.one_payment(), "captured":True, "amount_refunded":5000, "refund_status":"partial"}
+        capture = {"event":"payment.captured", "payload":{"payment":{"entity":payment}}}
+        self.assertEqual(self.webhook(capture, "legacy-capture-with-refund").status_code, 400)
+        self.assertFalse(Payment.objects.exists())
+        self.assertFalse(PracticeEntitlement.objects.exists())
+        refund = {"id":"rfnd_LegacySnapshot", "payment_id":"pay_Unit123", "amount":5000,
+                  "currency":"INR", "status":"processed"}
+        event = {"event":"refund.processed", "payload":{"payment":{"entity":payment}, "refund":{"entity":refund}}}
+        self.assertEqual(self.webhook(event, "legacy-refund-with-snapshot").status_code, 200)
+        self.assertEqual(self.webhook(capture, "legacy-capture-with-refund").status_code, 200)
+        self.assertEqual(Payment.objects.get().status, "partial_refund")
+
+    def test_legacy_full_refund_before_capture_records_revoke_atomically(self):
+        checkout = self.start()
+        payment = {**self.one_payment(status="refunded"), "captured": True, "amount_refunded":14950}
+        refund = {"id":"rfnd_LegacyEarly", "payment_id":"pay_Unit123", "amount":14950,
+                  "currency":"INR", "status":"processed"}
+        event = {"event":"refund.processed", "payload":{"payment":{"entity":payment}, "refund":{"entity":refund}}}
+        self.assertEqual(self.webhook(event, "legacy-refund-before-capture").status_code, 200)
+        self.assertEqual(self.webhook(event, "legacy-refund-duplicate").status_code, 200)
+        self.assertEqual(Payment.objects.get(checkout=checkout).status, "refunded")
+        self.assertTrue(PracticeEntitlement.objects.get(checkout=checkout).is_revoked)
+        self.assertEqual(Refund.objects.count(), 1)
+        capture = {"event":"payment.captured", "payload":{"payment":{"entity":self.one_payment()}}}
+        self.assertEqual(self.webhook(capture, "legacy-late-old-capture").status_code, 200)
+        self.assertTrue(PracticeEntitlement.objects.get(checkout=checkout).is_revoked)
+        self.assertEqual(Payment.objects.count(), 1)
+
+    def test_legacy_failed_payment_then_early_partial_refund_follows_historical_policy(self):
+        checkout = self.start()
+        failure = {"event":"payment.failed", "payload":{"payment":{"entity":self.one_payment(status="failed")}}}
+        self.assertEqual(self.webhook(failure, "legacy-early-failure").status_code, 200)
+        payment = {**self.one_payment(), "captured":True, "amount_refunded":5000}
+        refund = {"id":"rfnd_LegacyPartial", "payment_id":"pay_Unit123", "amount":5000,
+                  "currency":"INR", "status":"processed"}
+        event = {"event":"refund.processed", "payload":{"payment":{"entity":payment}, "refund":{"entity":refund}}}
+        self.assertEqual(self.webhook(event, "legacy-early-partial").status_code, 200)
+        self.assertEqual(Payment.objects.get(checkout=checkout).status, "partial_refund")
+        # Retained historical terms only revoke this legacy plan on full refund.
+        access = PracticeEntitlement.objects.get(checkout=checkout)
+        self.assertFalse(access.is_revoked)
+        original_end = access.valid_until
+        capture = {"event":"payment.captured", "payload":{"payment":{"entity":self.one_payment()}}}
+        self.assertEqual(self.webhook(capture, "legacy-partial-old-capture").status_code, 200)
+        access.refresh_from_db()
+        self.assertEqual(access.valid_until, original_end)
+        self.assertEqual(Payment.objects.count(), 1)
+
+    def test_legacy_invalid_early_refund_cannot_create_payment_or_entitlement(self):
+        self.start()
+        payment = {**self.one_payment(), "captured":True}
+        refund = {"id":"rfnd_LegacyInvalid", "payment_id":"pay_Unit123", "amount":14950,
+                  "currency":"USD", "status":"processed"}
+        event = {"event":"refund.processed", "payload":{"payment":{"entity":payment}, "refund":{"entity":refund}}}
+        self.assertEqual(self.webhook(event, "legacy-invalid-early").status_code, 400)
+        self.assertFalse(Payment.objects.exists())
+        self.assertFalse(PracticeEntitlement.objects.exists())
+        payment["captured"] = False
+        refund["currency"] = "INR"
+        self.assertEqual(self.webhook(event, "legacy-uncaptured-auto-refund").status_code, 400)
+        self.assertFalse(Payment.objects.exists())
+        self.assertFalse(PracticeEntitlement.objects.exists())
 
     def test_default_plan_cannot_be_unset_via_validation(self):
         from django.core.exceptions import ValidationError
@@ -210,6 +304,103 @@ class RazorpayPhase7Tests(TestCase):
         self.assertEqual(self.webhook(cancelled, "cancelled").status_code, 200)
         checkout.refresh_from_db(); self.assertEqual(checkout.status, "cancelled")
         self.assertEqual(current_plan(self.user), self.recurring)  # paid-through access survives cancellation
+
+    def test_recurring_refund_and_late_charge_do_not_reactivate_access(self):
+        checkout = self.start(self.recurring)
+        now = timezone.now()
+        sub = {"id":"sub_Unit123", "plan_id":"plan_Unit123", "status":"active",
+               "current_start":int(now.timestamp()), "current_end":int((now + timedelta(days=30)).timestamp())}
+        payment = {"id":"pay_SubRefund", "subscription_id":"sub_Unit123", "status":"captured", "amount":9900, "currency":"INR"}
+        charge = {"event":"subscription.charged", "payload":{"subscription":{"entity":sub}, "payment":{"entity":payment}}}
+        self.assertEqual(self.webhook(charge, "recurring-charge").status_code, 200)
+        refund = {"event":"refund.processed", "payload":{"refund":{"entity":{
+            "id":"rfnd_SubRefund", "payment_id":"pay_SubRefund", "amount":9900, "currency":"INR", "status":"processed"}}}}
+        self.assertEqual(self.webhook(refund, "recurring-refund").status_code, 200)
+        self.assertTrue(PracticeEntitlement.objects.get(checkout=checkout).is_revoked)
+        self.assertEqual(self.webhook(charge, "recurring-old-charge").status_code, 200)
+        self.assertTrue(PracticeEntitlement.objects.get(checkout=checkout).is_revoked)
+        wrong_period = {**sub, "current_end":sub["current_end"] + 86400}
+        bad = {"event":"subscription.charged", "payload":{"subscription":{"entity":wrong_period}, "payment":{"entity":payment}}}
+        self.assertEqual(self.webhook(bad, "recurring-wrong-period-replay").status_code, 400)
+        self.assertTrue(PracticeEntitlement.objects.get(checkout=checkout).is_revoked)
+
+    def test_refunded_recurring_api_snapshot_never_guesses_missing_paid_period(self):
+        checkout = self.start(self.recurring)
+        now = timezone.now()
+        sub = {"id":"sub_Unit123", "plan_id":"plan_Unit123", "status":"active",
+               "current_start":int(now.timestamp()), "current_end":int((now + timedelta(days=30)).timestamp())}
+        payment = {"id":"pay_UnknownRefunded", "subscription_id":"sub_Unit123", "status":"refunded",
+                   "amount":9900, "currency":"INR", "captured":True, "amount_refunded":9900, "refund_status":"full"}
+        self.api.subscription.fetch.return_value = sub
+        self.api.payment.fetch.return_value = payment
+        self.assertEqual(self.verify(checkout, payment["id"], "sub_Unit123").status_code, 400)
+        marker = Payment.objects.get(checkout=checkout)
+        self.assertEqual(marker.status, "refunded")
+        self.assertIsNone(marker.period_start)
+        self.assertIsNone(marker.period_end)
+        self.assertFalse(PracticeEntitlement.objects.filter(checkout=checkout).exists())
+        old_charge = {"event":"subscription.charged", "payload":{"subscription":{"entity":sub},
+                      "payment":{"entity":{**payment, "status":"captured", "amount_refunded":0, "refund_status":None}}}}
+        self.assertEqual(self.webhook(old_charge, "unknown-refunded-old-charge").status_code, 400)
+        self.assertFalse(PracticeEntitlement.objects.filter(checkout=checkout).exists())
+        self.assertFalse(Refund.objects.exists())
+
+    def test_known_recurring_api_full_refund_revokes_matching_period(self):
+        checkout = self.start(self.recurring)
+        now = timezone.now()
+        sub = {"id":"sub_Unit123", "plan_id":"plan_Unit123", "status":"active",
+               "current_start":int(now.timestamp()), "current_end":int((now + timedelta(days=30)).timestamp())}
+        payment = {"id":"pay_KnownRefunded", "subscription_id":"sub_Unit123", "status":"captured",
+                   "amount":9900, "currency":"INR", "captured":True, "amount_refunded":0}
+        self.api.subscription.fetch.return_value = sub
+        self.api.payment.fetch.return_value = payment
+        self.assertEqual(self.verify(checkout, payment["id"], "sub_Unit123").status_code, 200)
+        self.api.payment.fetch.return_value = {**payment, "status":"refunded", "amount_refunded":9900, "refund_status":"full"}
+        self.assertEqual(self.verify(checkout, payment["id"], "sub_Unit123").status_code, 400)
+        self.assertEqual(Payment.objects.get(checkout=checkout).status, "refunded")
+        self.assertTrue(PracticeEntitlement.objects.get(checkout=checkout).is_revoked)
+        self.assertFalse(Refund.objects.exists())
+        old_charge = {"event":"subscription.charged", "payload":{"subscription":{"entity":sub}, "payment":{"entity":payment}}}
+        self.assertEqual(self.webhook(old_charge, "known-refunded-old-charge").status_code, 200)
+        self.assertTrue(PracticeEntitlement.objects.get(checkout=checkout).is_revoked)
+
+    def test_refund_for_older_recurring_period_does_not_revoke_newer_paid_period(self):
+        checkout = self.start(self.recurring)
+        now = timezone.now()
+        first = {"id":"sub_Unit123", "plan_id":"plan_Unit123", "status":"active",
+                 "current_start":int(now.timestamp()), "current_end":int((now + timedelta(days=30)).timestamp())}
+        second = {**first, "current_start":first["current_end"], "current_end":int((now + timedelta(days=60)).timestamp())}
+        payment = {"id":"pay_OlderCycle", "subscription_id":"sub_Unit123", "status":"captured",
+                   "amount":9900, "currency":"INR", "captured":True, "amount_refunded":0}
+        charge = {"event":"subscription.charged", "payload":{"subscription":{"entity":first}, "payment":{"entity":payment}}}
+        self.assertEqual(self.webhook(charge, "older-cycle-charge").status_code, 200)
+        renewal = {"event":"subscription.charged", "payload":{"subscription":{"entity":second},
+                   "payment":{"entity":{**payment, "id":"pay_NewerCycle"}}}}
+        self.assertEqual(self.webhook(renewal, "newer-cycle-charge").status_code, 200)
+        self.api.subscription.fetch.return_value = second  # Current period is not the older payment's period.
+        self.api.payment.fetch.return_value = {**payment, "status":"refunded", "amount_refunded":9900, "refund_status":"full"}
+        self.assertEqual(self.verify(checkout, payment["id"], "sub_Unit123").status_code, 400)
+        access = PracticeEntitlement.objects.get(checkout=checkout)
+        self.assertFalse(access.is_revoked)
+        self.assertEqual(int(access.valid_until.timestamp()), second["current_end"])
+        refund = {"event":"refund.processed", "payload":{"refund":{"entity":{
+            "id":"rfnd_OlderCycle", "payment_id":payment["id"], "amount":9900, "currency":"INR", "status":"processed"}}}}
+        self.assertEqual(self.webhook(refund, "older-cycle-refund").status_code, 200)
+        self.assertEqual(self.webhook(charge, "older-cycle-replayed").status_code, 200)
+        access.refresh_from_db()
+        self.assertFalse(access.is_revoked)
+        self.assertEqual(int(access.valid_until.timestamp()), second["current_end"])
+
+    def test_unknown_recurring_refund_requires_reconciliation_not_guessed_period(self):
+        checkout = self.start(self.recurring)
+        payment = {"id":"pay_UnknownRecurring", "subscription_id":"sub_Unit123", "status":"refunded",
+                   "amount":9900, "currency":"INR", "captured":True}
+        refund = {"id":"rfnd_UnknownRecurring", "payment_id":payment["id"], "amount":9900,
+                  "currency":"INR", "status":"processed"}
+        event = {"event":"refund.processed", "payload":{"payment":{"entity":payment}, "refund":{"entity":refund}}}
+        self.assertEqual(self.webhook(event, "unknown-recurring-refund").status_code, 400)
+        self.assertFalse(Payment.objects.filter(checkout=checkout).exists())
+        self.assertFalse(PracticeEntitlement.objects.filter(checkout=checkout).exists())
 
     def test_recurring_plan_price_or_schedule_mismatch_never_creates_provider_subscription(self):
         self.api.plan.fetch.return_value["item"]["amount"] = 100

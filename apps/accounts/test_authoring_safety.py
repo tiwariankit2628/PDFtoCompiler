@@ -181,9 +181,14 @@ class AuthoringSafetyTests(TransactionTestCase):
 
         with patch.object(QuestionPaperUpload, "save", fail_after_save), \
              patch("apps.questions.views.PDFQuestionExtractor.extract") as extract:
-            response = self.work_client.post(url, data)
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response["Retry-After"], "1")
+            if connection.vendor == "sqlite":
+                response = self.work_client.post(url, data)
+                self.assertEqual(response.status_code, 503)
+                self.assertEqual(response["Retry-After"], "1")
+            else:
+                # A fabricated SQLite error is not a retryable PostgreSQL error.
+                with self.assertRaisesMessage(OperationalError, "database is locked"):
+                    self.work_client.post(url, data)
         extract.assert_not_called()
         self.assertFalse(QuestionPaperUpload.objects.filter(uploaded_by=self.teacher).exists())
         self.assertEqual(self.media_files(), {"existing.pdf"})
@@ -198,8 +203,12 @@ class AuthoringSafetyTests(TransactionTestCase):
         url, data = self.work("question")
         data["image"] = self.image()
         with patch("apps.questions.views.QuestionOption.objects.create", side_effect=OperationalError("database is locked")):
-            response = self.work_client.post(url, data)
-        self.assertEqual(response.status_code, 503)
+            if connection.vendor == "sqlite":
+                response = self.work_client.post(url, data)
+                self.assertEqual(response.status_code, 503)
+            else:
+                with self.assertRaisesMessage(OperationalError, "database is locked"):
+                    self.work_client.post(url, data)
         self.assertFalse(Question.objects.filter(creator=self.teacher).exists())
         self.assertEqual(self.media_files(), {"existing.png"})
         with open(keep, "rb") as stream:

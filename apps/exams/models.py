@@ -611,7 +611,13 @@ class ExamAttempt(models.Model):
                    and is_timeout and self.expires_at else now)
             self.time_taken_seconds = max(0, int((end - self.started_at).total_seconds()))
         self.evaluate_attempt()
-        self.save()
+        # Do not rewrite unchanged foreign keys while holding the attempt lock.
+        # PostgreSQL defers FK checks until commit; rewriting the session/exam
+        # FK can otherwise deadlock with a control/start that locks the parent
+        # first and then waits for this attempt.
+        self.save(update_fields=["status", "submitted_at", "time_taken_seconds", "score_obtained",
+                                 "correct_count", "partial_count", "incorrect_count", "unattempted_count",
+                                 "accuracy_percentage", "percentage", "is_passed"])
         # Classroom ranks are per session. Series scores are private and do
         # not use the institutional global leaderboard. Avoid touching other
         # students' rows while holding this attempt's lock during submission.
@@ -632,7 +638,11 @@ class ExamAttempt(models.Model):
             self.time_taken_seconds = max(0, int((now - self.started_at).total_seconds()))
         # Preserve and score whatever was already saved; termination is not a zero.
         self.evaluate_attempt()
-        self.save()
+        # As in submit_attempt(), avoid rechecking unchanged parent FKs at
+        # commit while a classroom control may be waiting for this attempt.
+        self.save(update_fields=["status", "is_security_locked", "submitted_at", "time_taken_seconds",
+                                 "score_obtained", "correct_count", "partial_count", "incorrect_count",
+                                 "unattempted_count", "accuracy_percentage", "percentage", "is_passed"])
         if not self.exam.is_private_practice and not self.classroom_session_id and not hasattr(self.exam, "series_slot"):
             self.recalculate_ranks()
         return True
@@ -883,7 +893,10 @@ class ClassroomSession(models.Model):
         with transaction.atomic():
             if connection.vendor == "sqlite":
                 type(self).objects.filter(pk=self.pk).update(id=F("id"))
-            session = type(self).objects.select_for_update().get(pk=self.pk)
+            # Serialize session changes without blocking FK checks by a
+            # concurrently finishing attempt. Starts still take the same
+            # incompatible NO KEY UPDATE lock before creating an attempt.
+            session = type(self).objects.select_for_update(no_key=connection.vendor == "postgresql").get(pk=self.pk)
             if session.is_ended:
                 self.ended_at, self.is_open = session.ended_at, session.is_open
                 return False

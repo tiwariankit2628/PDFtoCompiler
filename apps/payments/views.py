@@ -6,7 +6,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib import messages
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, OperationalError, connection, transaction
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -19,7 +19,7 @@ from apps.core.permissions import ActiveUserRequiredMixin
 from apps.core.utils import log_audit
 from . import gateway
 from .gateway import GatewayUnavailable, InvalidPayment
-from .models import Checkout, Payment, PracticeEntitlement, PracticePlan, WebhookEvent
+from .models import Checkout, PracticeEntitlement, PracticePlan, WebhookEvent
 from .services import usage_summary
 
 logger = logging.getLogger(__name__)
@@ -135,7 +135,7 @@ class VerifyCheckoutView(PrivateBillingMixin, View):
             gateway.verify_checkout(checkout, payment_id, provider_id, signature, request=request)
         except Exception:
             log_audit(request.user, "PRACTICE_PAYMENT_VERIFY_REJECTED", f"Unverified confirmation for checkout {checkout.reference}.", request=request)
-            return JsonResponse({"status": "pending", "message": "Payment was not verified as captured. Access remains unchanged; check billing history after the webhook arrives."}, status=400)
+            return JsonResponse({"status": "pending", "message": "Payment could not be verified as active and captured. Check billing history or contact support."}, status=400)
         return JsonResponse({"status": "verified", "message": "Payment verified on the server."})
 
 
@@ -161,7 +161,8 @@ class CancelSubscriptionView(PrivateBillingMixin, View):
 
 def _entity(payload, name):
     value = payload.get(name, {}) if isinstance(payload, dict) else {}
-    return value.get("entity", {}) if isinstance(value, dict) else {}
+    entity = value.get("entity", {}) if isinstance(value, dict) else {}
+    return entity if isinstance(entity, dict) else {}
 
 
 @csrf_exempt
@@ -200,13 +201,24 @@ def razorpay_webhook(request):
                 checkout = (Checkout.objects.filter(provider_order_id=order_id, billing=PracticePlan.Billing.ONE_TIME).first()
                             if isinstance(order_id, str) and order_id.startswith("order_") else None)
                 if checkout:
-                    gateway.activate_capture(checkout.pk, payment, request=request)
+                    try:
+                        gateway.activate_capture(checkout.pk, payment, request=request)
+                    except InvalidPayment:
+                        if not gateway.refunded_capture_replay(checkout, payment):
+                            raise
                 elif isinstance(order_id, str) and order_id.startswith("order_") and not payment.get("invoice_id"):
                     from .models import PackCheckout
-                    from .pack_gateway import activate_capture
+                    from .pack_gateway import activate_capture, refunded_capture_replay
                     pack = PackCheckout.objects.filter(provider_order_id=order_id).first()
                     if pack:
-                        activate_capture(pack.pk, payment, request=request)
+                        try:
+                            activate_capture(pack.pk, payment, request=request)
+                        except InvalidPayment:
+                            # Razorpay delivers event snapshots out of order.
+                            # A valid old capture after an already-recorded
+                            # refund is harmless; acknowledge, never reactivate.
+                            if not refunded_capture_replay(pack, payment):
+                                raise
                     else:
                         raise InvalidPayment("Order not yet linked.")
             elif event_type == "subscription.charged":
@@ -216,7 +228,11 @@ def razorpay_webhook(request):
                 if not checkout:
                     # Retry in case provider response and webhook crossed in flight.
                     raise InvalidPayment("Subscription not yet linked.")
-                gateway.activate_capture(checkout.pk, payment, subscription, request=request)
+                try:
+                    gateway.activate_capture(checkout.pk, payment, subscription, request=request)
+                except InvalidPayment:
+                    if not gateway.refunded_capture_replay(checkout, payment, subscription):
+                        raise
             elif event_type in ("subscription.cancelled", "subscription.completed", "subscription.halted"):
                 subscription_id = subscription.get("id")
                 checkout = (Checkout.objects.select_for_update().filter(provider_subscription_id=subscription_id, billing=PracticePlan.Billing.RECURRING).first()
@@ -227,22 +243,12 @@ def razorpay_webhook(request):
                     log_audit(checkout.user, "PRACTICE_SUBSCRIPTION_ENDED", f"Subscription state {event_type} for {checkout.reference}.", request=request)
             elif event_type == "payment.failed":
                 order_id = payment.get("order_id")
-                checkout = (Checkout.objects.select_for_update().filter(provider_order_id=order_id, billing=PracticePlan.Billing.ONE_TIME).first()
+                checkout = (Checkout.objects.filter(provider_order_id=order_id, billing=PracticePlan.Billing.ONE_TIME).first()
                             if isinstance(order_id, str) and order_id.startswith("order_") else None)
-                if checkout and checkout.status == Checkout.Status.CREATED:
-                    payment_id = payment.get("id")
-                    if (isinstance(payment_id, str) and payment_id.startswith("pay_")
-                            and payment.get("amount") == checkout.amount_paise and payment.get("currency") == checkout.currency):
-                        failed, created = Payment.objects.get_or_create(provider_payment_id=payment_id,
-                            defaults={"checkout": checkout, "amount_paise": checkout.amount_paise,
-                                      "currency": checkout.currency, "status": Payment.Status.FAILED})
-                        if failed.checkout_id != checkout.pk:
-                            raise InvalidPayment("Payment belongs to another checkout.")
-                        if created:
-                            log_audit(checkout.user, "PRACTICE_PAYMENT_FAILED", f"Payment failed for checkout {checkout.reference}.", request=request)
-                    # An order may be retried with a new provider payment ID.
-                    # Keep the checkout open; a failure is not a paid access grant.
-                elif not checkout and isinstance(order_id, str) and order_id.startswith("order_"):
+                if checkout:
+                    # An order may be retried with the same or a new payment ID.
+                    gateway.record_failure(checkout, payment, request=request)
+                elif isinstance(order_id, str) and order_id.startswith("order_"):
                     from .models import PackCheckout
                     from .pack_gateway import record_failure
                     pack = PackCheckout.objects.filter(provider_order_id=order_id).first()
@@ -251,14 +257,25 @@ def razorpay_webhook(request):
                     else:
                         raise InvalidPayment("Order not yet linked.")
             elif event_type == "refund.processed":
-                from .models import PackPayment
-                from .pack_gateway import apply_refund
-                if PackPayment.objects.filter(provider_payment_id=refund.get("payment_id")).exists():
-                    apply_refund(refund.get("payment_id"), refund, request=request)
-                else:
-                    gateway.apply_refund(refund.get("payment_id"), refund, request=request)
+                from .pack_gateway import apply_webhook_refund
+                if not apply_webhook_refund(refund, payment, request=request):
+                    gateway.apply_webhook_refund(refund, payment, request=request)
             WebhookEvent.objects.create(event_id=event_id, event_type=event_type)
-    except (InvalidPayment, IntegrityError, KeyError, TypeError, ValueError):
+    except IntegrityError:
+        # Simultaneous deliveries may both pass the initial existence check.
+        # Only acknowledge if the other transaction committed this event.
+        if WebhookEvent.objects.filter(event_id=event_id).exists():
+            return HttpResponse(status=200)
+        return HttpResponse(status=400)
+    except (InvalidPayment, KeyError, TypeError, ValueError):
         # Roll back the event marker so Razorpay can retry after reconciliation.
         return HttpResponse(status=400)
+    except OperationalError as exc:
+        sqlstate = getattr(exc.__cause__, "sqlstate", None)
+        if ((connection.vendor == "sqlite" and "locked" in str(exc).lower())
+                or (connection.vendor == "postgresql" and sqlstate in ("40P01", "40001", "55P03"))):
+            response = HttpResponse(status=503)
+            response["Retry-After"] = "1"
+            return response
+        raise
     return HttpResponse(status=200)

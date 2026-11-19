@@ -81,7 +81,12 @@ def lock_practice_user(user):
         if not users.update(last_login=F("last_login")):
             raise get_user_model().DoesNotExist()
         return users.get()
-    return users.select_for_update().get()
+    # PostgreSQL's weaker row lock still serializes account writers/deletion,
+    # but allows unrelated FK checks (for example, a student's submission
+    # audit) to commit while a concurrent resume holds this account lock.
+    # FOR UPDATE would make the resume and submission deadlock: resume waits
+    # for the attempt, while the submission's deferred FK waits for the user.
+    return users.select_for_update(no_key=connection.vendor == "postgresql").get()
 
 
 def consume(user, kind):

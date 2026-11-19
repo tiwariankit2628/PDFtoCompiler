@@ -142,7 +142,8 @@ class CommercialConcurrencyTests(TransactionTestCase):
                 if name == "start":
                     return start_client.post(reverse("exams:exam_start", args=[exam.slug]))
                 return apply_refund(payment.provider_payment_id,
-                                    {"id": "rfnd_RaceRefund", "payment_id": payment.provider_payment_id, "amount": 29900})
+                                    {"id": "rfnd_RaceRefund", "payment_id": payment.provider_payment_id, "amount": 29900,
+                                     "currency": "INR", "status": "processed"})
             finally:
                 close_old_connections()
 

@@ -274,7 +274,9 @@ class ClassroomSessionControlView(ClassroomNoStoreMixin, TeacherRequiredMixin, V
     def _control_locked(self, request, pk):
         if connection.vendor == "sqlite":
             ClassroomSession.objects.filter(pk=pk).update(id=F("id"))
-        session = ClassroomSession.objects.select_for_update(of=("self",)).select_related("exam").get(pk=pk)
+        # Serialize session state, but don't block deferred FK checks from
+        # a student finalizing an attempt while end-now waits for that attempt.
+        session = ClassroomSession.objects.select_for_update(of=("self",), no_key=connection.vendor == "postgresql").select_related("exam").get(pk=pk)
         action = request.POST.get("action")
         if action == "open":
             if session.is_ended:
@@ -458,7 +460,7 @@ class ClassroomJoinView(ClassroomNoStoreMixin, StudentRequiredMixin, View):
             # submitted code after taking the lock, not only before it.
             if connection.vendor == "sqlite":
                 ClassroomSession.objects.filter(pk=session_id).update(id=F("id"))
-            session = (ClassroomSession.objects.select_for_update(of=("self",)).select_related("exam")
+            session = (ClassroomSession.objects.select_for_update(of=("self",), no_key=connection.vendor == "postgresql").select_related("exam")
                        .filter(pk=session_id, code=code).first())
             if session is None:
                 _register_failed_guess(request.user)
@@ -555,7 +557,7 @@ class ClassroomTakeView(ClassroomNoStoreMixin, StudentRequiredMixin, View):
             # lock because SELECT FOR UPDATE is ignored there.
             if connection.vendor == "sqlite":
                 ClassroomSession.objects.filter(pk=session.pk).update(id=F("id"))
-            session = ClassroomSession.objects.select_for_update(of=("self",)).select_related("exam").get(pk=session.pk)
+            session = ClassroomSession.objects.select_for_update(of=("self",), no_key=connection.vendor == "postgresql").select_related("exam").get(pk=session.pk)
             session.exam = Exam.objects.select_for_update().get(pk=session.exam_id)
             # Resume an existing active attempt rather than starting a new one.
             active = (ExamAttempt.objects.select_for_update()
