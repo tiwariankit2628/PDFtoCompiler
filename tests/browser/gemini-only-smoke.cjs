@@ -1,6 +1,7 @@
 /* Local-only upload boundary in a real browser. The PDF and provider stub are synthetic. */
 const { chromium } = require('playwright-core');
 const assert = require('assert');
+const {confirmVerification} = require('./verification-helper.cjs');
 
 (async () => {
   const base = process.env.GEMINI_ONLY_TEST_URL, source = process.env.GEMINI_ONLY_TEST_PDF;
@@ -19,7 +20,8 @@ const assert = require('assert');
       await page.locator('#id_' + field).fill(value);
     }
     await page.locator('#id_target_exam').selectOption('JEE');
-    await Promise.all([page.waitForURL('**/dashboard/**'), page.locator('form').filter({has:page.locator('#id_username')}).locator('button[type=submit]').click()]);
+    await Promise.all([page.waitForURL('**/auth/verify-email/pending/'), page.locator('form').filter({has:page.locator('#id_username')}).locator('button[type=submit]').click()]);
+    await confirmVerification(page, base, tag+'@example.test');
     await page.goto(base + '/questions/practice/upload/');
     await page.locator('#id_target_type').selectOption('jee_main');
     assert.strictEqual(await page.locator('#id_extraction_mode').count(), 0);

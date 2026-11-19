@@ -9,6 +9,7 @@ urlpatterns = [
     # Teacher-owned classroom paper workspace (private storage, local extraction).
     path("classroom/upload/", classroom_views.ClassroomPaperUploadView.as_view(), name="classroom_paper_upload"),
     path("classroom/papers/<int:pk>/review/", classroom_views.ClassroomPaperReviewView.as_view(), name="classroom_paper_review"),
+    path("classroom/papers/<int:pk>/publish-series/", classroom_views.SeriesPaperPublishView.as_view(), name="series_paper_publish"),
     path("classroom/papers/<int:pk>/answer-key/image-preview/", answer_key_image_views.ClassroomAnswerImagePreviewView.as_view(), name="classroom_answer_image_preview"),
     path("classroom/papers/<int:pk>/pdf/", classroom_views.ClassroomPdfView.as_view(), name="classroom_paper_pdf"),
     path("classroom/papers/<int:pk>/questions/add/", classroom_views.ClassroomQuestionAddView.as_view(), name="classroom_question_add"),

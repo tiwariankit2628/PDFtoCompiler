@@ -3,7 +3,11 @@
 Covers Student/Teacher registration, server-side role validation, dashboard
 routing, unauthorized access, and the requested navigation/dashboard removals.
 """
-from django.test import TestCase
+import re
+from urllib.parse import urlsplit
+
+from django.core import mail
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from apps.exams.models import Category
@@ -17,7 +21,17 @@ BASE = {
 }
 
 
+@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+                   PUBLIC_BASE_URL="https://register.example.test")
 class PublicRegistrationTests(TestCase):
+    def _verify_and_route(self, response, expected_dashboard):
+        self.assertRedirects(response, reverse("accounts:verification_pending"), fetch_redirect_response=False)
+        self.assertRedirects(self.client.get(reverse("core:dashboard_router")),
+                             reverse("accounts:verification_pending"), fetch_redirect_response=False)
+        url = re.search(r"https://register\.example\.test/\S+", mail.outbox[-1].body).group(0)
+        self.client.post(urlsplit(url).path)
+        self.assertRedirects(self.client.get(reverse("core:dashboard_router")), expected_dashboard)
+
     def _post(self, **extra):
         data = dict(BASE)
         data.update(extra)
@@ -37,9 +51,10 @@ class PublicRegistrationTests(TestCase):
         self.assertEqual(user.role, User.Roles.STUDENT)
         self.assertFalse(user.is_staff)
         self.assertFalse(user.is_superuser)
-        # Logged in + routed to the student dashboard.
-        follow = self.client.get(resp.url, follow=True)
-        self.assertEqual(follow.redirect_chain[-1][0], reverse("core:student_dashboard"))
+        # Logged in, but dashboard access requires genuine signed-link verification.
+        self.assertTrue(user.verification_required)
+        self.assertFalse(user.is_verified)
+        self._verify_and_route(resp, reverse("core:student_dashboard"))
 
     def test_teacher_registration_creates_unprivileged_teacher(self):
         resp = self._post(username="teach1", email="t1@example.com", role="TEACHER")
@@ -50,8 +65,9 @@ class PublicRegistrationTests(TestCase):
         self.assertFalse(user.is_superuser)
         # No categories granted by self-registration.
         self.assertEqual(user.assigned_categories.count(), 0)
-        follow = self.client.get(resp.url, follow=True)
-        self.assertEqual(follow.redirect_chain[-1][0], reverse("core:teacher_dashboard"))
+        self.assertTrue(user.verification_required)
+        self.assertFalse(user.is_verified)
+        self._verify_and_route(resp, reverse("core:teacher_dashboard"))
 
     def test_missing_role_defaults_to_student_legacy_client(self):
         # A missing role defaults to student, which still requires an exam.

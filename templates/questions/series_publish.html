@@ -1,0 +1,36 @@
+{% extends 'dashboard_base.html' %}
+{% block title %}Publish series test | {{ PLATFORM_NAME }}{% endblock %}
+{% block dashboard_content %}
+<div class="review-hero p-4 mb-4">
+  <a class="small review-hero-link" href="{% url 'questions:classroom_paper_review' paper.pk %}">← Return to paper review</a>
+  <h1 class="h3 fw-bold mt-2">Publish a series test</h1>
+  <p class="review-hero-subtitle mb-0">{{ paper.title }} · {{ paper.get_target_type_display }} · {{ question_count }} included question{{ question_count|pluralize }}</p>
+</div>
+{% if not series %}
+<div class="alert alert-warning">Choose an active JEE or NEET target for this paper before publishing.</div>
+{% else %}
+<div class="row g-4">
+  <div class="col-lg-7"><div class="surface-card p-4">
+    <h2 class="h5 fw-bold">{{ series.title }}</h2>
+    <p class="small text-muted">This creates a separate, privately stored snapshot. Publishing does not use a classroom activation or change the original paper. A slot cannot be replaced after publication; carefully review the content and all answer keys first.</p>
+    <div class="alert alert-warning small">Scores and students' own answers are visible immediately. Even if key release is delayed, scores reveal the result of a student's choices, and printed answers in question text or images remain visible. Review crops and remove any answers you do not want displayed.</div>
+    <form method="post" novalidate>{% csrf_token %}
+      {% if form.non_field_errors %}<div class="alert alert-danger" role="alert">{{ form.non_field_errors|striptags }}</div>{% endif %}
+      {% for field in form %}
+      <div class="mb-3 {% if field.field.widget.input_type == 'checkbox' %}form-check{% endif %}">
+        {% if field.field.widget.input_type == 'checkbox' %}{{ field }} <label for="{{ field.id_for_label }}" class="form-check-label fw-semibold">{{ field.label }}</label>
+        {% else %}<label for="{{ field.id_for_label }}" class="form-label fw-semibold">{{ field.label }}</label>{{ field }}{% endif %}
+        {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+        {% for error in field.errors %}<div class="text-danger small" role="alert">{{ error }}</div>{% endfor %}
+      </div>
+      {% endfor %}
+      <button class="btn btn-cbt-primary" {% if not question_count %}disabled{% endif %}>Publish reviewed snapshot</button>
+    </form>
+  </div></div>
+  <div class="col-lg-5"><div class="surface-card p-4"><h2 class="h5 fw-bold">Series slots</h2>
+    <p class="small text-muted">All 16 tests must be ready before this track's pack is offered for sale. The first test can be offered free as soon as it is ready.</p>
+    <div class="row row-cols-2 g-2">{% for slot in slots %}<div class="col"><div class="border rounded p-2 small"><strong>{{ slot.position|stringformat:'02d' }}</strong> · {% if slot.exam_id %}{{ slot.exam.title|truncatechars:28 }}{% else %}Empty{% endif %}</div></div>{% endfor %}</div>
+  </div></div>
+</div>
+{% endif %}
+{% endblock %}

@@ -510,6 +510,7 @@ class ExamTargetConcurrencyTests(TransactionTestCase):
         original_classify = target_views.PaperTargetView._classify
         original_active = target_views._live_attempts
         original_exam = exam_views._lock_public_exam
+        original_author = exam_views.lock_active_teacher
         original_clean = ExamForm.clean_target_type
 
         def controlled_classify(view, request, pk):
@@ -524,9 +525,14 @@ class ExamTargetConcurrencyTests(TransactionTestCase):
                     raise AssertionError("Competing exam edit was not released")
             return original_active(queryset)
 
-        def controlled_exam(pk):
+        def controlled_author(user):
             if getattr(actor, "name", "") == "edit" and first == "classify":
+                # SQLite may wait for the writer here, before reaching the
+                # exam lock. PostgreSQL continues to the shared exam lock.
                 attempted.set()
+            return original_author(user)
+
+        def controlled_exam(pk):
             return original_exam(pk)
 
         def controlled_clean(form):
@@ -550,6 +556,7 @@ class ExamTargetConcurrencyTests(TransactionTestCase):
         second = "edit" if first == "classify" else "classify"
         with patch.object(target_views.PaperTargetView, "_classify", controlled_classify), \
              patch.object(target_views, "_live_attempts", controlled_active), \
+             patch.object(exam_views, "lock_active_teacher", controlled_author), \
              patch.object(exam_views, "_lock_public_exam", controlled_exam), \
              patch.object(ExamForm, "clean_target_type", controlled_clean):
             with ThreadPoolExecutor(max_workers=2) as pool:

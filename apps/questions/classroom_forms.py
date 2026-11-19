@@ -6,7 +6,8 @@ from django import forms
 from django.core.exceptions import ValidationError
 
 from .forms import BootstrapFormMixin, QuestionPaperUploadForm
-from .models import ExtractedQuestion
+from .models import AnswerStatus, ExtractedQuestion
+from .answer_key_validation import confirmed_staged_key
 from .practice_forms import PracticeQuestionForm, PracticeSettingsForm, practice_question_error
 
 
@@ -54,11 +55,9 @@ class ClassroomCreateForm(BootstrapFormMixin, forms.Form):
         help_text="Checked pairs: single 1:1 (option A), multiple 2:[1,3], numerical 3:-2.5. Blank keys stay ungraded.",
     )
     label = forms.CharField(label="Session label (optional)", max_length=120, required=False)
-    allow_retakes = forms.BooleanField(label="Allow retakes", required=False,
-        help_text="The best completed, fully keyed attempt is ranked; see the report for partial attempts.")
     show_leaderboard_to_students = forms.BooleanField(label="Let participants see the leaderboard", required=False)
-    show_results = forms.BooleanField(label="Show students their results and answers immediately after submission", required=False,
-        help_text="Leave off if students should not see answers while others are still taking the test.")
+    show_results = forms.BooleanField(label="Release answer keys and explanations immediately", required=False,
+        help_text="Scores and students' own answers are always visible after submission. Keys require teacher release.")
     strict_exam_mode = forms.BooleanField(label="Enable the disclosed three-warning page-switch rule", required=False,
         help_text="The fourth reported page switch ends the attempt for review. A reported signal is not proof of cheating.")
     acknowledge_review = forms.BooleanField(required=False, label="I understand flagged questions may contain extraction errors.")
@@ -91,4 +90,36 @@ class ClassroomCreateForm(BootstrapFormMixin, forms.Form):
             self.add_error("acknowledge_review", "Review or acknowledge the flagged questions.")
         if self.unassigned_count and not cleaned.get("acknowledge_unassigned"):
             self.add_error("acknowledge_unassigned", "Review or acknowledge the unassigned images.")
+        return cleaned
+
+
+class SeriesCreateForm(ClassroomCreateForm):
+    """Admin-only publication from reviewed, local/private source content."""
+    position = forms.IntegerField(label="Series test number", min_value=1, max_value=16,
+                                  help_text="Test 1 is free; tests 2–16 belong to this track's series pack.")
+    acknowledge_images = forms.BooleanField(required=True,
+        label="I checked the question text and original images for printed answers or explanations.",
+        help_text="Students see original images during the test and their score and own answers immediately afterward. A printed key can be visible before the separate key release.")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for name in ("creation_token", "label", "show_leaderboard_to_students"):
+            self.fields.pop(name)
+        self.fields["show_results"].label = "Release answer keys and explanations immediately"
+        self.fields["show_results"].help_text = "Otherwise an administrator may release them later; scores and own answers remain immediately visible."
+        self.order_fields(["position", "duration_minutes", "answer_key_text", "show_results", "strict_exam_mode",
+                           "acknowledge_review", "acknowledge_unassigned", "acknowledge_images", "confirm_review"])
+
+    def clean(self):
+        cleaned = super().clean()
+        # An assigned series slot is a durable purchased product. Require
+        # reviewed keys now rather than selling a permanently ungraded test.
+        # A supplied key is deliberately confirmed by the required review box.
+        if "answer_key_text" in cleaned:
+            supplied = getattr(self, "answer_keys", {})
+            missing = [q.question_number for q in self.questions
+                       if not (supplied.get(q.question_number) or
+                               confirmed_staged_key(q, AnswerStatus.MANUALLY_VERIFIED))]
+            if missing:
+                raise ValidationError("Confirm a key for each series question first: " + ", ".join(map(str, missing[:20])))
         return cleaned

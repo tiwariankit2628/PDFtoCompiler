@@ -64,9 +64,15 @@ class TypedQuestionMigrationTests(TransactionTestCase):
 
         executor = MigrationExecutor(connection)
         executor.migrate(self.migrate_to)
-        from apps.accounts.models import User as CurrentUser
-        from apps.exams.models import Exam as CurrentExam, ExamAttempt as CurrentAttempt, ExamResponse as CurrentResponse
-        from apps.questions.models import ExtractedQuestion as CurrentStaged, Question as CurrentQuestion
+        # At this historical boundary runtime models include newer commercial
+        # fields that do not yet exist. Use the matching historical model state.
+        migrated = executor.loader.project_state(self.migrate_to).apps
+        CurrentUser = migrated.get_model("accounts", "User")
+        CurrentExam = migrated.get_model("exams", "Exam")
+        CurrentAttempt = migrated.get_model("exams", "ExamAttempt")
+        CurrentResponse = migrated.get_model("exams", "ExamResponse")
+        CurrentStaged = migrated.get_model("questions", "ExtractedQuestion")
+        CurrentQuestion = migrated.get_model("questions", "Question")
         t, c, s, q, opt, ex, fin, finresp, act, actresp = ids
         self.assertTrue(CurrentUser.objects.get(pk=t).assigned_categories.filter(pk=c).exists())
         self.assertEqual(CurrentExam.objects.get(pk=ex).duration_minutes, 45)
@@ -87,14 +93,21 @@ class TypedQuestionMigrationTests(TransactionTestCase):
         self.assertEqual(final_choice.selected_option_ids, [])
         self.assertIsNone(final_choice.numerical_response)
         self.assertIsNone(final_choice.typed_grading_snapshot)
+
+        # Apply the remaining migrations before invoking current runtime model
+        # methods (historical Django models intentionally have no such methods).
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
+        from apps.exams.models import ExamAttempt as RuntimeAttempt, ExamResponse as RuntimeResponse
+        final_now = RuntimeAttempt.objects.get(pk=fin)
         self.assertFalse(final_now.submit_attempt())
         final_now.refresh_from_db(); self.assertEqual(final_now.score_obtained, Decimal("4"))
         # An active old single-FK response survives the upgrade but cannot be
         # reinterpreted as a complete set or a verified typed key.
-        active_now = CurrentAttempt.objects.get(pk=act)
+        active_now = RuntimeAttempt.objects.get(pk=act)
         self.assertEqual(active_now.expires_at, deadline)
         active_now.submit_attempt()
-        active_choice = CurrentResponse.objects.get(pk=actresp)
+        active_choice = RuntimeResponse.objects.get(pk=actresp)
         self.assertEqual(active_choice.selected_option_id, opt)
         self.assertEqual(active_choice.selected_option_ids, [])
         self.assertEqual(active_choice.typed_grading_snapshot["outcome"], "ungraded")

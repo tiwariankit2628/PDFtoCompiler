@@ -103,16 +103,13 @@ class PracticePhase7Tests(TestCase):
         self.assertContains(result, "No answer key — ungraded")
         self.assertContains(result, "subject performance")
         self.assertContains(result, "Question-wise review")
-        again = self.start(exam)
-        self.assertNotEqual(attempt.pk, again.pk)
-        self.assertEqual(again.responses.filter(selected_option__isnull=False).count(), 0)
-        self.assertEqual(again.expires_at - again.started_at, attempt.expires_at - attempt.started_at)
-        self.submit(again)
+        again = self.client.post(reverse("exams:exam_start", args=[exam.slug]))
+        self.assertRedirects(again, reverse("exams:exam_completed", args=[attempt.attempt_uuid]), fetch_redirect_response=False)
         history = self.client.get(reverse("questions:practice_history"))
-        self.assertEqual(len(history.context["page_obj"]), 2)
-        result = self.client.get(reverse("questions:practice_result", args=[again.attempt_uuid]))
-        self.assertEqual(result.context["history"].count(), 2)
-        self.assertEqual(PracticeUsage.objects.get(user=self.student).attempts, 2)
+        self.assertEqual(len(history.context["page_obj"]), 1)
+        result = self.client.get(reverse("questions:practice_result", args=[attempt.attempt_uuid]))
+        self.assertEqual(result.context["history"].count(), 1)
+        self.assertFalse(PracticeUsage.objects.filter(user=self.student, attempts__gt=0).exists())
 
     def test_answer_save_rejects_malformed_payloads_and_other_question_options(self):
         exam = self.create_exam(self.upload())
@@ -388,8 +385,15 @@ class PracticePhase7Tests(TestCase):
         exam = self.create_exam(paper, f"{first.question_number}: A")
         old = self.start(exam)
         self.submit(old)
-        active = self.start(exam)
+        # A distinct bank-made test may be started, but active practice must
+        # still hide earlier answers and source material.
         q = exam.questions.first()
+        created = self.client.post(reverse("questions:practice_bank_test"), {
+            "title": "Distinct bank test", "duration_minutes": "30", "question_ids": [q.pk],
+        })
+        self.assertEqual(created.status_code, 302)
+        bank_exam = Exam.objects.get(title="Distinct bank test", creator=self.student)
+        active = self.start(bank_exam)
         urls = [reverse("questions:practice_result", args=[old.attempt_uuid]),
                 reverse("questions:practice_report", args=[old.attempt_uuid]),
                 reverse("questions:practice_pdf", args=[paper.pk]),
@@ -420,8 +424,9 @@ class PracticePhase7Tests(TestCase):
         denied = self.client.post(reverse("exams:exam_start", args=[exam.slug]))
         self.assertEqual(denied.status_code, 302)
         self.assertEqual(exam.attempts.count(), 1)
-        usage = PracticeUsage.objects.get(user=self.student)
-        self.assertEqual((usage.pdf_uploads, usage.test_creations, usage.attempts), (1, 1, 1))
+        from apps.payments.models import CreditUse
+        self.assertTrue(CreditUse.objects.filter(user=self.student, kind="pdf", is_free=True, reversed_at__isnull=True).exists())
+        self.assertFalse(PracticeUsage.objects.filter(user=self.student).exists())
         self.free.allow_bank = False; self.free.allow_pdf_reports = False; self.free.save()
         self.assertRedirects(self.client.get(reverse("questions:practice_bank")), reverse("payments:plans"), fetch_redirect_response=False)
         self.assertRedirects(self.client.get(reverse("questions:practice_report", args=[attempt.attempt_uuid])), reverse("payments:plans"), fetch_redirect_response=False)

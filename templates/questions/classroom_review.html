@@ -8,6 +8,7 @@
   <a class="btn btn-light" href="{% url 'questions:classroom_paper_pdf' paper.pk %}" target="_blank" rel="noopener">Open original PDF</a>
 </div>
 {% include 'questions/_paper_target.html' %}
+{% if can_publish_series and paper.status != 'pending' and paper.status != 'processing' %}<div class="alert alert-light border d-flex flex-wrap justify-content-between align-items-center gap-2"><span><strong>Series administrator?</strong> Review the paper here, then publish a separate private snapshot to an empty series slot.</span><a class="btn btn-sm btn-outline-primary" href="{% url 'questions:series_paper_publish' paper.pk %}">Publish to series</a></div>{% endif %}
 {% if paper.status == 'pending' or paper.status == 'processing' %}
   <div class="alert alert-info">Extraction is running. Refresh this page to check progress.</div>
 {% else %}
@@ -19,6 +20,7 @@
   <div class="col-xl-7"><div class="card border shadow-sm p-4 h-100">
     <h4 class="fw-bold">Create a timed session</h4>
     <p class="text-muted small">Review below, then create the test and its join code in one step. Students sign in to their student account and join from any location with access to this app.</p>
+    <p class="small text-warning-emphasis">Students see original images during the test and their score and answers afterward. Check text and crops for printed answers: delaying the separate answer key cannot hide answers already present in an image.</p>
     <form method="post" novalidate>{% csrf_token %}{{ form.creation_token }}
       {% if form.non_field_errors %}<div class="alert alert-danger" role="alert">{{ form.non_field_errors|striptags }}</div>{% endif %}
       {% if form.creation_token.errors %}<div class="alert alert-danger" role="alert">{{ form.creation_token.errors|striptags }} Reload this page to try again.</div>{% endif %}
@@ -42,7 +44,7 @@
     <div class="d-flex justify-content-between border-bottom py-3"><span>Total possible marks</span><strong>{{ total_marks }}</strong></div>
     <div class="d-flex justify-content-between py-3"><span>Keys saved in paper</span><strong>{{ keyed_count }} / {{ total_questions }}</strong></div>
     <p class="small text-muted">Pasted keys are applied to the new test. Missing keys are ungraded. A created test is a separate snapshot: later paper or key edits do not change existing tests or regrade submissions.</p>
-    <p class="small text-muted mb-0">A ranked report uses the best fully keyed completed attempt per student; partial, ungraded and active attempts are clearly separated.</p>
+    <p class="small text-muted mb-0">One activation gives this test 24 hours of access across multiple classroom codes. Each student may attempt the test once; partial, ungraded and active attempts are clearly separated.</p>
   </div></div>
 </div>
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"><div><h4 class="fw-bold mb-0">Questions &amp; original images</h4><span class="small text-muted">Edit or exclude incomplete questions; verify labels against the printed choices.</span></div>

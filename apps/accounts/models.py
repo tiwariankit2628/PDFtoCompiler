@@ -35,6 +35,10 @@ class User(AbstractUser):
     )
     phone = models.CharField("Phone Number", max_length=20, blank=True)
     is_verified = models.BooleanField("Email Verified", default=False)
+    # Existing accounts are grandfathered; public registrations require a
+    # verified address before starting new work. Active attempts remain usable.
+    verification_required = models.BooleanField(default=False, editable=False)
+    verification_sent_at = models.DateTimeField(null=True, blank=True, editable=False)
     verification_token = models.UUIDField(
         "Email Verification Token", default=uuid.uuid4, editable=False
     )
@@ -79,6 +83,10 @@ class User(AbstractUser):
 
     def __str__(self):
         return f"{self.username} ({self.get_role_display()})"
+
+    @property
+    def needs_email_verification(self):
+        return self.verification_required and not self.is_verified
 
     @property
     def is_student(self):

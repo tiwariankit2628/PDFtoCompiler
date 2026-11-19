@@ -1,16 +1,17 @@
 from django.contrib import admin
-from django.db.models import Q
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.core.exceptions import PermissionDenied
+from django.db import OperationalError, connection, transaction
+from django.http import Http404, HttpResponse
+from django.contrib.admin.utils import unquote
 from .models import User
+from .record_safety import has_protected_account_records
 
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
     def has_delete_permission(self, request, obj=None):
-        if obj and (obj.uploaded_papers.filter(Q(is_student_private=True) | Q(is_classroom_private=True)).exists()
-                    or obj.created_exams.filter(Q(is_private_practice=True) | Q(is_classroom_only=True)).exists()
-                    or obj.exam_attempts.filter(Q(exam__is_private_practice=True) | Q(classroom_session__isnull=False)).exists()
-                    or obj.practice_checkouts.exists()):
+        if obj and has_protected_account_records(obj):
             return False
         return super().has_delete_permission(request, obj)
 
@@ -20,6 +21,66 @@ class UserAdmin(BaseUserAdmin):
         actions = super().get_actions(request)
         actions.pop("delete_selected", None)
         return actions
+
+    def delete_view(self, request, object_id, extra_context=None):
+        # Django reads the deletion preview before writing its admin log. On
+        # SQLite a concurrent start can make that read transaction too stale to
+        # upgrade to a writer; the parent atomic block rolls back before this
+        # retryable response is returned. Never turn lock contention into a 500.
+        try:
+            return super().delete_view(request, object_id, extra_context)
+        except OperationalError as exc:
+            if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
+                raise
+            response = HttpResponse("This account is busy. Please retry.", status=503)
+            response["Retry-After"] = "1"
+            return response
+
+    def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
+        if request.method != "POST" or object_id is None:
+            return super().changeform_view(request, object_id, form_url, extra_context)
+        try:
+            pk = int(unquote(object_id))
+        except (TypeError, ValueError):
+            return super().changeform_view(request, object_id, form_url, extra_context)
+        try:
+            with transaction.atomic():
+                # Lock before the admin form reads its instance. Otherwise a
+                # pending email resend/change can be overwritten by stale
+                # verification fields even though save_model locks later.
+                from apps.payments.services import lock_practice_user
+                try:
+                    lock_practice_user(User(pk=pk))
+                except User.DoesNotExist:
+                    raise Http404() from None
+                return super().changeform_view(request, object_id, form_url, extra_context)
+        except OperationalError as exc:
+            if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
+                raise
+            response = HttpResponse("This account is busy. Please retry.", status=503)
+            response["Retry-After"] = "1"
+            return response
+
+    def delete_model(self, request, obj):
+        # Recheck while holding the same account lock used by commercial starts
+        # and publications; a record may have appeared since confirmation.
+        from apps.payments.services import lock_practice_user
+        locked = lock_practice_user(obj)
+        if has_protected_account_records(locked):
+            raise PermissionDenied("The account has protected assessment or commercial records.")
+        super().delete_model(request, locked)
+
+    def save_model(self, request, obj, form, change):
+        email_changed = False
+        if change and (obj.is_student or obj.is_teacher):
+            from apps.payments.services import lock_practice_user
+            from .verification import invalidate_changed_email
+            original = lock_practice_user(obj)
+            email_changed = invalidate_changed_email(obj, original.email)
+        super().save_model(request, obj, form, change)
+        if email_changed:
+            from .verification import notify_admin_of_verification
+            transaction.on_commit(lambda: notify_admin_of_verification(request, obj))
 
     list_display = (
         "username",

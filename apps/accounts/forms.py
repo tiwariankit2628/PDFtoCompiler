@@ -357,6 +357,7 @@ class StudentAdminUpdateForm(BootstrapFormMixin, forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.original_target_exam = self.instance.target_exam
+        self.original_email = self.instance.email
         _configure_student_target(self)
 
     def clean_target_exam(self):
@@ -448,6 +449,10 @@ class TeacherAdminCreateForm(BootstrapFormMixin, forms.ModelForm):
 
 class TeacherAdminUpdateForm(BootstrapFormMixin, forms.ModelForm):
     """Admin form to edit existing Teacher / Content Manager."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.original_email = self.instance.email
 
     assigned_categories = forms.ModelMultipleChoiceField(
         queryset=Category.objects.all(),

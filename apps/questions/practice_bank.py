@@ -480,7 +480,8 @@ class BankTestCreateView(PrivateStudentMixin, View):
                 if positive > Decimal("9999.99") or negative > Decimal("9999.99"):
                     messages.error(request, "Selected marks exceed the supported total of 9999.99.")
                     return redirect("questions:practice_bank")
-                consume(request.user, "test_creations")
+                # Bank-based tests do not spend PDF credits; a given test
+                # still permits only one attempt under the new policy.
                 exam = Exam.objects.create(is_private_practice=True, slug=f"practice-{uuid.uuid4().hex}",
                     title=form.cleaned_data["title"], category=_system_category(), creator=request.user,
                     target_type=request.user.exam_track,

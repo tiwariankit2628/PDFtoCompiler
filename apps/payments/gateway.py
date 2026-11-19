@@ -25,7 +25,8 @@ def gateway_ready(require_webhook=False):
     secret = settings.RAZORPAY_KEY_SECRET or ""
     webhook = settings.RAZORPAY_WEBHOOK_SECRET or ""
     # Never accept live keys, defaults, or obvious example values.
-    invalid = (not re.fullmatch(r"rzp_test_[A-Za-z0-9]+", key)
+    invalid = (not settings.ALLOW_TEST_PAYMENT_CREDITS
+               or not re.fullmatch(r"rzp_test_[A-Za-z0-9]+", key)
                or not secret.strip() or any(x in secret.lower() for x in ("placeholder", "changeme", "example")))
     if require_webhook:
         invalid = invalid or not webhook.strip() or any(x in webhook.lower() for x in ("placeholder", "changeme", "example"))

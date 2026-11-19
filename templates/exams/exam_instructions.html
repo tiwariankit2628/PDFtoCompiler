@@ -23,6 +23,8 @@
                 </span>
                 {% if exam.is_private_practice %}
                     <span class="badge bg-success px-3 py-2 fw-bold">PRIVATE PRACTICE</span>
+                {% elif series_exam %}
+                    <span class="badge bg-success px-3 py-2 fw-bold">{% if exam.series_slot.position == 1 %}FREE SERIES TEST{% else %}SERIES TEST{% endif %}</span>
                 {% elif exam.is_free %}
                     <span class="badge bg-success px-3 py-2 fw-bold">FREE TEST</span>
                 {% else %}
@@ -193,7 +195,7 @@
                     </li>{% endif %}
                     <li class="list-group-item d-flex justify-content-between px-0">
                         <span class="text-muted">Attempt Limit:</span>
-                        <strong>{% if exam.is_private_practice %}{% if private_attempt_limit != None %}{{ completed_count }}/{{ private_attempt_limit }} used{% else %}Unlimited{% endif %}{% elif exam.max_attempts %}{{ completed_count }}/{{ exam.max_attempts }} Used{% else %}Unlimited{% endif %}</strong>
+                        <strong>{% if series_exam %}{{ completed_count }}/1 used{% elif exam.is_private_practice %}{% if private_attempt_limit != None %}{{ completed_count }}/{{ private_attempt_limit }} used{% else %}Unlimited{% endif %}{% elif exam.max_attempts %}{{ completed_count }}/{{ exam.max_attempts }} Used{% else %}Unlimited{% endif %}</strong>
                     </li>
                 </ul>
 

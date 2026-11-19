@@ -65,14 +65,15 @@
                 </div>
 
                 <!-- Classroom scores include only saved, confirmed-key grading decisions. -->
-                {% if show_results and attempt.classroom_session_id %}
+                {% if show_results and attempt.classroom_session_id or is_series %}
                 <div class="card bg-light border p-4 rounded-4 mb-4 text-start">
-                    <h5 class="fw-bold mb-2"><i class="bi bi-clipboard-check text-primary me-2" aria-hidden="true"></i>Classroom result</h5>
+                    <h5 class="fw-bold mb-2"><i class="bi bi-clipboard-check text-primary me-2" aria-hidden="true"></i>{% if is_series %}Series result{% else %}Classroom result{% endif %}</h5>
                     <p class="small text-muted">Only answers with confirmed keys are scored. Missing or unverified keys are never treated as wrong.</p>
                     {% if classroom_summary.score_available %}<p class="mb-2">Score on confirmed keys: <strong>{{ attempt.score_obtained }}</strong>{% if not classroom_summary.fully_keyed %} <span class="text-muted small">(may be partial)</span>{% endif %}</p>{% else %}<p class="mb-2">A score is not available from the saved grading information.</p>{% endif %}
+                    <p class="small">{{ classroom_summary.counts.correct }} correct · {{ classroom_summary.counts.partial }} partial · {{ classroom_summary.counts.incorrect }} incorrect · {{ classroom_summary.counts.unattempted }} unattempted · {{ classroom_summary.counts.ungraded }} answered, ungraded</p>
                     {% if classroom_summary.pending_keys %}<p class="small text-warning-emphasis">{{ classroom_summary.pending_keys }} question{{ classroom_summary.pending_keys|pluralize }} had no confirmed key when graded.</p>{% endif %}
                     {% if classroom_summary.unknown_keys %}<p class="small text-muted">Some unanswered questions do not have a recorded key status.</p>{% endif %}
-                    <a href="{% url 'exams:student_result_detail' attempt.attempt_uuid %}" class="btn btn-cbt-primary btn-sm">View classroom result</a>
+                    <a href="{% url 'exams:student_result_detail' attempt.attempt_uuid %}" class="btn btn-cbt-primary btn-sm">View result &amp; review</a>
                 </div>
                 {% elif show_results and attempt.has_ungraded_keys %}
                 <div class="card bg-light border p-4 rounded-4 mb-4 text-start">
@@ -123,7 +124,9 @@
                 </div>
                 {% elif exam.is_private_practice %}
                 <div class="alert alert-info text-start mb-4">
-                    This is private practice. Only questions with an answer key are graded; questions without one are ungraded.
+                    This is private practice. Only confirmed keys are graded; questions without one are ungraded.
+                    {% if classroom_summary.score_available %}<p class="mt-2 mb-1">Score on confirmed keys: <strong>{{ attempt.score_obtained }}</strong>{% if not classroom_summary.fully_keyed %} (partial){% endif %}.</p>{% else %}<p class="mt-2 mb-1">No confirmed-key score is available.</p>{% endif %}
+                    <p class="small mb-0">{{ classroom_summary.counts.correct }} correct · {{ classroom_summary.counts.partial }} partial · {{ classroom_summary.counts.incorrect }} incorrect · {{ classroom_summary.counts.unattempted }} unattempted · {{ classroom_summary.counts.ungraded }} answered, ungraded</p>
                     <div class="mt-2"><a class="btn btn-primary" href="{% url 'questions:practice_result' attempt.attempt_uuid %}">Review my answers</a></div>
                 </div>
                 {% else %}

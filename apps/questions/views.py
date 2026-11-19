@@ -13,7 +13,9 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
 from django.views.generic import CreateView, DetailView, ListView, UpdateView, View
 
-from apps.core.permissions import TeacherRequiredMixin
+from apps.accounts.models import User
+from apps.core.permissions import (FreshTeacherWriteMixin, TeacherRequiredMixin,
+                                   discard_rolled_back_uploads, lock_active_teacher)
 from apps.core.utils import log_audit
 from .extractor import PDFQuestionExtractor
 from .answer_key_validation import (answer_keys_set, canonical_answer, confirmed_staged_key,
@@ -238,13 +240,38 @@ class QuestionPaperUploadView(TeacherRequiredMixin, CreateView):
 
     def form_valid(self, form):
         paper = form.save(commit=False)
-        paper.uploaded_by = self.request.user
         paper.file_size_bytes = form.cleaned_data["pdf_file"].size
         paper.total_pages = getattr(form, "pdf_page_count", 0)
         # Upload is local-only (enforced by the form). Cloud/MinerU provider code
         # and migrations are preserved for future use but are not offered here.
         paper.extraction_mode = QuestionPaperUpload.ExtractionMode.LOCAL
-        paper.save()
+        field = paper.pdf_file
+        new_uploads = [field] if field and not getattr(field, "_committed", True) else []
+        try:
+            with transaction.atomic():
+                # Commit the new source under the same account lock as account
+                # deletion and email edits, then release it before local OCR.
+                user = lock_active_teacher(self.request.user)
+                if user.needs_email_verification:
+                    return redirect("accounts:verification_pending")
+                from apps.exams.models import Category
+                if not Category.objects.filter(pk=paper.category_id, is_active=True).exists():
+                    raise PermissionDenied("This category is no longer active.")
+                assigned = user.assigned_categories.filter(is_active=True)
+                if user.is_teacher and not user.is_admin_role and assigned.exists() and not assigned.filter(pk=paper.category_id).exists():
+                    raise PermissionDenied("You no longer have permission for this category.")
+                self.request.user = user
+                paper.uploaded_by = user
+                paper.save()
+        except Exception as exc:
+            discard_rolled_back_uploads(new_uploads)
+            if isinstance(exc, User.DoesNotExist):
+                raise Http404() from None
+            if isinstance(exc, OperationalError) and connection.vendor == "sqlite" and "locked" in str(exc).lower():
+                response = HttpResponse("The account is busy. Please retry the upload.", status=503)
+                response["Retry-After"] = "1"
+                return response
+            raise
 
         log_audit(
             self.request.user,
@@ -477,7 +504,7 @@ class ExtractedQuestionFlagToggleView(TeacherRequiredMixin, View):
         return redirect("questions:paper_review", pk=q.paper.pk)
 
 
-class ExtractedQuestionApproveView(TeacherRequiredMixin, View):
+class ExtractedQuestionApproveView(TeacherRequiredMixin, FreshTeacherWriteMixin, View):
     """
     Approves a single question and pushes it into the permanent Question Bank.
     """
@@ -563,7 +590,7 @@ class ExtractedQuestionApproveView(TeacherRequiredMixin, View):
         return redirect("questions:paper_review", pk=paper.pk)
 
 
-class QuestionPaperBulkApproveView(TeacherRequiredMixin, View):
+class QuestionPaperBulkApproveView(TeacherRequiredMixin, FreshTeacherWriteMixin, View):
     """
     Bulk approves all valid non-rejected questions in a paper into the permanent Question Bank.
     Detects and prevents duplicate imports into the Question Bank.
@@ -762,7 +789,7 @@ class QuestionBankListView(TeacherRequiredMixin, ListView):
         return context
 
 
-class QuestionCreateView(TeacherRequiredMixin, CreateView):
+class QuestionCreateView(TeacherRequiredMixin, FreshTeacherWriteMixin, CreateView):
     """
     Allows authorized Teachers and Admins to manually author questions
     with LaTeX math formulas, MCQ options, and diagram image attachments.
@@ -790,6 +817,7 @@ class QuestionCreateView(TeacherRequiredMixin, CreateView):
             question.answer_status = (AnswerStatus.MANUALLY_VERIFIED if correct_key and (not typed or question.typed_key_verified)
                                       else AnswerStatus.NEEDS_REVIEW)
             question.creator = self.request.user
+            self.track_new_upload(question.image)
             question.save()
 
             opt_map = {

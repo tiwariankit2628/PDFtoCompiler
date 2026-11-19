@@ -47,6 +47,15 @@ class CoreViewTests(TestCase):
             self.assertEqual(resp.status_code, 200)
             self.assertContains(resp, "TestForge CBT")
 
+    def test_about_discloses_test_only_payments_and_extraction_limits(self):
+        response = self.client.get(reverse("core:about"))
+        self.assertContains(response, "Razorpay · test mode only")
+        self.assertContains(response, "real payments are not yet available")
+        self.assertContains(response, "unsent changes can be lost")
+        self.assertContains(response, "extraction can miss or misread content")
+        self.assertContains(response, "can themselves contain printed answers")
+        self.assertNotContains(response, "recurring plans, coupons")
+
     def test_dashboard_router_redirects_by_role(self):
         # Student redirect
         self.client.login(username="student_user", password="Password123!")

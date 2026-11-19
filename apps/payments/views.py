@@ -15,7 +15,7 @@ from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
-from apps.core.permissions import StudentRequiredMixin
+from apps.core.permissions import ActiveUserRequiredMixin
 from apps.core.utils import log_audit
 from . import gateway
 from .gateway import GatewayUnavailable, InvalidPayment
@@ -25,7 +25,7 @@ from .services import usage_summary
 logger = logging.getLogger(__name__)
 
 
-class PrivateBillingMixin(StudentRequiredMixin):
+class PrivateBillingMixin(ActiveUserRequiredMixin):
     def dispatch(self, request, *args, **kwargs):
         response = super().dispatch(request, *args, **kwargs)
         patch_cache_control(response, private=True, no_store=True)
@@ -38,15 +38,28 @@ class PlansView(PrivateBillingMixin, View):
         from django.core.paginator import Paginator
         checkouts = Paginator(Checkout.objects.filter(user=request.user).select_related("plan", "entitlement")
                               .prefetch_related("payments"), 20).get_page(request.GET.get("billing_page"))
+        from .models import PackCheckout
+        from .packs import balances, eligible_products, has_series_access
+        from apps.exams.series import series_ready
+        products = []
+        for product in eligible_products(request.user):
+            is_series = product.code.startswith("series_")
+            products.append({"product": product,
+                "ready": not is_series or series_ready(request.user.exam_track),
+                "owned": is_series and has_series_access(request.user, request.user.exam_track)})
         return render(request, "payments/plans.html", {
-            "summary": usage_summary(request.user),
-            "plans": PracticePlan.objects.filter(is_available=True).order_by("price_paise", "name"),
+            "summary": usage_summary(request.user) if request.user.is_student else None,
+            "balance_rows": balances(request.user), "products": products,
+            "pack_checkouts": PackCheckout.objects.filter(user=request.user).prefetch_related("payments", "grant")[:40],
             "checkouts": checkouts, "gateway_ready": gateway.gateway_ready(),
         })
 
 
 class CreateCheckoutView(PrivateBillingMixin, View):
     def post(self, request, slug):
+        if not settings.LEGACY_BILLING_NEW_CHECKOUTS or not request.user.is_student:
+            messages.info(request, "Legacy plans are no longer sold. Existing subscriptions remain in billing history.")
+            return redirect("payments:plans")
         plan = get_object_or_404(PracticePlan, slug=slug, is_available=True)
         if plan.billing == PracticePlan.Billing.FREE or plan.price_paise <= 0:
             raise Http404()
@@ -189,9 +202,13 @@ def razorpay_webhook(request):
                 if checkout:
                     gateway.activate_capture(checkout.pk, payment, request=request)
                 elif isinstance(order_id, str) and order_id.startswith("order_") and not payment.get("invoice_id"):
-                    # Do not acknowledge a potentially unresolved order: a
-                    # signed retry can be processed after safe reconciliation.
-                    raise InvalidPayment("Order not yet linked.")
+                    from .models import PackCheckout
+                    from .pack_gateway import activate_capture
+                    pack = PackCheckout.objects.filter(provider_order_id=order_id).first()
+                    if pack:
+                        activate_capture(pack.pk, payment, request=request)
+                    else:
+                        raise InvalidPayment("Order not yet linked.")
             elif event_type == "subscription.charged":
                 subscription_id = subscription.get("id")
                 checkout = (Checkout.objects.filter(provider_subscription_id=subscription_id, billing=PracticePlan.Billing.RECURRING).first()
@@ -225,8 +242,21 @@ def razorpay_webhook(request):
                             log_audit(checkout.user, "PRACTICE_PAYMENT_FAILED", f"Payment failed for checkout {checkout.reference}.", request=request)
                     # An order may be retried with a new provider payment ID.
                     # Keep the checkout open; a failure is not a paid access grant.
+                elif not checkout and isinstance(order_id, str) and order_id.startswith("order_"):
+                    from .models import PackCheckout
+                    from .pack_gateway import record_failure
+                    pack = PackCheckout.objects.filter(provider_order_id=order_id).first()
+                    if pack:
+                        record_failure(pack, payment, request=request)
+                    else:
+                        raise InvalidPayment("Order not yet linked.")
             elif event_type == "refund.processed":
-                gateway.apply_refund(refund.get("payment_id"), refund, request=request)
+                from .models import PackPayment
+                from .pack_gateway import apply_refund
+                if PackPayment.objects.filter(provider_payment_id=refund.get("payment_id")).exists():
+                    apply_refund(refund.get("payment_id"), refund, request=request)
+                else:
+                    gateway.apply_refund(refund.get("payment_id"), refund, request=request)
             WebhookEvent.objects.create(event_id=event_id, event_type=event_type)
     except (InvalidPayment, IntegrityError, KeyError, TypeError, ValueError):
         # Roll back the event marker so Razorpay can retry after reconciliation.

@@ -241,9 +241,10 @@ class StudentPracticeTests(TestCase):
         self.assertEqual(attempt.status, ExamAttempt.AttemptStatus.TIMED_OUT)
         self.assertIn(str(attempt.attempt_uuid), response.url)
         self.assertEqual(ExamAttempt.objects.filter(exam=exam).count(), 1)
-        # A subsequent explicit start is a fresh attempt, not a resumed timer.
-        next_attempt = self.start(exam)
-        self.assertNotEqual(next_attempt.pk, attempt.pk)
+        # Expiry is final; subsequent starts show the same saved result.
+        again = self.client.post(reverse("exams:exam_start", args=[exam.slug]))
+        self.assertRedirects(again, reverse("exams:exam_completed", args=[attempt.attempt_uuid]), fetch_redirect_response=False)
+        self.assertEqual(ExamAttempt.objects.filter(exam=exam).count(), 1)
 
     def test_save_after_expiry_is_rejected_and_existing_answer_preserved(self):
         paper = self.upload()
@@ -810,4 +811,5 @@ class PrivateAttemptConcurrencyTests(TransactionTestCase):
         attempt.refresh_from_db()
         self.assertEqual(attempt.expires_at - attempt.started_at, timedelta(minutes=45))
         self.assertEqual(ExamAttempt.objects.filter(exam=exam).count(), 1)
-        self.assertEqual(PracticeUsage.objects.get(user=student).attempts, 1)
+        # Private attempts no longer spend the old monthly counter.
+        self.assertFalse(PracticeUsage.objects.filter(user=student, attempts__gt=0).exists())

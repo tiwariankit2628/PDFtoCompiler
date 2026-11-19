@@ -1,0 +1,16 @@
+{% extends 'dashboard_base.html' %}
+{% block title %}Manage test series | {{ PLATFORM_NAME }}{% endblock %}
+{% block dashboard_content %}
+<div class="review-hero p-4 mb-4 d-flex flex-wrap justify-content-between align-items-center gap-3">
+  <div><span class="workspace-kicker">ADMINISTRATION / SERIES</span><h1 class="h3 fw-bold mt-2">Curate the test series</h1><p class="review-hero-subtitle mb-0">Two separate tracks. Real papers and human-confirmed keys only.</p></div>
+  <a class="btn btn-light" href="{% url 'questions:classroom_paper_upload' %}">Upload a private paper</a>
+</div>
+<div class="alert alert-light border small">Upload a paper locally, review its questions, images and answer keys, and choose <strong>Publish to series</strong> on its review page. Published slots cannot be replaced. A series pack is offered only when all 16 tests are available with confirmed keys. Test 1 can be used free before the rest are ready. No classroom credits are used.</div>
+<div class="alert alert-warning small">Students see their score and own answers immediately. Delaying the separate answer key does not conceal printed answers in a source image or answers inferred from scores. Inspect and correct source crops before publication.</div>
+{% for group in groups %}<section class="surface-card p-4 mb-4">
+  <div class="d-flex flex-wrap justify-content-between gap-2 align-items-center mb-3"><div><h2 class="h4 fw-bold mb-1">{{ group.series.title }}</h2><span class="text-muted small">{{ group.series.get_track_display }}</span></div><span class="badge {% if group.on_sale %}text-bg-success{% else %}text-bg-light border text-dark{% endif %}">{% if group.on_sale %}Ready for test-mode sale{% else %}Not ready for sale{% endif %}</span></div>
+  <div class="table-responsive"><table class="table align-middle small mb-0"><thead><tr><th>Test</th><th>Paper</th><th>Readiness</th><th>Answer-key release</th></tr></thead><tbody>
+  {% for row in group.rows %}<tr><td class="fw-bold">{{ row.slot.position|stringformat:'02d' }}{% if row.slot.position == 1 %} <span class="badge text-bg-light border">Free</span>{% endif %}</td><td>{% if row.slot.exam_id %}{{ row.slot.exam.title }}{% else %}<span class="text-muted">Empty</span>{% endif %}</td><td>{% if not row.slot.exam_id %}Awaiting content{% elif row.ready and row.keys_confirmed %}Ready{% elif not row.keys_confirmed %}Confirmed keys needed{% else %}Unavailable: review status, track or private assets{% endif %}</td><td>{% if row.slot.exam_id %}{% if row.slot.exam.allow_review_answers %}Released{% else %}<form method="post" action="{% url 'exams:series_release_keys' row.slot.pk %}">{% csrf_token %}<button class="btn btn-sm btn-outline-primary" type="submit">Release keys</button></form>{% endif %}{% else %}—{% endif %}</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>{% endfor %}
+{% endblock %}

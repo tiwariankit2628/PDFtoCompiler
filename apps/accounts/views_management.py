@@ -20,6 +20,30 @@ from .forms import (
 from .models import User
 
 
+class AccountUpdateLockMixin:
+    """Construct student/teacher edit forms only after locking the account."""
+
+    def post(self, request, *args, **kwargs):
+        from apps.payments.services import lock_practice_user
+        try:
+            with transaction.atomic():
+                # Starts, public authoring and profile changes use the same row.
+                # A form built before waiting could overwrite a newer email,
+                # verification token, status or permissions with stale values.
+                try:
+                    lock_practice_user(User(pk=kwargs["pk"]))
+                except User.DoesNotExist:
+                    from django.http import Http404
+                    raise Http404() from None
+                return super().post(request, *args, **kwargs)
+        except OperationalError as exc:
+            if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
+                raise
+            response = HttpResponse("The account is busy. Please retry.", status=503)
+            response["Retry-After"] = "1"
+            return response
+
+
 # ==============================================================================
 # 1. STUDENT MANAGEMENT
 # ==============================================================================
@@ -109,7 +133,7 @@ class StudentDetailView(AdminRequiredMixin, DetailView):
         return context
 
 
-class StudentUpdateView(AdminRequiredMixin, UpdateView):
+class StudentUpdateView(AdminRequiredMixin, AccountUpdateLockMixin, UpdateView):
     """Edits student candidate details."""
 
     model = User
@@ -120,27 +144,12 @@ class StudentUpdateView(AdminRequiredMixin, UpdateView):
     def get_queryset(self):
         return User.objects.filter(role=User.Roles.STUDENT)
 
-    def post(self, request, *args, **kwargs):
-        from apps.payments.services import lock_practice_user
-        try:
-            with transaction.atomic():
-                # Acquire before constructing/validating the form, and in the
-                # same order as candidate starts and student profile changes.
-                try:
-                    lock_practice_user(User(pk=kwargs["pk"]))
-                except User.DoesNotExist:
-                    from django.http import Http404
-                    raise Http404() from None
-                return super().post(request, *args, **kwargs)
-        except OperationalError as exc:
-            if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
-                raise
-            response = HttpResponse("The student account is busy. Please retry.", status=503)
-            response["Retry-After"] = "1"
-            return response
-
     def form_valid(self, form):
+        from .verification import invalidate_changed_email, notify_admin_of_verification
+        email_changed = invalidate_changed_email(form.instance, form.original_email)
         response = super().form_valid(form)
+        if email_changed:
+            transaction.on_commit(lambda: notify_admin_of_verification(self.request, self.object))
         log_audit(
             self.request.user,
             "STUDENT_UPDATED",
@@ -276,7 +285,7 @@ class TeacherDetailView(AdminRequiredMixin, DetailView):
         return context
 
 
-class TeacherUpdateView(AdminRequiredMixin, UpdateView):
+class TeacherUpdateView(AdminRequiredMixin, AccountUpdateLockMixin, UpdateView):
     """Edits teacher profile and updates permitted categories."""
 
     model = User
@@ -288,7 +297,11 @@ class TeacherUpdateView(AdminRequiredMixin, UpdateView):
         return User.objects.filter(role=User.Roles.TEACHER)
 
     def form_valid(self, form):
+        from .verification import invalidate_changed_email, notify_admin_of_verification
+        email_changed = invalidate_changed_email(form.instance, form.original_email)
         response = super().form_valid(form)
+        if email_changed:
+            transaction.on_commit(lambda: notify_admin_of_verification(self.request, self.object))
         log_audit(
             self.request.user,
             "TEACHER_UPDATED",
@@ -441,24 +454,39 @@ class AdminUserDeleteView(SuperAdminRequiredMixin, View):
     """Super Admin deletes an Administrator account."""
 
     def post(self, request, pk):
-        admin_user = get_object_or_404(User, pk=pk, role__in=[User.Roles.ADMIN, User.Roles.SUPER_ADMIN])
+        from apps.payments.services import lock_practice_user
+        from django.db.models.deletion import ProtectedError
+        from django.http import Http404
+        from .record_safety import has_protected_account_records
 
-        if admin_user == request.user:
-            messages.error(request, "You cannot delete your own account.")
+        try:
+            with transaction.atomic():
+                try:
+                    admin_user = lock_practice_user(User(pk=pk))
+                except User.DoesNotExist:
+                    raise Http404() from None
+                if admin_user.role not in (User.Roles.ADMIN, User.Roles.SUPER_ADMIN):
+                    raise Http404()
+                if admin_user == request.user:
+                    messages.error(request, "You cannot delete your own account.")
+                    return redirect("accounts:admin_list")
+                if admin_user.is_super_admin:
+                    messages.error(request, "Super Administrator accounts cannot be deleted.")
+                    return redirect("accounts:admin_list")
+                if has_protected_account_records(admin_user):
+                    messages.error(request, "Cannot delete an account with assessment or billing records.")
+                    return redirect("accounts:admin_list")
+                username = admin_user.username
+                admin_user.delete()
+        except ProtectedError:
+            messages.error(request, "Cannot delete this account while protected records refer to it.")
             return redirect("accounts:admin_list")
-
-        if admin_user.is_super_admin:
-            messages.error(request, "Super Administrator accounts cannot be deleted.")
-            return redirect("accounts:admin_list")
-
-        if (admin_user.uploaded_papers.filter(is_student_private=True).exists()
-                or admin_user.created_exams.filter(is_private_practice=True).exists()
-                or admin_user.exam_attempts.filter(exam__is_private_practice=True).exists()):
-            messages.error(request, "Cannot delete an account that contains private practice data.")
-            return redirect("accounts:admin_list")
-
-        username = admin_user.username
-        admin_user.delete()
+        except OperationalError as exc:
+            if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
+                raise
+            response = HttpResponse("This account is busy. Please retry.", status=503)
+            response["Retry-After"] = "1"
+            return response
         log_audit(
             request.user,
             "ADMIN_DELETED",

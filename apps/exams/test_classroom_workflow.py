@@ -8,6 +8,7 @@ import uuid
 from datetime import timedelta
 from decimal import Decimal
 from unittest import skipUnless
+from unittest.mock import patch
 
 import pymupdf as fitz
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -42,7 +43,7 @@ def classroom_pdf():
     return data
 
 
-@override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"])
+@override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"], ALLOW_TEST_PAYMENT_CREDITS=True)
 class ClassroomWorkflowTests(TestCase):
     def setUp(self):
         root = tempfile.TemporaryDirectory()
@@ -94,6 +95,29 @@ class ClassroomWorkflowTests(TestCase):
         attempt = session.attempts.get(student=student, status=ExamAttempt.AttemptStatus.IN_PROGRESS)
         self.assertRedirects(start, reverse("exams:exam_session", args=[attempt.attempt_uuid]), fetch_redirect_response=False)
         return attempt
+
+    def test_rolled_back_classroom_upload_removes_only_its_new_private_file(self):
+        from django.conf import settings
+        existing = self.upload()
+        def private_files():
+            return {os.path.join(base, name) for base, _, names in os.walk(settings.PRIVATE_PRACTICE_ROOT)
+                    for name in names}
+        before = private_files()
+        self.assertTrue(before)
+        original_save = QuestionPaperUpload.save
+        def fail_after_file_and_row(instance, *args, **kwargs):
+            original_save(instance, *args, **kwargs)
+            raise RuntimeError("Simulated database failure")
+
+        with patch.object(QuestionPaperUpload, "save", fail_after_file_and_row):
+            with self.assertRaises(RuntimeError):
+                self.client.post(reverse("questions:classroom_paper_upload"), {
+                    "title": "Rolled-back classroom PDF", "subject": "Science", "target_type": "jee",
+                    "pdf_file": SimpleUploadedFile("rollback.pdf", classroom_pdf(), content_type="application/pdf"),
+                })
+        self.assertEqual(list(QuestionPaperUpload.objects.filter(uploaded_by=self.teacher).values_list("pk", flat=True)),
+                         [existing.pk])
+        self.assertEqual(private_files(), before)
 
     def test_real_pdf_review_create_join_save_submit_and_private_access(self):
         paper = self.upload()
@@ -264,8 +288,11 @@ class ClassroomWorkflowTests(TestCase):
         self.assertIn(self.client.get(image_url).status_code, (403, 404))
         self.assertEqual(self.client.get(reverse("exams:exam_session", args=[attempt.attempt_uuid])).status_code, 403)
 
-    def test_hidden_results_release_and_active_retake_do_not_leak_images(self):
+    def test_immediate_own_review_release_and_historical_active_attempt_privacy(self):
         paper = self.upload()
+        staged = paper.extracted_questions.order_by("question_number").first()
+        staged.explanation = "SECRET SOLUTION UNTIL RELEASE"
+        staged.save(update_fields=["explanation"])
         session = self.create_test(paper, keys="1:A, 2:A", allow_retakes="on")
         attempt = self.join_start(session)
         image_url = self.client.get(reverse("exams:exam_session", args=[attempt.attempt_uuid])).context["questions_data"][0]["crop_urls"][0]
@@ -273,34 +300,34 @@ class ClassroomWorkflowTests(TestCase):
         detail = reverse("exams:student_result_detail", args=[attempt.attempt_uuid])
         review = reverse("exams:student_result_review", args=[attempt.attempt_uuid])
         pdf = reverse("exams:student_result_pdf", args=[attempt.attempt_uuid])
-        self.assertContains(self.client.get(detail), "Results are under evaluation")
-        unreleased_review = self.client.get(review)
-        self.assertNotContains(unreleased_review, "What is two plus two")
-        self.assertNotContains(unreleased_review, image_url)
-        self.assertEqual(self.client.get(pdf).status_code, 403)
-        self.assertEqual(self.client.get(image_url).status_code, 403)
+        self.assertContains(self.client.get(detail), "SCORE ON CONFIRMED KEYS")
+        own_review = self.client.get(review)
+        self.assertContains(own_review, image_url)
+        self.assertContains(own_review, "What is two plus two")
+        self.assertNotContains(own_review, "SECRET SOLUTION UNTIL RELEASE")
+        self.assertNotContains(own_review, "Key at grading")
+        self.assertEqual(self.client.get(pdf).status_code, 200)
+        self.assertEqual(self.client.get(image_url).status_code, 200)
+        # Another participant or teacher cannot release/view this student's assets.
         self.client.force_login(self.other_teacher)
         self.assertEqual(self.client.post(reverse("exams:classroom_control", args=[session.pk]),
                                           {"action": "release_results", "confirm": "yes"}).status_code, 403)
         self.client.force_login(self.teacher)
         self.client.post(reverse("exams:classroom_control", args=[session.pk]),
                          {"action": "release_results", "confirm": "yes"})
-        session.refresh_from_db()
-        self.assertTrue(session.results_released)
         self.client.force_login(self.student)
-        self.assertContains(self.client.get(detail), "SCORE ON CONFIRMED KEYS", html=False)
-        released_review = self.client.get(review)
-        self.assertContains(released_review, image_url)
-        self.assertContains(released_review, "Original question image")
-        self.assertContains(released_review, "What is two plus two")  # available in collapsed accessible fallback
-        self.assertContains(released_review, '<details data-image-fallback class="small mb-3" >')
-        self.assertEqual(self.client.get(pdf).status_code, 200)
-        image = self.client.get(image_url)
-        self.assertEqual(image.status_code, 200)
-        self.assertTrue(response_body(image))
-        # A new live retake prevents viewing previous solutions and their images.
-        second = self.join_start(session)
-        self.assertNotEqual(attempt.pk, second.pk)
+        released = self.client.get(review)
+        self.assertContains(released, "SECRET SOLUTION UNTIL RELEASE")
+        self.assertContains(released, "Original question image")
+        # A new route start is blocked, even if the historical allow_retakes
+        # field was present in a forged POST.
+        again = self.client.post(reverse("exams:classroom_take", args=[session.pk]))
+        self.assertRedirects(again, reverse("exams:exam_completed", args=[attempt.attempt_uuid]), fetch_redirect_response=False)
+        self.assertEqual(session.attempts.count(), 1)
+        # A historical in-progress retake from before the upgrade still hides
+        # earlier solutions and assets until that active attempt ends.
+        second = ExamAttempt.objects.create(exam=session.exam, student=self.student, classroom_session=session,
+            status=ExamAttempt.AttemptStatus.IN_PROGRESS, expires_at=timezone.now() + timedelta(minutes=10))
         self.assertRedirects(self.client.get(review), reverse("exams:exam_session", args=[second.attempt_uuid]), fetch_redirect_response=False)
         self.assertEqual(self.client.get(image_url).status_code, 403)
 
@@ -327,6 +354,9 @@ class ClassroomWorkflowTests(TestCase):
         snapshot.refresh_from_db()
         self.assertNotEqual(snapshot.question_text, staged.question_text)
         self.assertEqual(snapshot.options.get(is_correct=True).option_key, "A")
+        # An edited snapshot is a different test and needs another activation.
+        from apps.payments.test_helpers import sandbox_grant
+        sandbox_grant(self.teacher, "activation")
         data.update(creation_token=str(uuid.uuid4()), answer_key_text="")
         created = self.client.post(url, data)
         self.assertEqual(created.status_code, 302, created.context and created.context["form"].errors)
@@ -373,7 +403,10 @@ class ClassroomWorkflowTests(TestCase):
                 self.client.post(reverse("exams:exam_save_answer", args=[attempt.attempt_uuid]), data=json.dumps({
                     "response_id": item["response_id"], "selected_option_id": choice["id"], "action": "navigate"}), content_type="application/json")
             self.client.post(reverse("exams:exam_submit", args=[attempt.attempt_uuid]), data="{}", content_type="application/json")
-        retake = self.join_start(session, self.student)
+        # Preserve reporting behavior for a historical active retake without
+        # using the now-disabled retake route.
+        retake = ExamAttempt.objects.create(exam=session.exam, student=self.student, classroom_session=session,
+            status=ExamAttempt.AttemptStatus.IN_PROGRESS, expires_at=timezone.now() + timedelta(minutes=20))
         self.client.force_login(self.teacher)
         monitor = self.client.get(reverse("exams:classroom_monitor", args=[session.pk])).json()
         self.assertEqual(monitor["counts"]["joined"], 2)

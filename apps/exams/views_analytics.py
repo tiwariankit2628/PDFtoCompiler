@@ -41,6 +41,10 @@ def _can_access_attempt_result(user, attempt):
         return False
     if attempt.classroom_session_id:
         return attempt.classroom_session.teacher_id == user.pk
+    if hasattr(attempt.exam, "series_slot"):
+        # A category assignment is not permission to read paid-series student
+        # answers. The student and administrators were handled above.
+        return False
     return (attempt.exam.creator_id == user.pk
             or user.assigned_categories.filter(pk=attempt.exam.category_id).exists())
 
@@ -68,10 +72,8 @@ class PrivateResultRedirectMixin:
                 else:
                     return redirect("exams:exam_session", attempt_uuid=active.attempt_uuid)
         response = super().dispatch(request, *args, **kwargs)
-        if attempt.classroom_session_id:
-            # Results and answer reviews are private to this attempt even after
-            # the session's teacher has released them to its participants.
-            patch_cache_control(response, private=True, no_store=True)
+        # Results and answer reviews belong to this attempt even after release.
+        patch_cache_control(response, private=True, no_store=True)
         return response
 
 
@@ -89,7 +91,7 @@ class StudentResultDetailView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
     slug_url_kwarg = "attempt_uuid"
 
     def get_template_names(self):
-        if self.object.classroom_session_id:
+        if self.object.classroom_session_id or hasattr(self.object.exam, "series_slot"):
             return ["exams/classroom/result.html"]
         return super().get_template_names()
 
@@ -116,19 +118,23 @@ class StudentResultDetailView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
 
         # Check Result Visibility Settings
         student_scores_visible = (attempt.classroom_session.student_results_visible if attempt.classroom_session_id
-                                  else exam.show_result_immediately)
+                                  else exam.show_result_immediately or hasattr(exam, "series_slot"))
         can_view_scores = bool(student_scores_visible or user.is_admin_role or user.is_teacher)
         context["can_view_scores"] = can_view_scores
         context["exam"] = exam
 
-        if attempt.classroom_session_id:
-            # The ordinary institutional report assumes every answer has a key;
-            # classroom attempts explicitly allow unverified/ungraded answers.
+        is_series = not attempt.classroom_session_id and hasattr(exam, "series_slot")
+        context["is_series"] = is_series
+        if attempt.classroom_session_id or is_series:
+            # New series and classroom results grade confirmed keys only. The
+            # student's own review is always available after submission.
             if can_view_scores:
                 from .classroom_results import classroom_result_summary
                 context["classroom_summary"] = classroom_result_summary(attempt)
-                context["can_review"] = bool(attempt.classroom_session.student_answers_visible or user.is_admin_role or user.is_teacher)
-            is_reviewer = bool(user.is_admin_role or (user.is_teacher and attempt.classroom_session.teacher_id == user.pk))
+                context["can_review"] = bool(is_series or attempt.classroom_session.student_own_review_visible
+                                             or user.is_admin_role or user.is_teacher)
+            is_reviewer = bool(user.is_admin_role or (user.is_teacher and (
+                is_series or attempt.classroom_session.teacher_id == user.pk)))
             context["is_security_reviewer"] = is_reviewer
             if is_reviewer:
                 context["security_logs"] = attempt.security_logs.all()[:200]
@@ -194,6 +200,17 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
     slug_field = "attempt_uuid"
     slug_url_kwarg = "attempt_uuid"
 
+    def get_template_names(self):
+        attempt = self.object
+        if self.request.user.is_student:
+            if (attempt.classroom_session_id and attempt.classroom_session.student_own_review_visible
+                    and not attempt.classroom_session.student_answers_visible):
+                return ["exams/classroom/own_review.html"]
+            if (not attempt.classroom_session_id and hasattr(attempt.exam, "series_slot")
+                    and not attempt.exam.allow_review_answers):
+                return ["exams/classroom/own_review.html"]
+        return super().get_template_names()
+
     def get_object(self, queryset=None):
         attempt = super().get_object(queryset)
         user = self.request.user
@@ -211,8 +228,8 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
         user = self.request.user
 
         # Security & Policy Verification
-        student_can_review = (attempt.classroom_session.student_answers_visible if attempt.classroom_session_id
-                              else exam.allow_review_answers and (exam.show_result_immediately or exam.is_expired))
+        student_can_review = (attempt.classroom_session.student_own_review_visible if attempt.classroom_session_id
+                              else hasattr(exam, "series_slot") or exam.allow_review_answers and (exam.show_result_immediately or exam.is_expired))
         can_review = bool(student_can_review or user.is_admin_role or user.is_teacher)
         context["can_review"] = can_review
         context["exam"] = exam
@@ -283,7 +300,9 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
                 "ungraded": ("Answered, ungraded", "secondary"), "unattempted": ("Unattempted", "secondary"),
             }[status]
 
-            private_images = bool(attempt.classroom_session_id)
+            # A classroom can use an ordinary public exam, but classroom PDF
+            # snapshots and series snapshots use attempt-scoped private images.
+            private_images = bool(exam.is_classroom_only or (not attempt.classroom_session_id and hasattr(exam, "series_slot")))
             wants_crop = use_original_image(q, image_first=exam.image_first_mode, private=private_images)
             primary_crops = primary_question_crops(q, image_first=wants_crop, private=private_images)
             incomplete_pages = missing_crop_pages(q, primary_crops) if primary_crops else []
@@ -320,9 +339,10 @@ class StudentResultReviewView(ActiveUserRequiredMixin, PrivateResultRedirectMixi
         context["incorrect_total"] = sum(1 for q in reviewed_questions if q["status"] == "incorrect")
         context["unattempted_total"] = sum(1 for q in reviewed_questions if q["status"] == "unattempted")
         context["ungraded_total"] = sum(1 for q in reviewed_questions if q["status"] == "ungraded")
-        if attempt.classroom_session_id:
+        if attempt.classroom_session_id or hasattr(exam, "series_slot"):
             from .classroom_results import classroom_result_summary
             context["classroom_summary"] = classroom_result_summary(attempt)
+            context["is_series"] = not attempt.classroom_session_id
         elif attempt.has_ungraded_keys:
             from .pdf_key_results import partial_pdf_result_summary
             context["partial_summary"] = partial_pdf_result_summary(attempt)
@@ -352,16 +372,17 @@ class StudentResultPdfView(ActiveUserRequiredMixin, PrivateResultRedirectMixin, 
 
         # A PDF must obey the same release setting as the web scorecard.
         visible = (attempt.classroom_session.student_results_visible if attempt.classroom_session_id
-                   else attempt.exam.show_result_immediately)
+                   else attempt.exam.show_result_immediately or hasattr(attempt.exam, "series_slot"))
         if user.is_student and not visible:
             raise PermissionDenied("Results have not been released for this examination.")
 
         _ensure_final_for_results(attempt)
 
-        if attempt.classroom_session_id:
+        if attempt.classroom_session_id or hasattr(attempt.exam, "series_slot"):
             from .classroom_report import generate_classroom_report
             from .classroom_results import classroom_result_summary
-            pdf_bytes = generate_classroom_report(attempt, classroom_result_summary(attempt))
+            title = "Series result summary" if not attempt.classroom_session_id else "Classroom result summary"
+            pdf_bytes = generate_classroom_report(attempt, classroom_result_summary(attempt), title=title)
         elif attempt.has_ungraded_keys:
             from .classroom_report import generate_classroom_report
             from .pdf_key_results import partial_pdf_result_summary
@@ -391,9 +412,13 @@ class ExamLeaderboardView(ActiveUserRequiredMixin, DetailView):
 
     def get_queryset(self):
         queryset = super().get_queryset().filter(is_private_practice=False, is_classroom_only=False)
+        if not self.request.user.is_admin_role:
+            queryset = queryset.filter(series_slot__isnull=True)
         # Do not reveal unpublished scores through the leaderboard.
         if self.request.user.is_student:
-            queryset = student_exam_queryset(queryset.filter(show_result_immediately=True), self.request.user)
+            # Series have account-bound results; do not expose cohort scores via
+            # a guessed ordinary leaderboard URL, even without a series pack.
+            queryset = student_exam_queryset(queryset.filter(show_result_immediately=True, series_slot__isnull=True), self.request.user)
         return queryset
 
     def get_context_data(self, **kwargs):
@@ -441,9 +466,9 @@ class TeacherExamAnalyticsView(TeacherRequiredMixin, DetailView):
 
     def get_object(self, queryset=None):
         exam = super().get_object(queryset)
-        if exam.is_private_practice or exam.is_classroom_only:
-            raise Http404()
         user = self.request.user
+        if exam.is_private_practice or exam.is_classroom_only or (hasattr(exam, "series_slot") and not user.is_admin_role):
+            raise Http404()
 
         # Strict Teacher Category & Exam Ownership Scoping
         if not user.is_admin_role and exam.creator != user:
@@ -486,6 +511,8 @@ class TeacherExportExamResultsCsvView(TeacherRequiredMixin, View):
     def get(self, request, pk):
         exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False)
         user = request.user
+        if hasattr(exam, "series_slot") and not user.is_admin_role:
+            raise Http404()
 
         if not user.is_admin_role and exam.creator != user:
             if not user.assigned_categories.filter(pk=exam.category_id).exists():

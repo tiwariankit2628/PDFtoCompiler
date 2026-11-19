@@ -1,6 +1,7 @@
 from django.contrib import admin
 
-from .models import Checkout, Payment, PracticeEntitlement, PracticePlan, PracticeUsage, Refund, WebhookEvent
+from .models import (Checkout, Payment, PracticeEntitlement, PracticePlan, PracticeUsage, Refund, WebhookEvent,
+                     PackCheckout, PackPayment, PackRefund, CreditGrant, CreditUse)
 
 
 class BillingAdminOnly:
@@ -75,3 +76,29 @@ class RefundAdmin(ReadOnlyBillingAdmin):
 @admin.register(WebhookEvent)
 class WebhookEventAdmin(ReadOnlyBillingAdmin):
     list_display = ("event_id", "event_type", "processed_at")
+
+
+@admin.register(PackCheckout)
+class PackCheckoutAdmin(ReadOnlyBillingAdmin):
+    list_display = ("reference", "user", "product", "amount_paise", "units", "status", "created_at")
+    search_fields = ("reference", "user__username", "provider_order_id")
+
+
+@admin.register(PackPayment)
+class PackPaymentAdmin(ReadOnlyBillingAdmin):
+    list_display = ("provider_payment_id", "checkout", "amount_paise", "status", "created_at")
+
+
+@admin.register(PackRefund)
+class PackRefundAdmin(ReadOnlyBillingAdmin):
+    list_display = ("provider_refund_id", "payment", "amount_paise", "processed_at")
+
+
+@admin.register(CreditGrant)
+class CreditGrantAdmin(ReadOnlyBillingAdmin):
+    list_display = ("user", "product", "units", "remaining", "is_revoked", "is_test", "created_at")
+
+
+@admin.register(CreditUse)
+class CreditUseAdmin(ReadOnlyBillingAdmin):
+    list_display = ("user", "kind", "is_free", "grant", "resource_key", "reversed_at", "created_at")

@@ -5,12 +5,13 @@ from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db import OperationalError, connection, transaction
 from django.db.models import Count, F, ProtectedError, Q, Sum
-from django.http import HttpResponse
+from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.views.generic import CreateView, DetailView, ListView, UpdateView, View
-from apps.core.permissions import AdminRequiredMixin, TeacherRequiredMixin
+from apps.accounts.models import User
+from apps.core.permissions import AdminRequiredMixin, FreshTeacherWriteMixin, TeacherRequiredMixin, lock_active_teacher
 from apps.core.utils import log_audit
 from apps.questions.models import Question
 from apps.questions.presentation import decorate_staged_question, use_original_image
@@ -21,7 +22,9 @@ from .models import Category, Exam, ExamQuestion
 
 def _lock_public_exam(pk):
     """Serialize exam mutations with candidate starts before checking attempts."""
-    candidates = Exam.objects.filter(pk=pk, is_private_practice=False, is_classroom_only=False)
+    # Series are immutable private snapshots managed through the series
+    # operator workflow, never the public question builder or duplicate route.
+    candidates = Exam.objects.filter(pk=pk, is_private_practice=False, is_classroom_only=False, series_slot__isnull=True)
     if connection.vendor == "sqlite":
         candidates.update(id=F("id"))  # SQLite has no row-level FOR UPDATE.
     return get_object_or_404(candidates.select_for_update())
@@ -211,7 +214,7 @@ class ExamListView(TeacherRequiredMixin, ListView):
 
     def get_queryset(self):
         user = self.request.user
-        qs = Exam.objects.filter(is_private_practice=False, is_classroom_only=False).select_related("category", "creator").annotate(
+        qs = Exam.objects.filter(is_private_practice=False, is_classroom_only=False, series_slot__isnull=True).select_related("category", "creator").annotate(
             total_q_count=Count("exam_questions", distinct=True),
             total_att_count=Count("attempts", distinct=True),
         )
@@ -258,7 +261,7 @@ class ExamListView(TeacherRequiredMixin, ListView):
         context = super().get_context_data(**kwargs)
         user = self.request.user
 
-        base_qs = Exam.objects.filter(is_private_practice=False, is_classroom_only=False)
+        base_qs = Exam.objects.filter(is_private_practice=False, is_classroom_only=False, series_slot__isnull=True)
         if not user.is_admin_role:
             assigned = user.assigned_categories.all()
             if assigned.exists():
@@ -288,7 +291,7 @@ class ExamListView(TeacherRequiredMixin, ListView):
         return context
 
 
-class ExamCreateView(TeacherRequiredMixin, CreateView):
+class ExamCreateView(TeacherRequiredMixin, FreshTeacherWriteMixin, CreateView):
     """
     Creates a new CBT examination in Draft mode and navigates
     directly to the interactive Question Builder.
@@ -334,7 +337,7 @@ class ExamUpdateView(TeacherRequiredMixin, UpdateView):
 
     def get_object(self, queryset=None):
         exam = super().get_object(queryset)
-        if exam.is_private_practice or exam.is_classroom_only:
+        if exam.is_private_practice or exam.is_classroom_only or hasattr(exam, "series_slot"):
             from django.http import Http404
             raise Http404()
         user = self.request.user
@@ -354,12 +357,21 @@ class ExamUpdateView(TeacherRequiredMixin, UpdateView):
         exam = self.get_object()
         try:
             with transaction.atomic():
+                # This form can publish as well as edit. Recheck the account
+                # before the exam lock so it cannot race an email change or
+                # account deletion, while keeping the original attempt locks.
+                user = lock_active_teacher(request.user)
+                if user.needs_email_verification:
+                    return redirect("accounts:verification_pending")
+                request.user = user
                 _lock_public_exam(exam.pk)
                 # A bank edit can change an unclassified question while this
                 # form validates the exam target. Lock all attached questions
                 # in a stable order before reading their targets.
                 list(Question.objects.select_for_update().filter(exam_instances__exam_id=exam.pk).order_by("pk"))
                 return super().post(request, *args, **kwargs)
+        except User.DoesNotExist:
+            raise Http404() from None
         except OperationalError as exc:
             if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
                 raise
@@ -392,7 +404,7 @@ class ExamDeleteView(TeacherRequiredMixin, ExamMutationLockMixin, View):
     """
 
     def post(self, request, pk):
-        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False)
+        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False, series_slot__isnull=True)
         user = request.user
         if not user.is_admin_role and exam.creator != user:
             if not user.assigned_categories.filter(pk=exam.category_id).exists():
@@ -406,6 +418,9 @@ class ExamDeleteView(TeacherRequiredMixin, ExamMutationLockMixin, View):
             )
             return redirect("exams:exam_list")
 
+        if exam.classroom_activations.exists() or hasattr(exam, "series_slot"):
+            messages.error(request, "This test has classroom activation or series records and cannot be deleted. Archive it instead.")
+            return redirect("exams:exam_list")
         title = exam.title
         exam.delete()
         log_audit(
@@ -418,14 +433,14 @@ class ExamDeleteView(TeacherRequiredMixin, ExamMutationLockMixin, View):
         return redirect("exams:exam_list")
 
 
-class ExamDuplicateView(TeacherRequiredMixin, ExamMutationLockMixin, View):
+class ExamDuplicateView(TeacherRequiredMixin, FreshTeacherWriteMixin, ExamMutationLockMixin, View):
     """
     Duplicates an examination, copying its configuration and all assigned questions
     into a fresh Draft copy ("Copy of ...") without any attached candidate attempts.
     """
 
     def post(self, request, pk):
-        source_exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False)
+        source_exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False, series_slot__isnull=True)
         user = request.user
         if not user.is_admin_role and source_exam.creator != user:
             if not user.assigned_categories.filter(pk=source_exam.category_id).exists():
@@ -484,14 +499,14 @@ class ExamDuplicateView(TeacherRequiredMixin, ExamMutationLockMixin, View):
         return redirect("exams:exam_questions", pk=new_exam.pk)
 
 
-class ExamTogglePublishView(TeacherRequiredMixin, ExamMutationLockMixin, View):
+class ExamTogglePublishView(TeacherRequiredMixin, FreshTeacherWriteMixin, ExamMutationLockMixin, View):
     """
     Validates and toggles examination status between Published and Draft.
     Requires at least 1 question and valid duration before publishing.
     """
 
     def post(self, request, pk):
-        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False)
+        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False, series_slot__isnull=True)
         user = request.user
         if not user.is_admin_role and exam.creator != user:
             if not user.assigned_categories.filter(pk=exam.category_id).exists():
@@ -593,7 +608,7 @@ class ExamQuestionManageView(TeacherRequiredMixin, DetailView):
 
     def get_object(self, queryset=None):
         exam = super().get_object(queryset)
-        if exam.is_private_practice or exam.is_classroom_only:
+        if exam.is_private_practice or exam.is_classroom_only or hasattr(exam, "series_slot"):
             from django.http import Http404
             raise Http404()
         user = self.request.user
@@ -653,7 +668,7 @@ class ExamAddQuestionsBulkView(TeacherRequiredMixin, ExamMutationLockMixin, View
     """
 
     def post(self, request, pk):
-        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False)
+        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False, series_slot__isnull=True)
         user = request.user
         if not user.is_admin_role and exam.creator != user:
             if not user.assigned_categories.filter(pk=exam.category_id).exists():
@@ -722,7 +737,7 @@ class ExamAddRandomQuestionsView(TeacherRequiredMixin, ExamMutationLockMixin, Vi
     """
 
     def post(self, request, pk):
-        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False)
+        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False, series_slot__isnull=True)
         user = request.user
         if not user.is_admin_role and exam.creator != user:
             if not user.assigned_categories.filter(pk=exam.category_id).exists():
@@ -816,7 +831,7 @@ class ExamRemoveQuestionView(TeacherRequiredMixin, ExamMutationLockMixin, View):
     """
 
     def post(self, request, pk, question_pk):
-        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False)
+        exam = get_object_or_404(Exam, pk=pk, is_private_practice=False, is_classroom_only=False, series_slot__isnull=True)
         user = request.user
         if not user.is_admin_role and exam.creator != user:
             if not user.assigned_categories.filter(pk=exam.category_id).exists():
@@ -850,7 +865,7 @@ class ExamPreviewView(TeacherRequiredMixin, DetailView):
 
     def get_object(self, queryset=None):
         exam = super().get_object(queryset)
-        if exam.is_private_practice or exam.is_classroom_only:
+        if exam.is_private_practice or exam.is_classroom_only or hasattr(exam, "series_slot"):
             from django.http import Http404
             raise Http404()
         user = self.request.user

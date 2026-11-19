@@ -25,7 +25,7 @@ def _authorized_attempt(request, attempt_uuid):
             raise PermissionDenied("This attempt has ended.")
         return attempt
     # Match result-review policy, and do not expose past answers during a retake.
-    if not attempt.classroom_session.student_answers_visible:
+    if not attempt.classroom_session.student_own_review_visible:
         raise PermissionDenied("Answer review is not available for this test.")
     active = attempt.exam.attempts.filter(student=user, status=ExamAttempt.AttemptStatus.IN_PROGRESS).select_related("exam")
     for other in active:

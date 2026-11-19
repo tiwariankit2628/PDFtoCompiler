@@ -116,7 +116,9 @@
                         </li>
                         {% endif %}
 
+                        {% if user.is_teacher %}<li class="nav-item"><a class="nav-link text-dark {% if active_key == 'plans' %}active bg-primary text-white fw-semibold{% endif %}" href="{% url 'payments:plans' %}"><i class="bi bi-credit-card me-2"></i> Packs &amp; Usage</a></li>{% endif %}
                         {% if user.is_student %}
+                        <li class="nav-item"><a class="nav-link text-dark {% if active_key == 'series' %}active bg-primary text-white fw-semibold{% endif %}" {% if active_key == 'series' %}aria-current="page"{% endif %} href="{% url 'exams:series' %}"><i class="bi bi-grid-3x3-gap me-2"></i> {{ user.exam_track|upper|default:'My' }} Test Series</a></li>
                         <li class="nav-item">
                             <a class="nav-link text-dark {% if active_key == 'join' %}active bg-primary text-white fw-semibold{% endif %}"{% if active_key == 'join' %} aria-current="page"{% endif %} href="{% url 'exams:classroom_join' %}">
                                 <i class="bi bi-qr-code-scan me-2 {% if active_key == 'join' %}text-white{% endif %}" {% if active_key != 'join' %}style="color:var(--amber);"{% endif %}></i> Join Test with Code
@@ -139,7 +141,7 @@
                         </li>
                         <li class="nav-item">
                             <a class="nav-link text-dark {% if active_key == 'plans' %}active bg-primary text-white fw-semibold{% endif %}"{% if active_key == 'plans' %} aria-current="page"{% endif %} href="{% url 'payments:plans' %}">
-                                <i class="bi bi-credit-card me-2 {% if active_key == 'plans' %}text-white{% else %}text-primary{% endif %}"></i> Plans & Usage
+                                <i class="bi bi-credit-card me-2 {% if active_key == 'plans' %}text-white{% else %}text-primary{% endif %}"></i> Packs & Usage
                             </a>
                         </li>
                         <li class="nav-item">

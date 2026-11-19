@@ -9,6 +9,7 @@
   <a href="{% url 'questions:classroom_paper_upload' %}" class="btn btn-primary mt-3 mt-md-0"><i class="bi bi-plus-lg me-1"></i> Create Test from PDF</a>
 </div>
 
+<div class="teacher-credit-strip mb-4"><div><span class="eyebrow">24-HOUR ACTIVATIONS</span><p class="small mb-0 mt-2">Your first test activation is free. Then ₹299 for 20 more activations. Unused credits do not expire.</p></div><a class="btn btn-cbt-outline btn-sm" href="{% url 'payments:plans' %}">Packs &amp; usage →</a></div>
 <div class="row g-4">
   <div class="col-lg-6">
     <div class="card border shadow-sm rounded-4 h-100">
@@ -31,8 +32,7 @@
             <label class="form-label fw-semibold small" for="label">Session label (optional)</label>
             <input type="text" class="form-control" id="label" name="label" maxlength="120" placeholder="e.g. Class 10-B, Monday">
           </div>
-          <div class="form-check"><input class="form-check-input" type="checkbox" id="retakes" name="allow_retakes">
-            <label class="form-check-label small" for="retakes">Allow retakes (best fully keyed completed attempt is ranked)</label></div>
+          <p class="small text-muted mb-0">One attempt per student per test, across all codes. This activation lasts 24 hours and can be reused for other classes of the same test.</p>
           <div class="form-check"><input class="form-check-input" type="checkbox" id="show-lb" name="show_leaderboard_to_students">
             <label class="form-check-label small" for="show-lb">Let students see the leaderboard</label></div>
           <button class="btn btn-success fw-bold"><i class="bi bi-qr-code me-1"></i> Create session &amp; join code</button>
@@ -78,7 +78,7 @@
 </div>
 {% if classroom_papers %}
 <div class="card border shadow-sm rounded-4 mt-4"><div class="card-body p-4">
-  <h5 class="fw-bold">Your classroom papers</h5><p class="small text-muted">Continue reviewing or create another test snapshot from a saved paper.</p>
+  <h5 class="fw-bold">Your classroom papers</h5><p class="small text-muted">Continue reviewing a paper or create a new test snapshot. To run an existing test for another class, select that same test above or use “Create another class code” on its session page; do not create a new snapshot.</p>
   <div class="vstack gap-2">{% for paper in classroom_papers %}<a class="text-decoration-none border rounded-3 p-3 d-flex justify-content-between gap-2" href="{% url 'questions:classroom_paper_review' paper.pk %}"><span class="fw-semibold">{{ paper.title }}</span><span class="small text-muted">{{ paper.get_status_display }} →</span></a>{% endfor %}</div>
 </div></div>
 {% endif %}

@@ -17,6 +17,11 @@ class FeatureUnavailable(Exception):
 
 
 def current_entitlement(user):
+    # The historical gateway also accepted TEST payments only. Never treat
+    # those records as live paid access when the sandbox flag is off.
+    from django.conf import settings
+    if not settings.ALLOW_TEST_PAYMENT_CREDITS:
+        return None
     now = timezone.now()
     return (PracticeEntitlement.objects.select_related("plan", "checkout")
             .filter(user=user, is_revoked=False, starts_at__lte=now, valid_until__gt=now)
@@ -103,7 +108,6 @@ def consume(user, kind):
 
 
 def private_attempt_limit(user, exam):
-    plan_limit = current_plan(user).attempts_per_test
-    test_limit = exam.max_attempts or None
-    values = [x for x in (plan_limit, test_limit) if x is not None]
-    return min(values) if values else None
+    # New policy: each private test is attempted once. Creating a separate
+    # bank-based test remains available; historical attempts are untouched.
+    return 1

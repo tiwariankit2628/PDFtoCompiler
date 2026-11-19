@@ -383,7 +383,8 @@ class ExamAttempt(models.Model):
         confirmed keys; a missing key is 'awaiting key', never a wrong answer.
         Ordinary single-correct institutional questions retain their existing
         grading rules; PDF-derived and unsupported types are guarded as well."""
-        return self.exam.is_private_practice or self.classroom_session_id is not None
+        return (self.exam.is_private_practice or self.classroom_session_id is not None
+                or hasattr(self.exam, "series_slot"))
 
     @property
     def has_ungraded_keys(self):
@@ -606,12 +607,15 @@ class ExamAttempt(models.Model):
         self.submitted_at = now
         if not self.time_taken_seconds and self.started_at:
             end = (min(now, self.expires_at)
-                   if (self.exam.is_private_practice or self.classroom_session_id) and is_timeout and self.expires_at else now)
+                   if (self.exam.is_private_practice or self.classroom_session_id or hasattr(self.exam, "series_slot"))
+                   and is_timeout and self.expires_at else now)
             self.time_taken_seconds = max(0, int((end - self.started_at).total_seconds()))
         self.evaluate_attempt()
         self.save()
-        # Classroom ranks are computed per session in-view, not globally.
-        if not self.exam.is_private_practice and not self.classroom_session_id:
+        # Classroom ranks are per session. Series scores are private and do
+        # not use the institutional global leaderboard. Avoid touching other
+        # students' rows while holding this attempt's lock during submission.
+        if not self.exam.is_private_practice and not self.classroom_session_id and not hasattr(self.exam, "series_slot"):
             self.recalculate_ranks()
         return True
 
@@ -629,7 +633,7 @@ class ExamAttempt(models.Model):
         # Preserve and score whatever was already saved; termination is not a zero.
         self.evaluate_attempt()
         self.save()
-        if not self.exam.is_private_practice and not self.classroom_session_id:
+        if not self.exam.is_private_practice and not self.classroom_session_id and not hasattr(self.exam, "series_slot"):
             self.recalculate_ranks()
         return True
 
@@ -777,6 +781,10 @@ class ClassroomSession(models.Model):
 
     exam = models.ForeignKey("Exam", on_delete=models.CASCADE, related_name="classroom_sessions")
     teacher = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="classroom_sessions")
+    activation = models.ForeignKey("ClassroomActivation", on_delete=models.PROTECT, null=True, blank=True, related_name="sessions")
+    # Old sessions keep their recorded result-release policy. New sessions
+    # show scores and each student's own answers immediately after submission.
+    commercial_rules = models.BooleanField(default=False, editable=False)
     label = models.CharField("Session label", max_length=120, blank=True, help_text="e.g. 'Class 10-B, Monday'.")
     code = models.CharField(max_length=12, unique=True, db_index=True)
     # An optional one-shot form token makes a retried PDF-to-session POST
@@ -844,16 +852,25 @@ class ClassroomSession(models.Model):
 
     @property
     def student_results_visible(self):
+        if self.commercial_rules:
+            return True  # New classroom rules: scores are immediate.
         return bool(self.results_released or self.exam.show_result_immediately)
 
     @property
     def student_answers_visible(self):
+        if self.commercial_rules:
+            return self.results_released  # Keys/solutions need teacher release.
         return bool(self.results_released or (self.exam.allow_review_answers and self.exam.show_result_immediately))
+
+    @property
+    def student_own_review_visible(self):
+        return bool(self.commercial_rules or self.student_answers_visible)
 
     @property
     def joining_allowed(self):
         """Whether NEW students may join. Existing attempts are unaffected by this."""
-        return self.is_open and not self.is_ended and self.exam.status == Exam.ExamStatus.PUBLISHED
+        return (self.is_open and not self.is_ended and self.exam.status == Exam.ExamStatus.PUBLISHED
+                and (not self.activation_id or self.activation.available))
 
     def end_now(self):
         """Atomically close the session and finalize saved active attempts.
@@ -919,3 +936,84 @@ class ClassroomParticipant(models.Model):
 
     def __str__(self):
         return f"{self.student_id} in {self.session_id}"
+
+
+class TestSeries(models.Model):
+    """One curated series per track; content must be supplied by an operator."""
+    from apps.core.exam_targets import ExamTrack
+    track = models.CharField(max_length=12, choices=ExamTrack.choices, unique=True)
+    title = models.CharField(max_length=120)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name_plural = "Test series"
+
+    def __str__(self):
+        return self.title
+
+
+class SeriesSlot(models.Model):
+    """Positions 1–16, with the first test free; empty slots are not content."""
+    series = models.ForeignKey(TestSeries, on_delete=models.PROTECT, related_name="slots")
+    position = models.PositiveSmallIntegerField()
+    exam = models.OneToOneField(Exam, on_delete=models.PROTECT, null=True, blank=True, related_name="series_slot")
+
+    class Meta:
+        ordering = ["position"]
+        constraints = [
+            models.UniqueConstraint(fields=["series", "position"], name="one_series_position"),
+            models.CheckConstraint(condition=models.Q(position__gte=1, position__lte=16), name="series_position_1_to_16"),
+        ]
+
+    def clean(self):
+        super().clean()
+        from django.core.exceptions import ValidationError
+        from apps.core.exam_targets import targets_for_track
+        old_exam_id = None
+        if self.pk:
+            old_exam_id = type(self).objects.filter(pk=self.pk).values_list("exam_id", flat=True).first()
+            if old_exam_id and old_exam_id != self.exam_id:
+                raise ValidationError("An assigned series test cannot be replaced; preserve existing purchases and attempts.")
+        if self.exam_id and self.series_id:
+            exam = self.exam
+            # Do not silently change the grading/access policy of a test that
+            # already has institutional or in-progress attempts.
+            if old_exam_id != self.exam_id and exam.attempts.exists():
+                raise ValidationError("Use an examination without existing attempts for a new series slot.")
+            allowed = targets_for_track(self.series.track)
+            if exam.is_private_practice or exam.is_classroom_only or exam.target_type not in allowed:
+                raise ValidationError("Choose a non-private examination explicitly classified for this series track.")
+            if exam.exam_questions.exclude(question__target_type__in=allowed).exists():
+                raise ValidationError("Every question must be classified for this series track.")
+            if exam.classroom_sessions.exists():
+                raise ValidationError("A test used for classrooms cannot be assigned to a series.")
+            from .series import series_content_is_private
+            if not series_content_is_private(exam):
+                raise ValidationError("A series test needs exclusive, privately stored question snapshots. Create it from a reviewed private paper; public media cannot be protected by the series gate.")
+
+    def __str__(self):
+        return f"{self.series} · Test {self.position:02d}"
+
+
+class ClassroomActivation(models.Model):
+    """A teacher/test window. Several classroom codes may share its 24 hours."""
+    teacher = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="classroom_activations")
+    exam = models.ForeignKey(Exam, on_delete=models.PROTECT, related_name="classroom_activations")
+    credit_use = models.OneToOneField("payments.CreditUse", on_delete=models.PROTECT, null=True, blank=True, related_name="activation")
+    starts_at = models.DateTimeField()
+    ends_at = models.DateTimeField()
+    # Legacy windows preserve existing sessions without retroactive charges.
+    is_legacy = models.BooleanField(default=False)
+
+    class Meta:
+        indexes = [models.Index(fields=["teacher", "exam", "ends_at"])]
+
+    @property
+    def available(self):
+        if not (self.starts_at <= timezone.now() < self.ends_at):
+            return False
+        if self.credit_use_id and self.credit_use.grant_id:
+            from django.conf import settings
+            grant = self.credit_use.grant
+            return not grant.is_revoked and (not grant.is_test or settings.ALLOW_TEST_PAYMENT_CREDITS)
+        return True

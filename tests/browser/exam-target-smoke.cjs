@@ -1,6 +1,7 @@
 /* Mobile registration, track-aware catalog, direct access and active timer. */
 const {chromium} = require('playwright-core');
 const assert = require('assert');
+const {confirmVerification} = require('./verification-helper.cjs');
 
 (async () => {
   const browser = await chromium.launch({executablePath: process.env.CHROMIUM_PATH, headless: true,
@@ -24,7 +25,8 @@ const assert = require('assert');
     await page.locator('#id_password').fill('TargetBrowserPass987!');
     await page.locator('#id_confirm_password').fill('TargetBrowserPass987!');
     await page.locator('#id_target_exam').selectOption('NEET');
-    await Promise.all([page.waitForURL('**/dashboard/**'), page.getByRole('button', {name: /Create account/}).click()]);
+    await Promise.all([page.waitForURL('**/auth/verify-email/pending/'), page.getByRole('button', {name: /Create account/}).click()]);
+    await confirmVerification(page, base, 'browser-target@example.test');
     await page.goto(base + data.catalog);
     let text = await page.locator('body').innerText();
     assert(text.includes('Browser NEET paper'));

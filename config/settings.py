@@ -83,6 +83,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
+    "apps.accounts.middleware.EmailVerificationMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
@@ -223,6 +224,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.exams.tasks.expire_classroom_attempts",
         "schedule": 30.0,
     },
+    "expire-series-attempts": {
+        "task": "apps.exams.tasks.expire_series_attempts",
+        "schedule": 30.0,
+    },
 }
 
 # ------------------------------------------------------------------------------
@@ -260,6 +265,10 @@ LOCAL_PRACTICE_AI_MAX_QUESTIONS = os.environ.get("LOCAL_PRACTICE_AI_MAX_QUESTION
 RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
 RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
+# Test payments are meaningful only in a disposable development/staging DB.
+# Never enable this flag against production data or treat test funds as real.
+ALLOW_TEST_PAYMENT_CREDITS = os.environ.get("ALLOW_TEST_PAYMENT_CREDITS", "False").lower() in ("true", "1", "yes")
+LEGACY_BILLING_NEW_CHECKOUTS = False  # old subscriptions remain verifiable/cancellable
 
 # ------------------------------------------------------------------------------
 # EMAIL CONFIGURATION
@@ -269,6 +278,17 @@ EMAIL_BACKEND = os.environ.get(
     "django.core.mail.backends.console.EmailBackend"
 )
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", f"noreply@{PLATFORM_NAME.lower().replace(' ', '')}.com")
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "localhost")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "True").lower() in ("true", "1", "yes")
+EMAIL_USE_SSL = os.environ.get("EMAIL_USE_SSL", "False").lower() in ("true", "1", "yes")
+EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "15"))
+# Never build verification links from an untrusted request Host header.
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
+EMAIL_VERIFICATION_MAX_AGE = 24 * 60 * 60
+EMAIL_VERIFICATION_RESEND_SECONDS = 60
 
 # ------------------------------------------------------------------------------
 # SECURITY ENHANCEMENTS

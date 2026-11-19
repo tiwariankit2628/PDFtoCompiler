@@ -169,3 +169,81 @@ class WebhookEvent(models.Model):
     event_id = models.CharField(max_length=140, unique=True)
     event_type = models.CharField(max_length=80)
     processed_at = models.DateTimeField(auto_now_add=True)
+
+
+class PackCheckout(models.Model):
+    """Immutable price/product snapshot for a one-time Razorpay TEST order."""
+    class Status(models.TextChoices):
+        INITIATING = "initiating", "Creating checkout"
+        CREATED = "created", "Awaiting payment"
+        PAID = "paid", "Paid"
+        REFUNDED = "refunded", "Refunded"
+
+    reference = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="pack_checkouts")
+    product = models.CharField(max_length=32, db_index=True)
+    amount_paise = models.PositiveIntegerField()
+    units = models.PositiveSmallIntegerField()
+    currency = models.CharField(max_length=3, default="INR")
+    provider_order_id = models.CharField(max_length=80, unique=True, null=True, blank=True)
+    status = models.CharField(max_length=15, choices=Status.choices, default=Status.INITIATING, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    @property
+    def price_rupees(self):
+        return f"{self.amount_paise // 100}.{self.amount_paise % 100:02d}"
+
+
+class PackPayment(models.Model):
+    checkout = models.ForeignKey(PackCheckout, on_delete=models.PROTECT, related_name="payments")
+    provider_payment_id = models.CharField(max_length=80, unique=True)
+    amount_paise = models.PositiveIntegerField()
+    currency = models.CharField(max_length=3, default="INR")
+    status = models.CharField(max_length=20, choices=Payment.Status.choices, default=Payment.Status.CAPTURED)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class PackRefund(models.Model):
+    payment = models.ForeignKey(PackPayment, on_delete=models.PROTECT, related_name="refunds")
+    provider_refund_id = models.CharField(max_length=80, unique=True)
+    amount_paise = models.PositiveIntegerField()
+    processed_at = models.DateTimeField(auto_now_add=True)
+
+
+class CreditGrant(models.Model):
+    """A verified sandbox purchase. Balance never expires; refunds suspend it."""
+    checkout = models.OneToOneField(PackCheckout, on_delete=models.PROTECT, related_name="grant")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="credit_grants")
+    product = models.CharField(max_length=32, db_index=True)
+    units = models.PositiveSmallIntegerField()
+    remaining = models.PositiveSmallIntegerField()
+    is_revoked = models.BooleanField(default=False)
+    # All current grants are TEST payments; never use them as live entitlements.
+    is_test = models.BooleanField(default=True, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.CheckConstraint(condition=Q(remaining__lte=models.F("units")), name="grant_remaining_not_over_units")]
+        indexes = [models.Index(fields=["user", "product", "is_revoked"])]
+
+
+class CreditUse(models.Model):
+    """Append-only debit (or a recorded reversal); deleted papers never reset it."""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="credit_uses")
+    kind = models.CharField(max_length=32, db_index=True)
+    grant = models.ForeignKey(CreditGrant, on_delete=models.PROTECT, null=True, blank=True, related_name="uses")
+    is_free = models.BooleanField(default=False)
+    # Stable application resource identifier, not an FK: deleting a resource
+    # must not restore an allowance or erase the audit trail.
+    resource_key = models.CharField(max_length=100, unique=True)
+    reversed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["user", "kind"],
+            condition=Q(is_free=True, reversed_at__isnull=True), name="one_unreversed_free_use_per_kind")]
+        indexes = [models.Index(fields=["user", "kind", "reversed_at"])]

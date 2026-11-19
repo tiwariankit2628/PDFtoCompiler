@@ -1,6 +1,7 @@
 const {chromium} = require('playwright-core');
 const fs = require('fs');
 const assert = require('assert');
+const {confirmVerification} = require('./verification-helper.cjs');
 (async () => {
   const executablePath = process.env.CHROMIUM_PATH;
   if (!executablePath) throw new Error('Set CHROMIUM_PATH to a compatible Chromium executable.');
@@ -23,8 +24,9 @@ const assert = require('assert');
     await page.goto(base+'/auth/register/');
     for(const [field,value] of Object.entries({first_name:'Arena',last_name:'Browser',username:tag,email:tag+'@example.test',password:'PracticeBrowserPass987!',confirm_password:'PracticeBrowserPass987!'})) await page.locator('#id_'+field).fill(value);
     await page.locator('#id_target_exam').selectOption('JEE');
-    await Promise.all([page.waitForURL('**/dashboard/**'),page.locator('form').filter({has:page.locator('#id_username')}).locator('button[type=submit]').click()]);
-    assert((await page.locator('body').innerText()).toLowerCase().includes('your private workspace')); step('register and student dashboard');
+    await Promise.all([page.waitForURL('**/auth/verify-email/pending/'),page.locator('form').filter({has:page.locator('#id_username')}).locator('button[type=submit]').click()]);
+    await confirmVerification(page, base, tag+'@example.test');
+    assert((await page.locator('body').innerText()).toLowerCase().includes('your private workspace')); step('register, verify email and open student dashboard');
 
     await page.goto(base+'/questions/practice/upload/');
     await page.locator('#id_title').fill('Browser science practice');
@@ -52,14 +54,18 @@ const assert = require('assert');
     if(await page.locator('#id_acknowledge_unassigned').count()) await page.locator('#id_acknowledge_unassigned').check();
     await Promise.all([page.waitForURL('**/instructions/'),page.getByRole('button',{name:'Create private test'}).click()]);
     assert((await page.locator('body').innerText()).includes('PRIVATE PRACTICE')); step('review questions, confirm key and configure duration');
+    const instructionsUrl=page.url();
 
     await page.locator('#declaration-check').check();
     await Promise.all([page.waitForURL('**/session/**'),page.locator('#start-btn').click()]);
     const session1=page.url();
     await page.locator('#fs-continue-windowed').click();
     await Promise.all([page.waitForResponse(r => r.url().includes('/save-answer/') && r.status()===200), page.locator('.option-card').first().click()]);
-    await page.reload();
+    const timerBefore=await page.locator('#exam-timer').innerText();
+    await page.waitForTimeout(1200); await page.reload();
     await page.locator('#fs-continue-windowed').click();
+    const timerAfter=await page.locator('#exam-timer').innerText();
+    assert(timerAfter<=timerBefore,`timer reset: ${timerBefore} -> ${timerAfter}`);
     assert(await page.locator('.option-card.selected').count()===1, 'selected answer was not auto-saved before refresh');
     await Promise.all([page.waitForResponse(r => r.url().includes('/save-answer/') && r.status()===200), page.locator('#btn-save-next').click()]);
     await page.locator('.option-card').first().click(); // final answer saved atomically during submit
@@ -81,28 +87,12 @@ const assert = require('assert');
     const download=await dlPromise; await download.saveAs(reportPdf);
     assert(fs.statSync(reportPdf).size>10000); step('authorized PDF report download');
 
-    await page.getByRole('link',{name:/Reattempt/}).click();
-    await page.locator('#declaration-check').check();
-    await Promise.all([page.waitForURL('**/session/**'),page.locator('#start-btn').click()]);
-    await page.locator('#fs-continue-windowed').click();
-    assert(page.url()!==session1);
-    const activeUrl=page.url(); const timerBefore=await page.locator('#exam-timer').innerText();
-    await page.waitForTimeout(2200); await page.reload();
-    await page.locator('#fs-continue-windowed').click();
-    const timerAfter=await page.locator('#exam-timer').innerText();
-    assert(timerAfter<=timerBefore,`timer reset: ${timerBefore} -> ${timerAfter}`);
-    const otherTab=await context.newPage();
-    await otherTab.goto(firstResult); await otherTab.waitForURL('**/session/**'); assert(otherTab.url()===activeUrl);
-    await otherTab.goto(base+'/questions/practice/bank/'); await otherTab.waitForURL('**/session/**'); assert(otherTab.url()===activeUrl);
-    await otherTab.close();
-    step('separate reattempt, refresh timer and active-session answer privacy');
-    await page.locator('.option-card').nth(1).click();
-    await page.locator('#btn-open-submit-modal').click(); await page.locator('#btn-confirm-submit').click();
-    await page.waitForURL('**/completed/'); await page.getByRole('link',{name:'Review my answers'}).click();
-    assert(await page.locator('text=Compare attempts').count());
-    const compareRows=await page.locator('table tbody tr').count(); assert(compareRows>=2);
+    assert.strictEqual(await page.getByRole('link',{name:/Reattempt|Retake/i}).count(), 0, 'a completed test offered a retake');
+    await page.goto(instructionsUrl);
+    assert((await page.locator('body').innerText()).toLowerCase().includes('attempt limit'), 'completed test did not show the no-retake limit');
+    assert.strictEqual(await page.locator('#start-btn').count(), 0, 'completed test still has a start button');
     await page.goto(base+'/questions/practice/history/');
-    assert((await page.locator('table tbody tr').count())>=2); step('history and attempt comparison');
+    assert((await page.locator('table tbody tr').count())>=1); step('no retake, saved result and practice history');
 
     await page.goto(base+'/questions/practice/bank/');
     assert((await page.locator('body').textContent()).includes('Browser motion question'));
@@ -135,14 +125,14 @@ const assert = require('assert');
 
     await page.goto(base+'/payments/plans/');
     const billing=await page.locator('body').innerText();
-    assert(billing.includes('Razorpay test mode has not been configured'));
-    assert(billing.includes('PDF uploads'));
+    assert(billing.includes('Razorpay test checkout is not configured'));
+    assert(billing.includes('PDF practice pack') && billing.includes('20 additional PDF extractions'));
     assert(!billing.includes('safe_unit_secret')); step('usage dashboard and fail-closed unconfigured payment');
     await page.setViewportSize({width:390,height:844});
     await page.goto(firstResult);
     const widthInfo=await page.evaluate(()=>({scroll:document.documentElement.scrollWidth, viewport:document.documentElement.clientWidth}));
     assert(widthInfo.scroll <= widthInfo.viewport, 'mobile layout overflows the viewport');
     if(errors.length) throw new Error('Browser console/page errors: '+JSON.stringify(errors));
-    console.log('BROWSER_WORKFLOW_OK',JSON.stringify({firstResult,session1,activeUrl,tag,compareRows,errors}));
+    console.log('BROWSER_WORKFLOW_OK',JSON.stringify({firstResult,session1,tag,errors}));
   } finally { await context.close(); await browser.close(); }
 })().catch(e=>{console.error('BROWSER_WORKFLOW_FAILED',e);process.exit(1)});

@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.contrib import messages
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import File, ContentFile
 from django.db import OperationalError, connection, transaction
 from django.db.models import F, Max
@@ -17,11 +18,13 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.cache import patch_cache_control
 from django.views import View
 
+from apps.accounts.models import User
 from apps.core.permissions import TeacherRequiredMixin
 from apps.core.utils import log_audit
+from apps.payments.services import QuotaExceeded
 from apps.exams.models import Category, ClassroomSession, Exam, ExamQuestion
 from .answer_key_validation import answer_keys_set, confirmed_staged_key, edited_answer_status, staged_question_signature
-from .classroom_forms import ClassroomCreateForm, ClassroomPaperUploadForm, ClassroomQuestionForm
+from .classroom_forms import ClassroomCreateForm, ClassroomPaperUploadForm, ClassroomQuestionForm, SeriesCreateForm
 from .extractor import PDFQuestionExtractor
 from .figure_utils import page_image, validate_box
 from .figure_views import _png_upload, _target
@@ -62,6 +65,8 @@ class PrivateClassroomMixin(TeacherRequiredMixin):
     def dispatch(self, request, *args, **kwargs):
         try:
             response = super().dispatch(request, *args, **kwargs)
+        except User.DoesNotExist:
+            raise Http404() from None
         except OperationalError as exc:
             if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
                 raise
@@ -95,13 +100,36 @@ class ClassroomPaperUploadView(PrivateClassroomMixin, View):
             return render(request, "questions/paper_upload.html", {"form": form, "classroom_upload": True})
         data = form.cleaned_data
         upload = data["pdf_file"]
-        paper = QuestionPaperUpload.objects.create(
-            title=data["title"], category=data["category"] or _classroom_category(), subject=data["subject"],
-            target_type=data["target_type"], uploaded_by=request.user,
-            is_classroom_private=True, private_pdf_file=upload, file_size_bytes=upload.size,
-            total_pages=form.pdf_page_count, image_first=data["image_first"],
-            extraction_mode=QuestionPaperUpload.ExtractionMode.LOCAL,
-        )
+        paper = None
+        try:
+            # Serialize with email changes and account deletion, but do not
+            # hold the lock during potentially long local PDF extraction.
+            with transaction.atomic():
+                from apps.payments.services import lock_practice_user
+                user = lock_practice_user(request.user)
+                if not user.is_active or not (user.is_teacher or user.is_admin_role):
+                    raise PermissionDenied()
+                if user.needs_email_verification:
+                    return redirect("accounts:verification_pending")
+                paper = QuestionPaperUpload(
+                    title=data["title"], category=data["category"] or _classroom_category(), subject=data["subject"],
+                    target_type=data["target_type"], uploaded_by=user,
+                    is_classroom_private=True, private_pdf_file=upload, file_size_bytes=upload.size,
+                    total_pages=form.pdf_page_count, image_first=data["image_first"],
+                    extraction_mode=QuestionPaperUpload.ExtractionMode.LOCAL,
+                )
+                paper.save()
+        except Exception:
+            # File storage is not transactional. Remove only a file written by
+            # this rolled-back upload, never any existing source or review work.
+            field = paper.private_pdf_file if paper is not None else None
+            if field and getattr(field, "_committed", False):
+                try:
+                    field.storage.delete(field.name)
+                except OSError:
+                    import logging
+                    logging.getLogger(__name__).warning("Could not remove a rolled-back classroom upload.")
+            raise
         count = PDFQuestionExtractor(paper).extract()
         if count:
             messages.success(request, f"Extracted {count} question(s). Review them against the original before creating the test.")
@@ -112,6 +140,7 @@ class ClassroomPaperUploadView(PrivateClassroomMixin, View):
 
 
 def _review_context(paper, form=None):
+    from apps.core.exam_targets import track_for_target
     questions = list(paper.extracted_questions.prefetch_related("figures").order_by("question_number", "id"))
     included = [q for q in questions if q.include_in_practice]
     for question in questions:
@@ -121,6 +150,7 @@ def _review_context(paper, form=None):
     unassigned = paper.figures.filter(question__isnull=True).count()
     return {
         "paper": paper, "questions": questions, "total_questions": len(included),
+        "can_publish_series": bool(paper.uploaded_by.is_admin_role and track_for_target(paper.target_type)),
         "answer_key_preview_questions": answer_key_preview_questions(included),
         "total_marks": sum((q.positive_marks for q in included), Decimal("0.00")),
         "keyed_count": sum(bool(confirmed_staged_key(q, AnswerStatus.MANUALLY_VERIFIED)) for q in included),
@@ -142,6 +172,56 @@ def _copy_private_image(source, destination, created_files):
         raise ValueError("A reviewed image is unavailable. Check or replace it before creating the test.") from exc
 
 
+def _copy_reviewed_questions(exam, paper, included, answer_keys, created_files, creator):
+    """Copy reviewed questions and assets into exclusive private snapshots.
+
+    The caller owns a database transaction and deletes ``created_files`` if it
+    rolls back. Source PDFs, reviewed items and existing tests are never edited.
+    """
+    for position, staged in enumerate(included, 1):
+        supplied = answer_keys.get(staged.question_number)
+        correct = supplied if supplied is not None else confirmed_staged_key(staged, AnswerStatus.MANUALLY_VERIFIED)
+        is_typed = staged.detected_type in (ExtractedQuestion.DetectedType.MULTIPLE, ExtractedQuestion.DetectedType.NUMERICAL)
+        labels = (set(answer_keys_set(correct)) if staged.detected_type == ExtractedQuestion.DetectedType.MULTIPLE
+                  else {correct} if staged.detected_type == ExtractedQuestion.DetectedType.SINGLE and correct else set())
+        snapshot = Question(
+            is_classroom_snapshot=True, is_image_first=staged.is_image_first,
+            question_type=staged.detected_type, typed_key_verified=bool(is_typed and correct),
+            numeric_key=Decimal(correct) if correct and staged.detected_type == ExtractedQuestion.DetectedType.NUMERICAL else None,
+            numeric_tolerance=staged.numeric_tolerance, multi_scoring_mode=staged.multi_scoring_mode,
+            partial_credit_per_choice=staged.partial_credit_per_choice,
+            answer_status=AnswerStatus.MANUALLY_VERIFIED if correct else AnswerStatus.NEEDS_REVIEW,
+            category=paper.category, creator=creator, source_paper=paper, target_type=paper.target_type,
+            subject=paper.subject or "General", topic=paper.target_exam,
+            question_text=staged.question_text, tables=staged.tables,
+            source_regions=staged.source_regions, primary_image_region=staged.primary_image_region,
+            explanation=staged.explanation, positive_marks=staged.positive_marks,
+            negative_marks=staged.negative_marks,
+        )
+        _copy_private_image(staged.private_image, snapshot.private_image, created_files)
+        snapshot.save()
+        options = {}
+        for index, option in enumerate(staged.options):
+            key = option["key"].strip().upper()
+            options[key] = QuestionOption.objects.create(
+                question=snapshot, option_key=key, option_text=option.get("text", ""),
+                is_correct=key in labels, order=index,
+            )
+        for figure in staged.figures.all():
+            if not figure.private_image:
+                raise ValueError(f"An image for question {staged.question_number} is missing.")
+            if figure.option_key and figure.option_key not in options:
+                raise ValueError(f"Question {staged.question_number} has an image assigned to a missing option.")
+            copy = QuestionFigure(question=snapshot, option=options.get(figure.option_key),
+                                  order=figure.order, page_number=figure.page_number,
+                                  bounding_box=figure.bounding_box, source=figure.source)
+            _copy_private_image(figure.private_image, copy.private_image, created_files)
+            copy.save()
+        ExamQuestion.objects.create(exam=exam, question=snapshot, order=position,
+                                    section=paper.subject or "General", positive_marks=staged.positive_marks,
+                                    negative_marks=staged.negative_marks)
+
+
 class ClassroomPaperReviewView(PrivateClassroomMixin, View):
     def get(self, request, pk):
         paper = owned_paper(request.user, pk)
@@ -152,7 +232,14 @@ class ClassroomPaperReviewView(PrivateClassroomMixin, View):
         created_files = []
         try:
             with transaction.atomic():
-                paper = _locked_paper(request.user, pk)
+                from apps.payments.services import lock_practice_user
+                from apps.exams.activations import ensure_activation
+                user = lock_practice_user(request.user)
+                if not user.is_active or not (user.is_teacher or user.is_admin_role):
+                    raise PermissionDenied()
+                if user.needs_email_verification:
+                    return redirect("accounts:verification_pending")
+                paper = _locked_paper(user, pk)
                 _editable(paper)
                 if not paper.target_type:
                     messages.error(request, "Choose the paper's JEE or NEET target before creating a test.")
@@ -181,54 +268,19 @@ class ClassroomPaperReviewView(PrivateClassroomMixin, View):
                     allow_review_answers=form.cleaned_data["show_results"],
                     description="Teacher-led classroom test. Only confirmed answer keys are scored.",
                 )
-                for position, staged in enumerate(included, 1):
-                    supplied = form.answer_keys.get(staged.question_number)
-                    correct = supplied if supplied is not None else confirmed_staged_key(staged, AnswerStatus.MANUALLY_VERIFIED)
-                    is_typed = staged.detected_type in (ExtractedQuestion.DetectedType.MULTIPLE, ExtractedQuestion.DetectedType.NUMERICAL)
-                    labels = (set(answer_keys_set(correct)) if staged.detected_type == ExtractedQuestion.DetectedType.MULTIPLE
-                              else {correct} if staged.detected_type == ExtractedQuestion.DetectedType.SINGLE and correct else set())
-                    snapshot = Question(
-                        is_classroom_snapshot=True, is_image_first=staged.is_image_first,
-                        question_type=staged.detected_type, typed_key_verified=bool(is_typed and correct),
-                        numeric_key=Decimal(correct) if correct and staged.detected_type == ExtractedQuestion.DetectedType.NUMERICAL else None,
-                        numeric_tolerance=staged.numeric_tolerance, multi_scoring_mode=staged.multi_scoring_mode,
-                        partial_credit_per_choice=staged.partial_credit_per_choice,
-                        answer_status=AnswerStatus.MANUALLY_VERIFIED if correct else AnswerStatus.NEEDS_REVIEW,
-                        category=paper.category, creator=request.user, source_paper=paper, target_type=paper.target_type,
-                        subject=paper.subject or "General", topic=paper.target_exam,
-                        question_text=staged.question_text, tables=staged.tables,
-                        source_regions=staged.source_regions, primary_image_region=staged.primary_image_region,
-                        explanation=staged.explanation, positive_marks=staged.positive_marks,
-                        negative_marks=staged.negative_marks,
-                    )
-                    _copy_private_image(staged.private_image, snapshot.private_image, created_files)
-                    snapshot.save()
-                    options = {}
-                    for index, option in enumerate(staged.options):
-                        key = option["key"].strip().upper()
-                        options[key] = QuestionOption.objects.create(
-                            question=snapshot, option_key=key, option_text=option.get("text", ""),
-                            is_correct=key in labels, order=index,
-                        )
-                    for figure in staged.figures.all():
-                        if not figure.private_image:
-                            raise ValueError(f"An image for question {staged.question_number} is missing.")
-                        if figure.option_key and figure.option_key not in options:
-                            raise ValueError(f"Question {staged.question_number} has an image assigned to a missing option.")
-                        copy = QuestionFigure(question=snapshot, option=options.get(figure.option_key),
-                                              order=figure.order, page_number=figure.page_number,
-                                              bounding_box=figure.bounding_box, source=figure.source)
-                        _copy_private_image(figure.private_image, copy.private_image, created_files)
-                        copy.save()
-                    ExamQuestion.objects.create(exam=exam, question=snapshot, order=position,
-                                                section=paper.subject or "General", positive_marks=staged.positive_marks,
-                                                negative_marks=staged.negative_marks)
+                activation = ensure_activation(user, exam)
+                _copy_reviewed_questions(exam, paper, included, form.answer_keys, created_files, request.user)
                 exam.recalculate_marks()
                 session = ClassroomSession.create_for(
-                    exam, request.user, creation_token=token, label=form.cleaned_data["label"],
-                    allow_retakes=form.cleaned_data["allow_retakes"],
+                    exam, user, activation=activation, commercial_rules=True, creation_token=token, label=form.cleaned_data["label"],
+                    allow_retakes=False, results_released=form.cleaned_data["show_results"],
                     show_leaderboard_to_students=form.cleaned_data["show_leaderboard_to_students"],
                 )
+        except QuotaExceeded as exc:
+            for name in created_files:
+                private_practice_storage.delete(name)
+            messages.error(request, str(exc))
+            return redirect("payments:plans")
         except ValueError as exc:
             for name in created_files:
                 private_practice_storage.delete(name)
@@ -241,6 +293,101 @@ class ClassroomPaperReviewView(PrivateClassroomMixin, View):
         log_audit(request.user, "CLASSROOM_TEST_CREATED", f"Classroom test {exam.pk} and session {session.pk} created.", request=request)
         messages.success(request, "Your classroom test is ready. Share the join code or link with students.")
         return redirect("exams:classroom_session", pk=session.pk)
+
+
+class SeriesPaperPublishView(PrivateClassroomMixin, View):
+    """Publish an immutable series test from the administrator's own private PDF.
+
+    Never assign ordinary/public bank questions to a paid series: public media
+    URLs cannot be retroactively made private. Slot assignment and copied assets
+    are committed together, and two publishers cannot claim the same position.
+    """
+    def dispatch(self, request, *args, **kwargs):
+        if request.user.is_authenticated and not request.user.is_admin_role:
+            raise PermissionDenied("Only an administrator can publish series tests.")
+        return super().dispatch(request, *args, **kwargs)
+
+    @staticmethod
+    def context(paper, form=None):
+        from apps.core.exam_targets import track_for_target
+        from apps.exams.models import TestSeries
+        included = list(paper.extracted_questions.filter(include_in_practice=True)
+                        .prefetch_related("figures").order_by("question_number", "id"))
+        track = track_for_target(paper.target_type)
+        series = TestSeries.objects.filter(track=track, is_active=True).first() if track else None
+        slots = list(series.slots.select_related("exam").order_by("position")) if series else []
+        form = form if form is not None else SeriesCreateForm(
+            questions=included, unassigned_count=paper.figures.filter(question__isnull=True).count())
+        return {"paper": paper, "form": form, "series": series, "slots": slots,
+                "question_count": len(included)}
+
+    def get(self, request, pk):
+        paper = owned_paper(request.user, pk)
+        _editable(paper)
+        return render(request, "questions/series_publish.html", self.context(paper))
+
+    def post(self, request, pk):
+        from apps.core.exam_targets import track_for_target
+        from apps.exams.models import SeriesSlot, TestSeries
+        from apps.payments.services import lock_practice_user
+        owned_paper(request.user, pk)
+        created_files = []
+        form = None
+        try:
+            with transaction.atomic():
+                user = lock_practice_user(request.user)
+                if not user.is_active or not user.is_admin_role:
+                    raise PermissionDenied("Only an active administrator can publish series tests.")
+                if user.needs_email_verification:
+                    return redirect("accounts:verification_pending")
+                paper = _locked_paper(user, pk)
+                _editable(paper)
+                track = track_for_target(paper.target_type)
+                series = TestSeries.objects.filter(track=track, is_active=True).first() if track else None
+                if not series:
+                    messages.error(request, "Select an active JEE or NEET target for this paper first.")
+                    return redirect("questions:classroom_paper_review", pk=paper.pk)
+                included = list(paper.extracted_questions.filter(include_in_practice=True)
+                                .prefetch_related("figures").order_by("question_number", "id"))
+                form = SeriesCreateForm(request.POST, questions=included,
+                                        unassigned_count=paper.figures.filter(question__isnull=True).count())
+                if not form.is_valid():
+                    return render(request, "questions/series_publish.html", self.context(paper, form))
+                slot = get_object_or_404(SeriesSlot.objects.select_for_update(), series=series,
+                                         position=form.cleaned_data["position"])
+                if slot.exam_id:
+                    form.add_error("position", "This slot is already assigned and cannot be replaced.")
+                    return render(request, "questions/series_publish.html", self.context(paper, form))
+                exam = Exam.objects.create(
+                    slug=f"series-{track}-{uuid.uuid4().hex}", title=paper.title,
+                    category=paper.category, creator=user, status=Exam.ExamStatus.PUBLISHED,
+                    subject=paper.subject, target_exam=paper.target_exam, target_type=paper.target_type,
+                    is_free=slot.position == 1, duration_minutes=form.cleaned_data["duration_minutes"],
+                    total_marks=Decimal("0.00"), passing_percentage=Decimal("0.00"),
+                    shuffle_questions=False, shuffle_options=False, image_first_mode=paper.image_first,
+                    strict_exam_mode=form.cleaned_data["strict_exam_mode"], show_result_immediately=True,
+                    allow_review_answers=form.cleaned_data["show_results"],
+                    description="Curated test series. Scores use human-confirmed answer keys.",
+                )
+                _copy_reviewed_questions(exam, paper, included, form.answer_keys, created_files, user)
+                exam.recalculate_marks()
+                slot.exam = exam
+                slot.full_clean()
+                slot.save(update_fields=["exam"])
+        except (ValueError, ValidationError) as exc:
+            for name in created_files:
+                private_practice_storage.delete(name)
+            if form is None:
+                raise
+            form.add_error(None, "; ".join(exc.messages) if isinstance(exc, ValidationError) else str(exc))
+            return render(request, "questions/series_publish.html", self.context(owned_paper(request.user, pk), form))
+        except Exception:
+            for name in created_files:
+                private_practice_storage.delete(name)
+            raise
+        log_audit(request.user, "SERIES_TEST_PUBLISHED", f"Published {track} series slot {slot.position}, exam {exam.pk}.", request=request)
+        messages.success(request, f"Published {series.title}, test {slot.position}. The original reviewed paper is unchanged.")
+        return redirect("exams:series_operator")
 
 
 class ClassroomQuestionEditView(PrivateClassroomMixin, View):

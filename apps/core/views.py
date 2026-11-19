@@ -167,7 +167,8 @@ class TeacherDashboardView(TeacherRequiredMixin, TemplateView):
         teacher = self.request.user
 
         # Scoped strictly to teacher's exams
-        created_exams = Exam.objects.filter(creator=teacher, is_private_practice=False, is_classroom_only=False)
+        created_exams = Exam.objects.filter(creator=teacher, is_private_practice=False, is_classroom_only=False,
+                                            series_slot__isnull=True)
         context["total_exams_created"] = created_exams.count()
         context["published_exams_count"] = created_exams.filter(
             status=Exam.ExamStatus.PUBLISHED, is_private_practice=False
@@ -177,13 +178,16 @@ class TeacherDashboardView(TeacherRequiredMixin, TemplateView):
         ).count()
 
         # Attempts on teacher's examinations
-        teacher_attempts = ExamAttempt.objects.filter(exam__creator=teacher, exam__is_private_practice=False, classroom_session__isnull=True)
+        teacher_attempts = ExamAttempt.objects.filter(exam__creator=teacher, exam__is_private_practice=False,
+                                                      exam__series_slot__isnull=True, classroom_session__isnull=True)
         context["total_student_attempts"] = teacher_attempts.count()
 
         # Permitted categories
         context["assigned_categories"] = teacher.assigned_categories.filter(is_active=True)
 
         # Recent exam and student attempt activity
+        from apps.payments.packs import balances
+        context["credit_balances"] = balances(teacher)
         context["recent_created_exams"] = created_exams.order_by("-created_at")[:5]
         context["recent_attempts"] = (
             teacher_attempts.select_related("student", "exam")
@@ -212,7 +216,9 @@ class StudentDashboardView(StudentRequiredMixin, TemplateView):
         # Institutional metrics exclude private practice. Do not leak scores or
         # pass/fail outcomes from exams whose results have not been released.
         all_exam_attempts = ExamAttempt.objects.filter(student=student, exam__is_private_practice=False)
-        student_attempts = all_exam_attempts.filter(classroom_session__isnull=True)
+        # Series results are separate from institutional pass/fail metrics;
+        # series snapshots have no institution-defined passing threshold.
+        student_attempts = all_exam_attempts.filter(classroom_session__isnull=True, exam__series_slot__isnull=True)
         visible_results = student_attempts.filter(
             status__in=ExamAttempt.FINAL_STATUSES, exam__show_result_immediately=True,
         ).exclude(responses__key_confirmed_at_grading=False)
@@ -225,19 +231,22 @@ class StudentDashboardView(StudentRequiredMixin, TemplateView):
         # Attempt history
         context["recent_test_count"] = all_exam_attempts.count()
         context["recent_attempts"] = (
-            all_exam_attempts.select_related("exam", "exam__category", "classroom_session")
+            all_exam_attempts.select_related("exam", "exam__category", "exam__series_slot", "classroom_session")
             .order_by("-started_at")[:5]
         )
 
         # Available exams with free vs premium labels
         available = student_exam_queryset(
-            Exam.objects.filter(status=Exam.ExamStatus.PUBLISHED, is_private_practice=False, is_classroom_only=False), student
+            Exam.objects.filter(status=Exam.ExamStatus.PUBLISHED, is_private_practice=False, is_classroom_only=False,
+                                series_slot__isnull=True, classroom_sessions__isnull=True), student
         )
         context["available_exams"] = available.select_related("category").order_by("-created_at")[:6]
 
         # Private practice is a separate workspace, not part of institutional metrics.
-        from apps.payments.services import usage_summary
-        context["practice_usage"] = usage_summary(student)
+        from apps.payments.packs import balances
+        context["credit_balances"] = balances(student)
+        context["pdf_balance"] = next((row for row in context["credit_balances"] if row["kind"] == "pdf"), None)
+        context["classroom_balance"] = next((row for row in context["credit_balances"] if row["kind"] == "classroom"), None)
         context["recent_practice_attempts"] = (
             ExamAttempt.objects.filter(student=student, exam__creator=student, exam__is_private_practice=True)
             .select_related("exam").order_by("-started_at")[:5]

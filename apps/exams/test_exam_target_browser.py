@@ -12,6 +12,7 @@ from django.contrib.staticfiles.testing import StaticLiveServerTestCase
 from django.test import override_settings
 from django.urls import reverse
 
+from apps.accounts.browser_test_mail import capture_browser_mail
 from apps.accounts.models import User
 from apps.exams.models import Category, Exam, ExamQuestion
 from apps.questions.models import Question, QuestionOption
@@ -44,7 +45,8 @@ class ExamTargetBrowserTests(StaticLiveServerTestCase):
                 "neet": reverse("exams:exam_instructions", args=[exams["neet"].slug])}
         env = os.environ.copy(); env.update(TARGET_TEST_URL=self.live_server_url, TARGET_TEST_DATA=json.dumps(data))
         script = Path(settings.BASE_DIR) / "tests" / "browser" / "exam-target-smoke.cjs"
-        result = subprocess.run(["node", str(script)], env=env, text=True, capture_output=True, timeout=120)
+        with capture_browser_mail(self.live_server_url, env):
+            result = subprocess.run(["node", str(script)], env=env, text=True, capture_output=True, timeout=120)
         self.assertEqual(result.returncode, 0, f"Target browser workflow failed:\n{result.stdout}\n{result.stderr}")
         self.assertIn("EXAM_TARGET_BROWSER_OK", result.stdout)
         student = User.objects.get(username="browser_target_student")

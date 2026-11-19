@@ -5,6 +5,7 @@ import uuid
 import pymupdf as fitz
 from django.conf import settings
 from django.contrib import messages
+from django.core.exceptions import PermissionDenied
 from django.core.files.base import ContentFile
 from django.db import OperationalError, connection, transaction
 from django.db.models import Exists, Max, OuterRef, Q
@@ -14,6 +15,7 @@ from django.utils import timezone
 from django.utils.cache import patch_cache_control
 from django.views import View
 
+from apps.accounts.models import User
 from apps.core.permissions import StudentRequiredMixin
 from apps.core.exam_targets import targets_for_track
 from apps.exams.models import Category, Exam, ExamAttempt, ExamQuestion
@@ -55,14 +57,24 @@ class PrivateStudentMixin(StudentRequiredMixin):
                     # A track update may have committed while this request was
                     # waiting. All authorization below must use the locked row.
                     request.user = lock_practice_user(request.user)
-                    active = active_private_attempt(request.user)
-                    if active:
-                        messages.info(request, "Finish your active practice test before opening answers, the source paper or question bank.")
-                        response = redirect("exams:exam_session", attempt_uuid=active.attempt_uuid)
+                    # This request may have entered before a concurrent email
+                    # change committed. Preserve the middleware's exception for
+                    # existing results, but block new review/test work.
+                    from apps.accounts.middleware import EmailVerificationMiddleware
+                    view_name = getattr(request.resolver_match, "view_name", None)
+                    if request.user.needs_email_verification and view_name not in EmailVerificationMiddleware.ALLOWED:
+                        response = redirect("accounts:verification_pending")
                     else:
-                        response = super().dispatch(request, *args, **kwargs)
+                        active = active_private_attempt(request.user)
+                        if active:
+                            messages.info(request, "Finish your active practice test before opening answers, the source paper or question bank.")
+                            response = redirect("exams:exam_session", attempt_uuid=active.attempt_uuid)
+                        else:
+                            response = super().dispatch(request, *args, **kwargs)
             else:
                 response = super().dispatch(request, *args, **kwargs)
+        except User.DoesNotExist:
+            raise Http404() from None
         except OperationalError as exc:
             if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
                 raise
@@ -168,16 +180,34 @@ class PracticeUploadView(PrivateStudentMixin, View):
         if not form.is_valid():
             return render(request, "questions/practice_upload.html", {"form": form, "max_pages": settings.PRACTICE_MAX_PDF_PAGES})
         upload = form.cleaned_data["pdf_file"]
+        paper = None
+
+        def discard_rolled_back_file():
+            # Django file storage is not transactional. If the DB operation
+            # rolled back after writing the private upload, remove that orphan.
+            field = paper.private_pdf_file if paper is not None else None
+            if field and getattr(field, "_committed", False):
+                try:
+                    field.storage.delete(field.name)
+                except OSError:
+                    import logging
+                    logging.getLogger(__name__).warning("Could not remove a rolled-back private upload.")
+
         try:
             with transaction.atomic():
                 user = lock_practice_user(request.user)
+                if not user.is_active or not user.is_student:
+                    raise PermissionDenied()
+                if user.needs_email_verification:
+                    return redirect("accounts:verification_pending")
                 if form.cleaned_data["target_type"] not in targets_for_track(user.exam_track):
                     form.add_error("target_type", "Your profile track changed. Choose a paper for your current exam.")
                     return render(request, "questions/practice_upload.html", {"form": form, "max_pages": settings.PRACTICE_MAX_PDF_PAGES})
                 # Private practice extraction is local-only; PDFs are never sent
                 # to external providers (enforced by the form's local-only mode).
-                consume(user, "pdf_uploads")
-                paper = QuestionPaperUpload.objects.create(
+                from apps.payments.packs import debit
+                debit_record = debit(user, "pdf", f"pending-pdf:{uuid.uuid4()}")
+                paper = QuestionPaperUpload(
                     is_student_private=True, title=form.cleaned_data["title"],
                     subject=form.cleaned_data["subject"], target_type=form.cleaned_data["target_type"], category=_system_category(),
                     uploaded_by=user, private_pdf_file=upload, file_size_bytes=upload.size,
@@ -185,14 +215,22 @@ class PracticeUploadView(PrivateStudentMixin, View):
                     extraction_mode=QuestionPaperUpload.ExtractionMode.LOCAL,
                     image_first=form.cleaned_data.get("image_first", True),
                 )
+                paper.save()
+                debit_record.resource_key = f"pdf:{paper.pk}"
+                debit_record.save(update_fields=["resource_key"])
         except (QuotaExceeded, FeatureUnavailable) as exc:
+            discard_rolled_back_file()
             messages.error(request, str(exc))
             return redirect("payments:plans")
         except OperationalError as exc:
+            discard_rolled_back_file()
             if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
                 raise
             messages.warning(request, "Practice is busy. Please retry your upload.")
             return redirect("questions:practice_upload")
+        except Exception:
+            discard_rolled_back_file()
+            raise
         log_audit(request.user, "PRIVATE_PDF_UPLOADED", f"Private paper {paper.pk} uploaded.", request=request)
         task = extract_private_practice_paper
         try:
@@ -201,11 +239,32 @@ class PracticeUploadView(PrivateStudentMixin, View):
             else:
                 task.delay(paper.pk)
         except Exception:
-            # Preserve the source for manual entry; do not expose broker details.
-            paper.status = QuestionPaperUpload.ProcessingStatus.FAILED
-            paper.extraction_log = "Extraction could not be queued. You can add questions manually."
-            paper.save(update_fields=["status", "extraction_log"])
-            messages.warning(request, "Extraction could not be queued. Your PDF is saved and you can add questions manually.")
+            # A broker timeout is ambiguous: the worker may already have taken
+            # the job. Cancel only a still-PENDING job via the same atomic claim
+            # used by the worker. A late delivery will then refuse to run it.
+            pending = [QuestionPaperUpload.ProcessingStatus.PENDING]
+            if settings.CELERY_TASK_ALWAYS_EAGER and not paper.extracted_questions.exists() and not paper.figures.exists():
+                pending.append(QuestionPaperUpload.ProcessingStatus.PROCESSING)
+            cancelled = QuestionPaperUpload.objects.filter(pk=paper.pk, status__in=pending).update(
+                status=QuestionPaperUpload.ProcessingStatus.FAILED, updated_at=timezone.now(),
+                extraction_log="Extraction did not start. Your PDF is saved; you can add questions manually.",
+            )
+            if cancelled:
+                from apps.payments.packs import reverse_failed_pdf
+                returned = reverse_failed_pdf(f"pdf:{paper.pk}")
+                if returned:
+                    messages.warning(request, "Extraction could not be completed. Your PDF is saved for manual review and your credit was returned.")
+                else:
+                    messages.warning(request, "Extraction could not be completed. Your PDF is saved for manual review; contact support if credit reconciliation is needed.")
+            else:
+                # An eager worker may have already marked the empty failure and
+                # reversed its credit before re-raising. Do not mislabel that
+                # definite outcome as an uncertain broker response.
+                from apps.payments.models import CreditUse
+                if CreditUse.objects.filter(resource_key=f"pdf:{paper.pk}", reversed_at__isnull=False).exists():
+                    messages.warning(request, "Extraction failed. Your PDF is saved for manual review and your credit was returned.")
+                else:
+                    messages.warning(request, "The queue response was uncertain. Processing may already be underway; your PDF and credit record are preserved. Contact support if it remains stuck.")
         return redirect("questions:practice_settings", pk=paper.pk)
 
 
@@ -258,11 +317,8 @@ class PracticeSettingsView(PrivateStudentMixin, View):
             form = PracticeSettingsForm(request.POST, questions=included, unassigned_count=paper.figures.filter(question__isnull=True).count())
             if not form.is_valid():
                 return render(request, "questions/practice_settings.html", self._context(paper, form))
-            try:
-                consume(request.user, "test_creations")
-            except QuotaExceeded as exc:
-                messages.error(request, str(exc))
-                return redirect("payments:plans")
+            # Creating a test from an already paid-for paper does not consume
+            # another PDF or classroom credit.
             exam = Exam.objects.create(
                 is_private_practice=True, slug=f"practice-{uuid.uuid4().hex}", title=paper.title,
                 subject=paper.subject, target_type=paper.target_type, category=paper.category, creator=request.user,

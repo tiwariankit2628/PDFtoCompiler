@@ -19,7 +19,7 @@ from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db import IntegrityError, OperationalError, connection, transaction
 from django.db.models import F
-from django.http import HttpResponse, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -28,9 +28,11 @@ from datetime import timedelta
 from decimal import Decimal
 import random
 
+from apps.accounts.models import User
 from apps.core.permissions import ActiveUserRequiredMixin, StudentRequiredMixin, TeacherRequiredMixin
 from apps.core.exam_targets import exam_matches_student, targets_for_track, track_for_target
 from apps.core.utils import log_audit
+from apps.payments.services import QuotaExceeded
 from django.views import View
 
 from .models import ClassroomParticipant, ClassroomSession, Exam, ExamAttempt, ExamResponse
@@ -145,7 +147,10 @@ class ClassroomNoStoreMixin:
     """Join codes, participant lists and controls must not enter shared caches."""
 
     def dispatch(self, request, *args, **kwargs):
-        response = super().dispatch(request, *args, **kwargs)
+        try:
+            response = super().dispatch(request, *args, **kwargs)
+        except User.DoesNotExist:
+            raise Http404() from None
         patch_cache_control(response, private=True, no_store=True)
         response["X-Robots-Tag"] = "noindex, nofollow"
         return response
@@ -155,41 +160,64 @@ class ClassroomHubView(ClassroomNoStoreMixin, TeacherRequiredMixin, View):
     """Classroom workspace: create a session from an owned test, and manage sessions."""
 
     def get(self, request):
-        exams = (Exam.objects.filter(creator=request.user, is_private_practice=False)
+        exams = (Exam.objects.filter(creator=request.user, is_private_practice=False, series_slot__isnull=True)
                  .order_by("-updated_at")[:50])
         sessions = (ClassroomSession.objects.filter(teacher=request.user)
                     .select_related("exam").order_by("-created_at")[:50])
         session_rows = [{"session": s, "counts": s.counts()} for s in sessions]
         from apps.questions.models import QuestionPaperUpload
         papers = QuestionPaperUpload.objects.filter(uploaded_by=request.user, is_classroom_private=True).order_by("-created_at")[:50]
+        from apps.payments.packs import balances
         return render(request, "exams/classroom/hub.html", {
             "exams": exams, "session_rows": session_rows, "classroom_papers": papers,
+            "balance_rows": balances(request.user),
         })
 
 
 class ClassroomSessionCreateView(ClassroomNoStoreMixin, TeacherRequiredMixin, View):
     def post(self, request):
-        exam = get_object_or_404(Exam, pk=request.POST.get("exam"), creator=request.user, is_private_practice=False)
-        if exam.status != Exam.ExamStatus.PUBLISHED:
-            messages.error(request, "Publish the test before starting a classroom session.")
-            return redirect("exams:classroom_hub")
-        if not exam.exam_questions.exists():
-            messages.error(request, "This test has no questions yet.")
-            return redirect("exams:classroom_hub")
-        allowed = targets_for_track(track_for_target(exam.target_type))
-        if not allowed or exam.exam_questions.exclude(question__target_type__in=allowed).exists():
-            messages.error(request, "Choose the test's JEE or NEET target and review questions tagged for the other exam first.")
-            return redirect("exams:exam_edit", pk=exam.pk) if not exam.is_classroom_only else redirect("exams:classroom_hub")
-        session = ClassroomSession.create_for(
-            exam, request.user,
-            label=(request.POST.get("label") or "").strip()[:120],
-            allow_retakes=bool(request.POST.get("allow_retakes")),
-            show_leaderboard_to_students=bool(request.POST.get("show_leaderboard_to_students")),
-        )
-        log_audit(request.user, "CLASSROOM_SESSION_CREATED",
-                  f"Classroom session #{session.pk} created.", request=request)
-        messages.success(request, f"Classroom session ready. Join code: {session.code}")
-        return redirect("exams:classroom_session", pk=session.pk)
+        from apps.payments.services import QuotaExceeded, lock_practice_user
+        from .activations import ensure_activation
+        for retry in range(5):
+            try:
+                with transaction.atomic():
+                    user = lock_practice_user(request.user)
+                    if not user.is_active or not (user.is_teacher or user.is_admin_role):
+                        raise PermissionDenied()
+                    if user.needs_email_verification:
+                        return redirect("accounts:verification_pending")
+                    exam = get_object_or_404(Exam.objects.select_for_update(), pk=request.POST.get("exam"),
+                                             creator=user, is_private_practice=False)
+                    if exam.status != Exam.ExamStatus.PUBLISHED or not exam.exam_questions.exists():
+                        messages.error(request, "Publish a test with questions before starting a session.")
+                        return redirect("exams:classroom_hub")
+                    if hasattr(exam, "series_slot"):
+                        messages.error(request, "Series tests are separate from classroom tests.")
+                        return redirect("exams:classroom_hub")
+                    allowed = targets_for_track(track_for_target(exam.target_type))
+                    if not allowed or exam.exam_questions.exclude(question__target_type__in=allowed).exists():
+                        messages.error(request, "Choose the test's JEE or NEET target and review mismatched questions first.")
+                        return redirect("exams:exam_edit", pk=exam.pk) if not exam.is_classroom_only else redirect("exams:classroom_hub")
+                    activation = ensure_activation(user, exam)
+                    session = ClassroomSession.create_for(
+                        exam, user, activation=activation, commercial_rules=True,
+                        label=(request.POST.get("label") or "").strip()[:120],
+                        allow_retakes=False,
+                        show_leaderboard_to_students=bool(request.POST.get("show_leaderboard_to_students")),
+                    )
+                    log_audit(user, "CLASSROOM_SESSION_CREATED", f"Classroom session #{session.pk} created.", request=request)
+                messages.success(request, f"Session ready. Join code: {session.code}. This test activation lasts until {timezone.localtime(activation.ends_at):%d %b %Y %H:%M}.")
+                return redirect("exams:classroom_session", pk=session.pk)
+            except QuotaExceeded as exc:
+                messages.error(request, str(exc))
+                return redirect("payments:plans")
+            except OperationalError as exc:
+                if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
+                    raise
+                if retry == 4:
+                    messages.error(request, "The classroom is busy. Please retry.")
+                    return redirect("exams:classroom_hub")
+                time.sleep(0.025 * (2 ** retry))
 
 
 class ClassroomSessionDetailView(ClassroomNoStoreMixin, TeacherRequiredMixin, View):
@@ -251,6 +279,8 @@ class ClassroomSessionControlView(ClassroomNoStoreMixin, TeacherRequiredMixin, V
         if action == "open":
             if session.is_ended:
                 messages.error(request, "An ended session cannot be reopened. Create a new session instead.")
+            elif session.activation_id and not session.activation.available:
+                messages.error(request, "The 24-hour activation has ended or was suspended. Create a new session to reactivate the test.")
             else:
                 session.is_open = True
                 session.save(update_fields=["is_open", "updated_at"])
@@ -436,16 +466,24 @@ class ClassroomJoinView(ClassroomNoStoreMixin, StudentRequiredMixin, View):
                 return redirect("exams:classroom_join")
             session.exam = Exam.objects.select_for_update().get(pk=session.exam_id)
 
-            active = session.attempts.filter(student=request.user, status=ExamAttempt.AttemptStatus.IN_PROGRESS).first()
+            # Test identity is the underlying exam, not the code. Reconnecting
+            # through a different class never creates or charges a second attempt.
+            active = ExamAttempt.objects.filter(exam=session.exam, student=user, status=ExamAttempt.AttemptStatus.IN_PROGRESS).select_related("exam").first()
             if active and not active.is_expired:
                 return redirect("exams:exam_session", attempt_uuid=active.attempt_uuid)
             if active:
                 active.auto_timeout_if_expired()
+            if user.needs_email_verification:
+                return redirect("accounts:verification_pending")
             if not exam_matches_student(user, session.exam):
                 messages.error(request, "This test is not available for your selected exam, or its target has not been set. Ask your teacher to check it.")
                 return redirect("exams:classroom_join")
-            if session.is_ended:
-                messages.error(request, "This session has ended and is no longer accepting students.")
+            previous = ExamAttempt.objects.filter(exam=session.exam, student=user).exclude(status=ExamAttempt.AttemptStatus.IN_PROGRESS).order_by("-started_at").first()
+            if previous:
+                messages.info(request, "You have already completed this test. Retakes are not available.")
+                return redirect("exams:exam_completed", attempt_uuid=previous.attempt_uuid)
+            if session.is_ended or (session.activation_id and not session.activation.available):
+                messages.error(request, "This test activation has ended or is unavailable. Ask your teacher for a new code.")
                 return redirect("exams:classroom_join")
             already = session.participants.filter(student=request.user).exists()
             if not session.joining_allowed and not already:
@@ -482,9 +520,10 @@ class ClassroomTakeView(ClassroomNoStoreMixin, StudentRequiredMixin, View):
             return redirect("exams:exam_session", attempt_uuid=active.attempt_uuid)
         if active and active.is_expired:
             active.auto_timeout_if_expired()
-        completed = session.attempts.filter(student=request.user).exclude(
+        completed = ExamAttempt.objects.filter(exam=session.exam, student=request.user).exclude(
             status=ExamAttempt.AttemptStatus.IN_PROGRESS)
-        can_start = not session.is_ended and session.exam.status == Exam.ExamStatus.PUBLISHED and (session.allow_retakes or not completed.exists())
+        can_start = (not session.is_ended and session.exam.status == Exam.ExamStatus.PUBLISHED
+                     and (not session.activation_id or session.activation.available) and not completed.exists())
         return render(request, "exams/classroom/take.html", {
             "session": session, "exam": session.exam, "can_start": can_start,
             "completed": completed.order_by("-started_at"),
@@ -495,6 +534,9 @@ class ClassroomTakeView(ClassroomNoStoreMixin, StudentRequiredMixin, View):
         for retry in range(5):
             try:
                 return self._start_once(request, session)
+            except QuotaExceeded as exc:
+                messages.error(request, str(exc))
+                return redirect("payments:plans")
             except OperationalError as exc:
                 if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
                     raise
@@ -517,7 +559,7 @@ class ClassroomTakeView(ClassroomNoStoreMixin, StudentRequiredMixin, View):
             session.exam = Exam.objects.select_for_update().get(pk=session.exam_id)
             # Resume an existing active attempt rather than starting a new one.
             active = (ExamAttempt.objects.select_for_update()
-                      .filter(classroom_session=session, student=request.user,
+                      .filter(exam=session.exam, student=user,
                               status=ExamAttempt.AttemptStatus.IN_PROGRESS).first())
             if active:
                 if active.is_expired:
@@ -525,16 +567,24 @@ class ClassroomTakeView(ClassroomNoStoreMixin, StudentRequiredMixin, View):
                 else:
                     return redirect("exams:exam_session", attempt_uuid=active.attempt_uuid)
 
+            if user.needs_email_verification:
+                return redirect("accounts:verification_pending")
             if not exam_matches_student(user, session.exam):
                 from django.http import Http404
                 raise Http404()
-            if session.is_ended or session.exam.status != Exam.ExamStatus.PUBLISHED:
-                messages.error(request, "This session has ended or its test is no longer available.")
+            from .activations import locked_activation_available
+            from .models import SeriesSlot
+            if SeriesSlot.objects.filter(exam=session.exam).exists():
+                messages.error(request, "Series tests are separate from classroom tests.")
+                return redirect("exams:classroom_join")
+            if (session.is_ended or session.exam.status != Exam.ExamStatus.PUBLISHED
+                    or not locked_activation_available(session)):
+                messages.error(request, "This session has ended or its 24-hour activation is unavailable.")
                 return redirect("exams:classroom_take", pk=session.pk)
 
-            completed = session.attempts.filter(student=request.user).exclude(
+            completed = ExamAttempt.objects.filter(exam=session.exam, student=user).exclude(
                 status=ExamAttempt.AttemptStatus.IN_PROGRESS)
-            if completed.exists() and not session.allow_retakes:
+            if completed.exists():
                 messages.info(request, "You have already completed this test.")
                 last = completed.order_by("-started_at").first()
                 return redirect("exams:exam_completed", attempt_uuid=last.attempt_uuid)
@@ -563,6 +613,9 @@ class ClassroomTakeView(ClassroomNoStoreMixin, StudentRequiredMixin, View):
                 if existing:
                     return redirect("exams:exam_session", attempt_uuid=existing.attempt_uuid)
                 raise
+
+            from apps.payments.packs import debit
+            debit(user, "classroom", f"attempt:{attempt.pk}")
 
             # started_at uses auto_now_add, so derive expiry from the persisted
             # timestamp rather than the earlier pre-insert clock reading.

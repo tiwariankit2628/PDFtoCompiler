@@ -2,15 +2,17 @@
 import csv
 import io
 from decimal import Decimal
+from datetime import timedelta
 
 import pymupdf
 from django.urls import reverse
+from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.exams.analytics import compute_exam_institutional_analytics
 from apps.exams.classroom import _session_leaderboard
 from apps.exams.classroom_results import classroom_result_summary
-from apps.exams.models import ExamAttempt, ExamSecurityLog
+from apps.exams.models import ExamAttempt, ExamResponse, ExamSecurityLog
 from apps.questions.models import AnswerStatus
 from .test_classroom import ClassroomBase
 
@@ -133,7 +135,16 @@ class ClassroomReportingTests(ClassroomBase):
     def test_monitor_csv_and_leaderboard_use_best_retake(self):
         session = self.session_for(exam=self.make_exam(keyed=2, questions=2), allow_retakes=True)
         older = self.take(session, {1: "A", 2: "A"})
-        newer = self.take(session, {1: "A", 2: "B"})
+        # Import a historical retake directly: new retakes are now blocked,
+        # but legacy reporting must continue to use the best saved result.
+        newer = ExamAttempt.objects.create(exam=session.exam, student=self.student, classroom_session=session,
+            status=ExamAttempt.AttemptStatus.IN_PROGRESS, total_marks=session.exam.total_marks,
+            expires_at=timezone.now() + timedelta(minutes=30))
+        for eq in session.exam.exam_questions.select_related("question").order_by("order"):
+            ExamResponse.objects.create(attempt=newer, exam_question=eq, order=eq.order,
+                selected_option=eq.question.options.get(option_key="A" if eq.order == 1 else "B"))
+        newer.submit_attempt()
+        newer.refresh_from_db()
         self.assertNotEqual(older.score_obtained, newer.score_obtained)
         self.client.force_login(self.teacher)
         row = self.client.get(reverse("exams:classroom_monitor", args=[session.pk])).json()["rows"][0]
@@ -212,5 +223,7 @@ class ClassroomReportingTests(ClassroomBase):
         self.assertNotIn(self.student.username, exported)
         self.client.force_login(self.student)
         self.client.post(reverse("exams:exam_start", args=[exam.slug]))
-        self.assertTrue(ExamAttempt.objects.filter(exam=exam, student=self.student, classroom_session__isnull=True,
-                                                   status=ExamAttempt.AttemptStatus.IN_PROGRESS).exists())
+        # The same test cannot be retaken via its former public URL after it is
+        # being conducted by classroom code.
+        self.assertFalse(ExamAttempt.objects.filter(exam=exam, student=self.student, classroom_session__isnull=True,
+                                                    status=ExamAttempt.AttemptStatus.IN_PROGRESS).exists())

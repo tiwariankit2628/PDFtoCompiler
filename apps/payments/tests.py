@@ -16,7 +16,10 @@ from .models import Checkout, Payment, PracticeEntitlement, PracticePlan, Refund
 from .services import current_plan
 
 
+# Exercise the retained legacy code in isolation; new legacy checkouts are
+# disabled in normal configuration and have separate cutover coverage.
 @override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"],
+                   ALLOW_TEST_PAYMENT_CREDITS=True, LEGACY_BILLING_NEW_CHECKOUTS=True,
                    RAZORPAY_KEY_ID="rzp_test_Unit123", RAZORPAY_KEY_SECRET="safe_unit_secret",
                    RAZORPAY_WEBHOOK_SECRET="safe_webhook_secret")
 class RazorpayPhase7Tests(TestCase):

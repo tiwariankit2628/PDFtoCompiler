@@ -15,6 +15,7 @@ from django.conf import settings
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
 from django.test import override_settings
 
+from apps.accounts.browser_test_mail import capture_browser_mail
 from .test_pdf_layout import make_two_column_pdf
 
 
@@ -37,7 +38,7 @@ class BrowserPracticeSmokeTests(StaticLiveServerTestCase):
         ))
         super().setUpClass()
 
-    def test_pdf_to_result_reattempt_report_and_bank_in_chromium(self):
+    def test_pdf_to_result_no_retake_report_and_bank_in_chromium(self):
         if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):
             self.fail("Set CHROMIUM_PATH and install Node and tests/browser dependencies before enabling this test.")
         root = Path(self.workspace.name)
@@ -46,7 +47,8 @@ class BrowserPracticeSmokeTests(StaticLiveServerTestCase):
         env = os.environ.copy()
         env.update(PRACTICE_TEST_URL=self.live_server_url, PRACTICE_TEST_PDF=str(source), PRACTICE_TEST_REPORT=str(report))
         script = Path(settings.BASE_DIR) / "tests" / "browser" / "practice-smoke.cjs"
-        result = subprocess.run(["node", str(script)], env=env, text=True, capture_output=True, timeout=120)
+        with capture_browser_mail(self.live_server_url, env):
+            result = subprocess.run(["node", str(script)], env=env, text=True, capture_output=True, timeout=120)
         self.assertEqual(result.returncode, 0, f"Browser test failed:\n{result.stdout}\n{result.stderr}")
         self.assertIn("BROWSER_WORKFLOW_OK", result.stdout)
         with fitz.open(report) as document:
@@ -109,7 +111,7 @@ class BrowserUpgradeSmokeTests(StaticLiveServerTestCase):
             "edit": reverse("questions:extracted_edit", args=[question.pk]), "ai": reverse("questions:answer_suggestion", args=[question.pk]),
         }))
         script = Path(settings.BASE_DIR) / "tests" / "browser" / "upgrade-smoke.cjs"
-        with patch("apps.questions.answer_views.GeminiAnswerClient") as provider:
+        with capture_browser_mail(self.live_server_url, env), patch("apps.questions.answer_views.GeminiAnswerClient") as provider:
             provider.return_value.calls = 2
             provider.return_value.suggest.return_value = {"option_key": "A", "confidence": Decimal("0.910"),
                 "explanation": "Mock reasoning", "uncertainty": "Check the original.", "prompt_tokens": 100, "output_tokens": 50,
@@ -149,7 +151,7 @@ class BrowserLocalOnlyUploadTests(StaticLiveServerTestCase):
         env.update(GEMINI_ONLY_TEST_URL=self.live_server_url, GEMINI_ONLY_TEST_PDF=str(source))
         script = Path(settings.BASE_DIR) / "tests" / "browser" / "gemini-only-smoke.cjs"
         calls = []
-        with patch("apps.questions.cloud_providers.requests.Session.request", side_effect=fake_google_request(calls)):
+        with capture_browser_mail(self.live_server_url, env), patch("apps.questions.cloud_providers.requests.Session.request", side_effect=fake_google_request(calls)):
             result = subprocess.run(["node", str(script)], env=env, text=True, capture_output=True, timeout=120)
         self.assertEqual(result.returncode, 0, f"Local-only browser test failed:\n{result.stdout}\n{result.stderr}")
         self.assertIn("LOCAL_ONLY_BROWSER_OK", result.stdout)

@@ -1,0 +1,36 @@
+{% extends 'base.html' %}{% load question_content static %}
+{% block title %}Your answers · {{ exam.title }}{% endblock %}
+{% block extra_head %}{% include 'questions/_practice_math.html' %}{% endblock %}
+{% block content %}<div class="container py-4 py-lg-5">
+<a href="{% url 'exams:student_result_detail' attempt.attempt_uuid %}" class="small fw-bold">← Back to your score</a>
+<h1 class="fw-bold mt-3">Your answer review</h1><p class="text-muted">{{ exam.title }} · Your recorded responses and outcomes</p>
+<div class="alert alert-light border small">Your score and choices are available now. Correct keys and explanations become visible when {% if attempt.classroom_session_id %}your teacher{% else %}the series administrator{% endif %} releases them. A score can reveal whether your own choice was correct; original question images may themselves contain printed answers.</div>
+{% for item in reviewed_questions %}<article class="surface-card p-4 mb-3">
+<div class="d-flex justify-content-between gap-2"><h2 class="h5 fw-bold">Question {{ item.order }}</h2><span class="badge bg-{{ item.badge_class }}">{{ item.status_label }}</span></div>
+{% if item.original_image_missing %}<p class="small text-danger">The original question image is unavailable. Available text and supporting images are shown below.</p>{% endif %}
+{% if item.primary_crops %}
+  {% for figure in item.primary_crops %}<img loading="lazy" class="img-fluid rounded border my-2" src="{% if attempt.exam.is_classroom_only %}{% url 'exams:classroom_attempt_figure' attempt.attempt_uuid figure.pk %}{% elif is_series %}{% url 'exams:series_attempt_figure' attempt.attempt_uuid figure.pk %}{% else %}{{ figure.image.url }}{% endif %}" alt="Original question image{% if item.primary_crops|length > 1 %}, part {{ forloop.counter }}{% endif %}">{% endfor %}
+  {% if item.missing_crop_pages %}<p class="small text-danger">A continuation image may be missing; check the supporting content below.</p>{% endif %}
+  <details class="small mt-3" {% if item.missing_crop_pages %}open{% endif %}><summary>Readable text and supporting images</summary>
+{% endif %}
+<div class="my-3">{{ item.question|render_question }}</div>
+{% if attempt.exam.is_classroom_only and item.question.private_image %}<img loading="lazy" class="img-fluid rounded border my-2" src="{% url 'exams:classroom_attempt_image' attempt.attempt_uuid item.question.pk %}" alt="Question diagram">
+{% elif is_series and item.question.private_image %}<img loading="lazy" class="img-fluid rounded border my-2" src="{% url 'exams:series_attempt_image' attempt.attempt_uuid item.question.pk %}" alt="Question diagram">
+{% elif not attempt.exam.is_classroom_only and not is_series and item.question.image %}<img loading="lazy" class="img-fluid rounded border my-2" src="{{ item.question.image.url }}" alt="Question diagram">{% endif %}
+{% for figure in item.question.figures.all %}{% if not figure.option_id and figure.source != 'question_crop' or not item.primary_crops and not figure.option_id %}
+{% if attempt.exam.is_classroom_only and figure.private_image %}<img loading="lazy" class="img-fluid rounded border my-2" src="{% url 'exams:classroom_attempt_figure' attempt.attempt_uuid figure.pk %}" alt="Supporting question figure">
+{% elif is_series and figure.private_image %}<img loading="lazy" class="img-fluid rounded border my-2" src="{% url 'exams:series_attempt_figure' attempt.attempt_uuid figure.pk %}" alt="Supporting question figure">
+{% elif not attempt.exam.is_classroom_only and not is_series and figure.image %}<img loading="lazy" class="img-fluid rounded border my-2" src="{{ figure.image.url }}" alt="Supporting question figure">{% endif %}{% endif %}{% endfor %}
+{% if item.primary_crops %}</details>{% endif %}
+{% if item.options %}<ul class="small mt-3">{% for option in item.options %}<li><strong>{{ option.option_key }}.</strong> {{ option.option_text }}{% if item.typed and option.option_key in item.typed.answer_labels or not item.typed and item.selected_option.id == option.id %} <span class="badge text-bg-light border">Your choice</span>{% endif %}
+{% if not item.primary_crops %}
+  {% if not attempt.exam.is_classroom_only and not is_series and option.image %}<img loading="lazy" class="img-fluid d-block rounded border my-2" src="{{ option.image.url }}" alt="Option {{ option.option_key }} image">{% endif %}
+  {% for figure in option.figures.all %}{% if attempt.exam.is_classroom_only and figure.private_image %}<img loading="lazy" class="img-fluid d-block rounded border my-2" src="{% url 'exams:classroom_attempt_figure' attempt.attempt_uuid figure.pk %}" alt="Option {{ option.option_key }} image">{% elif is_series and figure.private_image %}<img loading="lazy" class="img-fluid d-block rounded border my-2" src="{% url 'exams:series_attempt_figure' attempt.attempt_uuid figure.pk %}" alt="Option {{ option.option_key }} image">{% elif not attempt.exam.is_classroom_only and not is_series and figure.image %}<img loading="lazy" class="img-fluid d-block rounded border my-2" src="{{ figure.image.url }}" alt="Option {{ option.option_key }} image">{% endif %}{% endfor %}
+{% endif %}</li>{% endfor %}</ul>{% endif %}
+{% if item.typed %}<p class="mb-1">Your answer: <strong>{{ item.saved_choice|default_if_none:'Not answered' }}</strong></p>
+{% elif item.saved_choice %}<p class="mb-1">Your choice when graded: <strong>{{ item.saved_choice }}</strong></p>
+{% elif item.selected_option %}<p class="mb-1">Your choice: <strong>{{ item.selected_option.option_key }}. {{ item.selected_option.option_text }}</strong></p>
+{% else %}<p class="mb-1">Your answer: <strong>Not answered</strong></p>{% endif %}
+<p class="small text-muted mb-0">{% if item.status == 'ungraded' %}Not graded: no confirmed key.{% else %}Recorded marks: {{ item.marks_awarded }}{% endif %}</p>
+</article>{% empty %}<p class="text-muted">No saved responses are available for this attempt.</p>{% endfor %}
+</div>{% endblock %}

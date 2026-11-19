@@ -2,7 +2,7 @@ from django.urls import path
 from . import views
 from . import views_candidate
 from . import views_analytics
-from . import classroom, classroom_assets
+from . import classroom, classroom_assets, series, series_assets
 
 app_name = "exams"
 
@@ -21,6 +21,13 @@ urlpatterns = [
     path("classroom/take/<int:pk>/", classroom.ClassroomTakeView.as_view(), name="classroom_take"),
     path("classroom/attempts/<uuid:attempt_uuid>/figures/<int:pk>/", classroom_assets.ClassroomAttemptFigureView.as_view(), name="classroom_attempt_figure"),
     path("classroom/attempts/<uuid:attempt_uuid>/images/<int:pk>/", classroom_assets.ClassroomAttemptImageView.as_view(), name="classroom_attempt_image"),
+
+    # A student sees only the series for their selected track.
+    path("series/", series.SeriesView.as_view(), name="series"),
+    path("series/administration/", series.SeriesOperatorView.as_view(), name="series_operator"),
+    path("series/administration/<int:pk>/release-keys/", series.SeriesReleaseKeysView.as_view(), name="series_release_keys"),
+    path("series/attempts/<uuid:attempt_uuid>/figures/<int:pk>/", series_assets.SeriesAttemptFigureView.as_view(), name="series_attempt_figure"),
+    path("series/attempts/<uuid:attempt_uuid>/images/<int:pk>/", series_assets.SeriesAttemptImageView.as_view(), name="series_attempt_image"),
 
     # Candidate CBT Examination Interface
     path("catalog/", views_candidate.ExamCatalogView.as_view(), name="exam_catalog"),

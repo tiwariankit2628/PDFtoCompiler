@@ -848,4 +848,8 @@ class AnswerImageEndpointTests(TestCase):
         self.assertIsNone(attempt.responses.get(order=2).is_correct)
         review = self.client.get(reverse("exams:student_result_review", args=[attempt.attempt_uuid]))
         self.assertNotContains(review, "Key at grading")
-        self.assertNotContains(review, "Question 1?")
+        # New classroom sessions permit a review of the student's own answers
+        # immediately, without releasing correct keys or explanations.
+        self.assertContains(review, "Your answer review")
+        self.assertContains(review, "Question 1?")
+        self.assertContains(review, "Answered, ungraded")

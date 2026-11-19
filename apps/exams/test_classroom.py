@@ -251,16 +251,18 @@ class GradingAndLeaderboardTests(ClassroomBase):
         self.assertEqual(board[2]["rank"], 3)   # next rank skips to 3
         self.assertEqual(board[2]["username"], "mid")
 
-    def test_retakes_use_best_attempt(self):
+    def test_legacy_retake_flag_does_not_permit_a_new_attempt(self):
         exam = self.make_exam(keyed=3, questions=3)
         session = self.session_for(exam=exam, allow_retakes=True)
-        # First attempt: score 7. Second: score 12. Best (12) is ranked.
-        self._take_and_answer(self.student, session, {1: "A", 2: "A", 3: "B"})
-        self._take_and_answer(self.student, session, {1: "A", 2: "A", 3: "A"})
+        first = self._take_and_answer(self.student, session, {1: "A", 2: "A", 3: "B"})
+        again = self.join(self.student, session.code)
+        self.assertRedirects(again, reverse("exams:exam_completed", args=[first.attempt_uuid]), fetch_redirect_response=False)
+        self.start(self.student, session)
+        self.assertEqual(session.attempts.filter(student=self.student).count(), 1)
         from apps.exams.classroom import _session_leaderboard
         board = _session_leaderboard(session)
         self.assertEqual(len(board), 1)
-        self.assertEqual(float(board[0]["score"]), 12.0)
+        self.assertEqual(float(board[0]["score"]), 7.0)
 
 
 class PrivacyTests(ClassroomBase):

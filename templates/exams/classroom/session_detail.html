@@ -7,9 +7,10 @@
     <h2 class="fw-bold mb-0 mt-1">{{ session.exam.title }}</h2>
     <p class="text-muted mb-0">{{ session.label }}
       {% if session.is_ended %}<span class="badge bg-secondary">Ended</span>
-      {% elif session.is_open %}<span class="badge bg-success">Joining open</span>
+      {% elif session.joining_allowed %}<span class="badge bg-success">Joining open</span>
       {% else %}<span class="badge bg-warning text-dark">Joining closed</span>{% endif %}
     </p>
+    {% if session.activation %}<p class="small text-muted mt-2 mb-0">Test activation until {{ session.activation.ends_at|date:'d M Y, H:i' }} · {% if session.activation.available %}active{% else %}ended or suspended{% endif %}. Existing active student timers continue.</p>{% endif %}
   </div>
 </div>
 
@@ -49,11 +50,16 @@
         {% if session.student_answers_visible %}
         <p class="small text-muted mt-3 mb-0">Results and answer review are visible to participants.</p>
         {% else %}
-        {% if session.student_results_visible %}<p class="small text-muted mt-3 mb-0">Results are visible; answer review is not yet released.</p>{% endif %}
+        {% if session.student_results_visible %}<p class="small text-muted mt-3 mb-0">Scores and each student's own answers are visible; correct keys and explanations are not yet released.</p>{% endif %}
         <form method="post" action="{% url 'exams:classroom_control' session.pk %}" class="mt-3" onsubmit="return window.confirm('Release results and answer review to this session? Students may see keys while others are still taking the test.');">{% csrf_token %}
           <input type="hidden" name="action" value="release_results"><input type="hidden" name="confirm" value="yes">
           <button class="btn btn-sm btn-outline-success w-100">Release results &amp; answers</button>
         </form>{% endif %}
+        <form method="post" action="{% url 'exams:classroom_session_create' %}" class="mt-3">{% csrf_token %}
+          <input type="hidden" name="exam" value="{{ session.exam_id }}">
+          <button class="btn btn-sm btn-cbt-outline w-100">Create another class code for this same test</button>
+          <p class="small text-muted mt-2 mb-0">An active 24-hour activation is reused without another teacher credit. A new activation is needed after it ends.</p>
+        </form>
         <div class="d-flex gap-2 mt-3">
           <a href="{% url 'exams:classroom_leaderboard' session.pk %}" class="btn btn-sm btn-outline-primary"><i class="bi bi-trophy me-1"></i>Leaderboard</a>
           <a href="{% url 'exams:classroom_export' session.pk %}" class="btn btn-sm btn-outline-primary"><i class="bi bi-download me-1"></i>Export CSV</a>
@@ -72,7 +78,7 @@
       <div class="col-6 col-md"><div class="card border-0 shadow-sm rounded-4 text-center p-3"><div class="small text-muted">Timed out / ended</div><div class="h3 fw-bold mb-0" data-count="timed_out">{{ counts.timed_out }}</div></div></div>
       <div class="col-6 col-md"><div class="card border-0 shadow-sm rounded-4 text-center p-3"><div class="small text-muted">Security review</div><div class="h3 fw-bold mb-0" data-count="terminated">{{ counts.terminated }}</div></div></div>
     </div>
-    <div class="small text-muted mb-2"><span id="live-dot" class="badge bg-success">● live</span> Auto-refreshing. Counts are distinct students; retake states can overlap. Status shows the latest attempt; score shows the best completed result.</div>
+    <div class="small text-muted mb-2"><span id="live-dot" class="badge bg-success">● live</span> Auto-refreshing. Counts are distinct students. Older historical retakes, if any, remain in reports.</div>
 
     <div class="card border shadow-sm rounded-4">
       <div class="card-body p-3">

@@ -8,7 +8,7 @@
         <div class="col-lg-9">
             <div class="mb-4 text-center">
                 <span class="badge text-bg-primary-subtle text-primary border border-primary-subtle mb-2 px-3 py-1">System Architecture</span>
-                <h1 class="fw-bold mb-2">Built for High-Stakes Assessments</h1>
+                <h1 class="fw-bold mb-2">Thoughtful tools for practice</h1>
                 <p class="text-muted">Explore the engineering decisions and security boundaries powering {{ PLATFORM_NAME }}.</p>
             </div>
 
@@ -18,25 +18,25 @@
                     <div class="col-md-6">
                         <h6 class="fw-bold"><i class="bi bi-lock-fill text-success me-1"></i> Strict Server-Side Evaluation</h6>
                         <p class="text-muted small">
-                            Unlike basic quiz scripts, examination question payloads sent to the browser NEVER contain the correct answer option or solution matrices. Evaluation occurs strictly on the server upon authenticated submission.
+                            Answers are evaluated on the server; separate keys and explanations are withheld during a test. Original question text or images can themselves contain printed answers, so every source must be reviewed before publication.
                         </p>
                     </div>
                     <div class="col-md-6">
                         <h6 class="fw-bold"><i class="bi bi-clock-fill text-warning me-1"></i> Continuous State Synchronization</h6>
                         <p class="text-muted small">
-                            Candidate responses are continuously persisted. If the client experiences network packet loss, power failure, or machine reboot, resumption occurs without loss of work or timer discrepancies.
+                            Answers autosave while connected. Refresh or reconnect resumes the same active attempt and original server deadline; unsent changes can be lost if the connection is interrupted or time expires.
                         </p>
                     </div>
                     <div class="col-md-6">
                         <h6 class="fw-bold"><i class="bi bi-file-earmark-diff-fill text-info me-1"></i> Intelligent PDF Compiler</h6>
                         <p class="text-muted small">
-                            Combines PyMuPDF vectorized layout analysis with Tesseract OCR for scanned papers. Preserves mathematical equations and formulas, extracts diagrams, and provides an editable preview workspace.
+                            Uses local PyMuPDF layout analysis and Tesseract OCR when configured. Original question images and an editable preview help you review formulas, tables and diagrams; extraction can miss or misread content.
                         </p>
                     </div>
                     <div class="col-md-6">
-                        <h6 class="fw-bold"><i class="bi bi-currency-rupee text-primary me-1"></i> Configurable Freemium Business Model</h6>
+                        <h6 class="fw-bold"><i class="bi bi-currency-rupee text-primary me-1"></i> Clear, One-Time Packs</h6>
                         <p class="text-muted small">
-                            Integrated Razorpay billing engine supporting initial free test evaluation, premium test access controls, recurring plans, coupons, and secure server-verified webhooks.
+                            Separate free allowances and one-time packs for PDFs, classrooms and JEE/NEET series. Razorpay integration is test-mode only; real payments are not yet available.
                         </p>
                     </div>
                 </div>
@@ -47,7 +47,7 @@
                 <ul class="list-group list-group-flush small">
                     <li class="list-group-item d-flex justify-content-between align-items-center">
                         <span class="fw-semibold">Backend Framework</span>
-                        <span class="badge text-bg-light border">Python 3.12 + Django 5.2 LTS</span>
+                        <span class="badge text-bg-light border">Python 3.10–3.14 + Django 5.2 LTS</span>
                     </li>
                     <li class="list-group-item d-flex justify-content-between align-items-center">
                         <span class="fw-semibold">Primary Database</span>
@@ -67,7 +67,7 @@
                     </li>
                     <li class="list-group-item d-flex justify-content-between align-items-center">
                         <span class="fw-semibold">Commercial Payment Gateway</span>
-                        <span class="badge text-bg-light border">Razorpay (UPI, Netbanking, Cards)</span>
+                        <span class="badge text-bg-light border">Razorpay · test mode only</span>
                     </li>
                 </ul>
             </div>

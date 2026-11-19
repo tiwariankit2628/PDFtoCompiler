@@ -69,10 +69,18 @@ class ExamTargetMigrationTests(TransactionTestCase):
         ids = (teacher.pk, jee.pk, neet.pk, ambiguous.pk, exam.pk, paper.pk, question.pk,
                other_paper.pk, other_question.pk, recognized_exam.pk, ambiguous_exam.pk, attempt.pk, response.pk, option.pk)
 
-        MigrationExecutor(connection).migrate(self.migrate_to)
-        from apps.accounts.models import User as CurrentUser
-        from apps.exams.models import Exam as CurrentExam, ExamAttempt as CurrentAttempt, ExamResponse as CurrentResponse
-        from apps.questions.models import Question as CurrentQuestion, QuestionPaperUpload as CurrentPaper
+        executor = MigrationExecutor(connection)
+        executor.migrate(self.migrate_to)
+        # This intentionally stops before later commercial migrations. The
+        # runtime models already contain their fields, so using them against
+        # this historical schema would query columns that do not exist yet.
+        migrated = executor.loader.project_state(self.migrate_to).apps
+        CurrentUser = migrated.get_model("accounts", "User")
+        CurrentExam = migrated.get_model("exams", "Exam")
+        CurrentAttempt = migrated.get_model("exams", "ExamAttempt")
+        CurrentResponse = migrated.get_model("exams", "ExamResponse")
+        CurrentQuestion = migrated.get_model("questions", "Question")
+        CurrentPaper = migrated.get_model("questions", "QuestionPaperUpload")
 
         t, j, n, u, ex, p, q, op, oq, recognized, unknown, a, r, opt = ids
         self.assertEqual((CurrentUser.objects.get(pk=j).exam_track, CurrentUser.objects.get(pk=n).exam_track,

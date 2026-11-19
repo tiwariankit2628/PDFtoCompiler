@@ -40,8 +40,9 @@ SIDEBAR_SECTIONS = {
     },
     "plans": {
         "payments:plans", "payments:checkout_start", "payments:checkout",
-        "payments:verify", "payments:cancel_subscription",
+        "payments:verify", "payments:cancel_subscription", "payments:pack_start", "payments:pack_checkout", "payments:pack_verify",
     },
+    "series": {"exams:series"},
     "exams": {
         "exams:exam_catalog",
     },

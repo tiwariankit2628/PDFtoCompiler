@@ -8,7 +8,9 @@ urlpatterns = [
     path("login/", views.UserLoginView.as_view(), name="login"),
     path("logout/", views.UserLogoutView.as_view(), name="logout"),
     path("profile/", views.profile_view, name="profile"),
-    path("verify-email/<uuid:token>/", views.verify_email_view, name="verify_email"),
+    path("verify-email/pending/", views.verification_pending, name="verification_pending"),
+    path("verify-email/resend/", views.verification_resend, name="verification_resend"),
+    path("verify-email/<str:token>/", views.verify_email_view, name="verify_email"),
 
     # Password reset flow
     path(

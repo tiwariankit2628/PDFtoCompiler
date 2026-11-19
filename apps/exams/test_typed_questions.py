@@ -176,6 +176,85 @@ class TypedQuestionWorkflowTests(TestCase):
         self.assertEqual(attempt.responses.get(pk=numerical["response_id"]).palette_status, "answered")
         self.assertEqual(attempt.responses.get(pk=numerical["response_id"]).numerical_response, Decimal("0"))
 
+    def test_unreleased_classroom_own_review_preserves_typed_and_image_only_answers(self):
+        from django.core.files.base import ContentFile
+        from apps.questions.models import ExtractedFigure
+        from apps.questions.test_helpers import response_body
+        from .test_series_workflow import printed_answer_png
+
+        paper = self.paper("classroom")
+        paper.image_first = True
+        paper.save(update_fields=["image_first"])
+        multi = paper.extracted_questions.get(question_number=1)
+        multi.is_image_first = True
+        multi.question_text = ""  # actual question and options appear only in the original crop
+        multi.options = [{"key": key, "text": "", "visible_in_crop": True} for key in "ABCD"]
+        multi.explanation = "SECRET MULTIPLE EXPLANATION"
+        multi.save()
+        crop = ExtractedFigure(paper=paper, question=multi, source="question_crop", page_number=1)
+        crop.private_image.save("printed-answer.png", ContentFile(printed_answer_png()), save=True)
+        numerical = paper.extracted_questions.get(question_number=2)
+        numerical.explanation = "SECRET NUMERICAL EXPLANATION"
+        numerical.save(update_fields=["explanation"])
+        self.client.force_login(self.teacher)
+        created = self.client.post(reverse("questions:classroom_paper_review", args=[paper.pk]), {
+            "creation_token": str(uuid.uuid4()), "duration_minutes": 37,
+            "answer_key_text": "1:[A,C], 2:123.75, 3:B", "confirm_review": "on"})
+        self.assertEqual(created.status_code, 302, created.context and created.context["form"].errors)
+        session = ClassroomSession.objects.get(teacher=self.teacher, exam__is_classroom_only=True)
+        self.assertFalse(session.results_released)
+        self.client.force_login(self.student)
+        self.client.post(reverse("exams:classroom_join"), {"code": session.code})
+        self.client.post(reverse("exams:classroom_take", args=[session.pk]))
+        attempt = session.attempts.get(student=self.student)
+        expiry = attempt.expires_at
+        screen = self.client.get(reverse("exams:exam_session", args=[attempt.attempt_uuid]))
+        self.assertNotContains(screen, "SECRET MULTIPLE EXPLANATION")
+        self.assertNotContains(screen, "123.75")
+        items = screen.context["questions_data"]
+        self.assertTrue(items[0]["image_first"])
+        self.assertEqual(items[0]["question_text"], "")
+        image_url = items[0]["crop_urls"][0]
+        choice_a = next(o["id"] for o in items[0]["options"] if o["key"] == "A")
+        choice_b = next(o["id"] for o in items[3]["options"] if o["key"] == "B")
+        self.assertEqual(self.save(attempt, items[0], selected_option_ids=[choice_a]).status_code, 200)
+        self.assertEqual(self.save(attempt, items[1], numerical_response="5").status_code, 200)
+        self.assertEqual(self.save(attempt, items[3], selected_option_ids=[choice_b]).status_code, 200)
+        self.assertEqual(self.client.get(reverse("exams:exam_session", args=[attempt.attempt_uuid])).status_code, 200)
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.expires_at, expiry)
+        self.client.post(reverse("exams:exam_submit", args=[attempt.attempt_uuid]), "{}", content_type="application/json")
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.score_obtained, Decimal("0"))
+        self.assertEqual(classroom_result_summary(attempt)["counts"],
+                         {"correct": 0, "partial": 1, "incorrect": 1, "unattempted": 1, "ungraded": 1})
+        result = self.client.get(reverse("exams:student_result_detail", args=[attempt.attempt_uuid]))
+        self.assertContains(result, "Answered, ungraded")
+        own = self.client.get(reverse("exams:student_result_review", args=[attempt.attempt_uuid]))
+        self.assertContains(own, "Your answer review")
+        self.assertContains(own, "Partial credit")
+        self.assertContains(own, "Not graded")
+        self.assertContains(own, "printed answers")
+        self.assertNotContains(own, "123.75")
+        self.assertNotContains(own, "SECRET MULTIPLE EXPLANATION")
+        self.assertNotContains(own, "SECRET NUMERICAL EXPLANATION")
+        image = self.client.get(image_url)
+        self.assertEqual(image.status_code, 200)
+        self.assertIn("no-store", image["Cache-Control"])
+        self.assertIn(b"PRINTED ANSWER: A", response_body(image))
+        self.client.force_login(self.other)
+        self.assertIn(self.client.get(image_url).status_code, (403, 404))
+        self.assertIn(self.client.get(reverse("exams:student_result_review", args=[attempt.attempt_uuid])).status_code, (403, 404))
+        self.client.force_login(self.teacher)
+        self.client.post(reverse("exams:classroom_control", args=[session.pk]), {"action": "release_results", "confirm": "yes"})
+        self.client.force_login(self.student)
+        released = self.client.get(reverse("exams:student_result_review", args=[attempt.attempt_uuid]))
+        self.assertContains(released, "123.75")
+        self.assertContains(released, "SECRET MULTIPLE EXPLANATION")
+        self.assertContains(released, "SECRET NUMERICAL EXPLANATION")
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.score_obtained, Decimal("0"))
+
     def test_teacher_classroom_snapshots_types_join_and_keep_later_edits_separate(self):
         paper = self.paper("classroom")
         self.client.force_login(self.teacher)

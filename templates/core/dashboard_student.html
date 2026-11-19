@@ -18,6 +18,7 @@
             <a href="{% url 'exams:classroom_join' %}" class="btn btn-cbt-primary btn-sm">
                 <i class="bi bi-qr-code-scan me-1"></i> Join Test with Code
             </a>
+            <a href="{% url 'exams:series' %}" class="btn btn-light btn-sm"><i class="bi bi-grid-3x3-gap me-1"></i> {{ user.exam_track|upper }} Test Series</a>
             <a href="{% url 'questions:practice_upload' %}" class="btn btn-light btn-sm">
                 <i class="bi bi-file-earmark-pdf me-1"></i> New PDF Practice
             </a>
@@ -54,10 +55,10 @@
         <div class="tile-3d p-3 h-100">
             <div class="icon-box plum sm mb-2"><i class="bi bi-stars"></i></div>
             <div class="d-flex align-items-center justify-content-between">
-                <span class="stat-value fs-3">{% if not user.free_test_attempted %}1{% else %}0{% endif %}</span>
-                <span class="badge {% if not user.free_test_attempted %}bg-success{% else %}text-bg-light border{% endif %}">{% if not user.free_test_attempted %}Eligible{% else %}Used{% endif %}</span>
+                <span class="stat-value fs-3">{% if classroom_balance.free %}1{% else %}{{ classroom_balance.paid }}{% endif %}</span>
+                <span class="badge text-bg-light border">{% if classroom_balance.free %}Free start{% else %}Pack credits{% endif %}</span>
             </div>
-            <div class="small text-muted mt-1">Free full-length mock{% if not user.free_test_attempted %} available{% endif %}</div>
+            <div class="small text-muted mt-1">Classroom starts available{% if classroom_balance.free and classroom_balance.paid %} + {{ classroom_balance.paid }} paid{% endif %}</div>
         </div>
     </div>
     <div class="col-6 col-xl-3">
@@ -89,7 +90,7 @@
         <div>
             <span class="small fw-bold text-coral text-uppercase" style="letter-spacing:.5px;">Your private workspace</span>
             <h4 class="fw-bold mt-1 mb-1">Practice, reflect, improve.</h4>
-            <p class="text-muted small mb-0">{{ practice_usage.plan.name }} plan · usage resets monthly</p>
+            <p class="text-muted small mb-0">Your first PDF extraction is free; additional PDF credits never expire.</p>
         </div>
         <div class="d-flex flex-wrap gap-2">
             <a class="btn btn-cbt-primary btn-sm" href="{% url 'questions:practice_upload' %}"><i class="bi bi-upload me-1"></i> Upload PDF</a>
@@ -97,21 +98,7 @@
             <a class="btn btn-cbt-outline btn-sm" href="{% url 'payments:plans' %}"><i class="bi bi-credit-card me-1"></i> Plans &amp; Usage</a>
         </div>
     </div>
-    <div class="row g-2 mt-2">
-        {% for counter in practice_usage.counters %}
-        <div class="col-md-4">
-            <div class="bg-ivory rounded-3 p-3 h-100 border" style="border-color:var(--line) !important;">
-                <div class="d-flex justify-content-between small">
-                    <span class="fw-medium">{{ counter.label }}</span>
-                    <strong>{{ counter.used }} / {% if counter.limit != None %}{{ counter.limit }}{% else %}∞{% endif %}</strong>
-                </div>
-                <div class="progress mt-2" style="height:6px;background:var(--ivory-2);">
-                    <div class="progress-bar" style="width:{{ counter.percent }}%"></div>
-                </div>
-            </div>
-        </div>
-        {% endfor %}
-    </div>
+    <div class="row g-2 mt-2">{% for row in credit_balances %}<div class="col-md-6"><div class="bg-ivory rounded-3 p-3 border h-100"><div class="small fw-bold">{{ row.name }}</div><div class="mt-1"><strong>{{ row.paid }}</strong> paid credits · {% if row.free %}first free use available{% else %}free use spent{% endif %}</div></div></div>{% endfor %}</div>
 </div>
 
 <div class="row g-4">
@@ -163,17 +150,19 @@
                     <div class="d-flex justify-content-between align-items-center">
                         <div class="pe-2">
                             <strong class="d-block text-truncate">{{ attempt.exam.title }}</strong>
-                            <span class="small text-muted">{{ attempt.started_at|date:"M d, Y H:i" }} · {% if attempt.classroom_session_id %}Classroom{% else %}{{ attempt.exam.category.name }}{% endif %}</span>
+                            <span class="small text-muted">{{ attempt.started_at|date:"M d, Y H:i" }} · {% if attempt.classroom_session_id %}Classroom{% elif attempt.exam.series_slot %}Test series{% else %}{{ attempt.exam.category.name }}{% endif %}</span>
                         </div>
                         {% if attempt.status == 'in_progress' %}
                             <a href="{% url 'exams:exam_session' attempt.attempt_uuid %}" class="btn btn-sm btn-cbt-primary flex-shrink-0"><i class="bi bi-play-fill"></i> Resume</a>
-                        {% elif attempt.classroom_session_id and attempt.classroom_session.student_results_visible or not attempt.classroom_session_id and attempt.exam.show_result_immediately %}
+                        {% elif attempt.classroom_session_id and attempt.classroom_session.student_results_visible or not attempt.classroom_session_id and attempt.exam.show_result_immediately or attempt.exam.series_slot %}
                             <a href="{% url 'exams:student_result_detail' attempt.attempt_uuid %}" class="btn btn-sm btn-cbt-outline flex-shrink-0">Scorecard</a>
                         {% else %}
                             <span class="badge text-bg-light border flex-shrink-0">Under evaluation</span>
                         {% endif %}
                     </div>
-                    {% if attempt.status != 'in_progress' and attempt.exam.show_result_immediately and not attempt.classroom_session_id %}
+                    {% if attempt.status != 'in_progress' and attempt.exam.series_slot %}
+                    <div class="mt-1"><span class="badge text-bg-light border">Score · {{ attempt.score_obtained }}{% if attempt.has_ungraded_keys %} · partial{% endif %}</span></div>
+                    {% elif attempt.status != 'in_progress' and attempt.exam.show_result_immediately and not attempt.classroom_session_id %}
                     <div class="mt-1">
                         {% if attempt.has_ungraded_keys %}
                             <span class="badge text-bg-light border">Partial · unranked</span>

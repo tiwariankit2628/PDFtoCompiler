@@ -1,0 +1,11 @@
+{% extends 'base.html' %}
+{% block title %}Verify your email{% endblock %}
+{% block content %}
+<div class="container py-5"><div class="surface-card p-4 p-md-5 mx-auto" style="max-width:700px">
+  <span class="eyebrow">ONE MORE STEP</span><h1 class="fw-bold mt-2">Check your inbox.</h1>
+  <p>Verify <strong>{{ user.email }}</strong> before starting new work. The link expires after 24 hours; requesting a new one invalidates the previous link.</p>
+  <p class="small text-muted">Email delivery depends on the site administrator's mail configuration. Look in spam, or contact support if nothing arrives.</p>
+  <div class="d-flex flex-wrap gap-2"><form method="post" action="{% url 'accounts:verification_resend' %}">{% csrf_token %}<button class="btn btn-cbt-primary">Resend verification email</button></form><a class="btn btn-cbt-outline" href="{% url 'accounts:profile' %}">Update email address</a><a class="btn btn-cbt-outline" href="{% url 'accounts:logout' %}">Sign out</a></div>
+  {% if active_attempts %}<hr><h2 class="h5">Active tests</h2><p class="small">Your original timer continues. Verification does not stop an active attempt.</p>{% for attempt in active_attempts %}<a class="btn btn-sm btn-cbt-outline me-2" href="{% url 'exams:exam_session' attempt.attempt_uuid %}">Resume {{ attempt.exam.title }}</a>{% endfor %}{% endif %}
+</div></div>
+{% endblock %}

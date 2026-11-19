@@ -558,7 +558,7 @@
             let questionStartTime = Date.now();
             let isSubmitting = false;
             const IS_PRIVATE_PRACTICE = {% if exam.is_private_practice %}true{% else %}false{% endif %};
-            const RELIABLE_SAVE = IS_PRIVATE_PRACTICE || {% if attempt.classroom_session_id %}true{% else %}false{% endif %}
+            const RELIABLE_SAVE = IS_PRIVATE_PRACTICE || {% if attempt.classroom_session_id or is_series %}true{% else %}false{% endif %}
                 || questions.some(q => q.question_type === 'mcq_multiple' || q.question_type === 'numerical');
             let saveQueue = Promise.resolve();
             let pendingSaves = 0;

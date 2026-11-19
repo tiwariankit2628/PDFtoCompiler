@@ -26,6 +26,10 @@ class ReviewWorkPreserved(Exception):
     """A repeat extraction was refused to protect staged teacher edits."""
 
 
+class PrivateExtractionCancelled(Exception):
+    """A claimed private job was cancelled before it could save any work."""
+
+
 class PDFQuestionExtractor:
     """Extract questions for teacher review, without guessing answer keys.
 
@@ -45,8 +49,11 @@ class PDFQuestionExtractor:
     )
     OPTION_LINE_PATTERN = re.compile(r"^\s*(?:\(([A-Ea-e1-5कखगघङ१२३४५])\)|([A-Ea-e1-5१२३४५])[.)])\s*(.*)")
 
-    def __init__(self, paper_upload: QuestionPaperUpload):
+    def __init__(self, paper_upload: QuestionPaperUpload, *, claimed_private_job=False):
         self.paper = paper_upload
+        # Only the private worker uses this fence. Ordinary teacher extraction
+        # retains its existing behavior and does not depend on the queue.
+        self.claimed_private_job = claimed_private_job
         self.logs = []
         self._private_files_written = []
         self.ocr_available = self._check_ocr_availability()
@@ -206,8 +213,18 @@ class PDFQuestionExtractor:
     def extract(self) -> int:
         """Process the PDF into staging items and return the number saved."""
         previous_status = self.paper.status
-        self.paper.status = QuestionPaperUpload.ProcessingStatus.PROCESSING
-        self.paper.save(update_fields=["status"])
+        if self.claimed_private_job:
+            # The task has already atomically claimed PENDING -> PROCESSING.
+            # Never set it back here: reconciliation may have cancelled the
+            # job after the worker's read but before extraction began.
+            if not QuestionPaperUpload.objects.filter(
+                pk=self.paper.pk, is_student_private=True,
+                status=QuestionPaperUpload.ProcessingStatus.PROCESSING,
+            ).exists():
+                return 0
+        else:
+            self.paper.status = QuestionPaperUpload.ProcessingStatus.PROCESSING
+            self.paper.save(update_fields=["status"])
         self.paper.ocr_used = False
         self._log(f"Starting extraction for paper: '{self.paper.title}'")
         saved_count = 0
@@ -243,6 +260,10 @@ class PDFQuestionExtractor:
                     # Upload a new paper to start a fresh extraction instead.
                     with transaction.atomic():
                         locked = QuestionPaperUpload.objects.select_for_update().get(pk=self.paper.pk)
+                        if self.claimed_private_job and locked.status != QuestionPaperUpload.ProcessingStatus.PROCESSING:
+                            # Reconciliation won the lock first. A late worker
+                            # must not create work after a credit was returned.
+                            raise PrivateExtractionCancelled()
                         if locked.extracted_questions.exists() or locked.figures.exists():
                             raise ReviewWorkPreserved("Existing review work was preserved; upload a new copy to re-extract.")
                         for item in items:
@@ -252,6 +273,10 @@ class PDFQuestionExtractor:
                     self.paper.status = QuestionPaperUpload.ProcessingStatus.EXTRACTED
                     self._log(f"Extraction completed: {saved_count} questions saved for review.")
                     self._log("Check question text, formulas, options and diagrams against the original PDF before approval.")
+        except PrivateExtractionCancelled:
+            # No staged items were written while the paper lock was held.
+            # Do not overwrite the operator's cancellation or its audit log.
+            return 0
         except ReviewWorkPreserved as exc:
             saved_count = 0
             self._log(f"Warning: {exc}")
@@ -266,7 +291,19 @@ class PDFQuestionExtractor:
             self.paper.status = QuestionPaperUpload.ProcessingStatus.FAILED
 
         self.paper.extraction_log = "\n".join(self.logs)
-        self.paper.save()
+        if self.claimed_private_job:
+            # Reconciliation can safely cancel an empty in-flight job: never
+            # write a stale PROCESSING/FAILED status over its decision. If the
+            # worker committed questions first, reconciliation refuses a refund.
+            from django.utils import timezone
+            QuestionPaperUpload.objects.filter(
+                pk=self.paper.pk, is_student_private=True,
+                status=QuestionPaperUpload.ProcessingStatus.PROCESSING,
+            ).update(status=self.paper.status, extraction_log=self.paper.extraction_log,
+                     total_pages=self.paper.total_pages, questions_found=self.paper.questions_found,
+                     ocr_used=self.paper.ocr_used, updated_at=timezone.now())
+        else:
+            self.paper.save()
         return saved_count
 
     def _save_item(self, item, doc=None):

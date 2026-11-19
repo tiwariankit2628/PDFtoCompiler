@@ -1,0 +1,6 @@
+{% extends 'base.html' %}
+{% block title %}Confirm email verification{% endblock %}
+{% block content %}<div class="container py-5"><div class="surface-card p-4 p-md-5 mx-auto" style="max-width:620px">
+{% if valid %}<span class="eyebrow">ALMOST THERE</span><h1 class="fw-bold mt-2">Confirm your email.</h1><p>Click below to verify the address linked to your account.</p><form method="post">{% csrf_token %}<button class="btn btn-cbt-primary">Verify email</button></form>
+{% else %}<h1 class="fw-bold">This link is no longer valid.</h1><p>It may have expired, been replaced or already been used. Sign in and request another email.</p><a class="btn btn-cbt-outline" href="{% url 'accounts:login' %}">Sign in</a>{% endif %}
+</div></div>{% endblock %}

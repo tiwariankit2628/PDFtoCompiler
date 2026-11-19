@@ -14,7 +14,7 @@ from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, OperationalError, connection, transaction
 from django.db.models import F, Q
-from django.http import HttpResponse, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -22,6 +22,7 @@ from django.utils.cache import patch_cache_control
 from django.views import View
 from django.views.generic import DetailView, ListView
 
+from apps.accounts.models import User
 from apps.core.permissions import ActiveUserRequiredMixin
 from apps.core.exam_targets import ExamTarget, exam_matches_student, student_exam_queryset
 from apps.core.utils import log_audit
@@ -42,7 +43,8 @@ class ExamCatalogView(ActiveUserRequiredMixin, ListView):
     def get_queryset(self):
         now = timezone.now()
         qs = (
-            Exam.objects.filter(status=Exam.ExamStatus.PUBLISHED, is_private_practice=False, is_classroom_only=False)
+            Exam.objects.filter(status=Exam.ExamStatus.PUBLISHED, is_private_practice=False, is_classroom_only=False,
+                                series_slot__isnull=True, classroom_sessions__isnull=True)
             .filter(Q(start_time__isnull=True) | Q(start_time__lte=now))
             .filter(Q(end_time__isnull=True) | Q(end_time__gte=now))
             .select_related("category")
@@ -101,8 +103,15 @@ class ExamInstructionsView(ActiveUserRequiredMixin, DetailView):
         return student_exam_queryset(qs, self.request.user, include_active=True)
 
     def get(self, request, *args, **kwargs):
+        exam = self.get_object()
+        if request.user.is_student and hasattr(exam, "series_slot"):
+            from .series import series_start_allowed
+            active = exam.attempts.filter(student=request.user, status=ExamAttempt.AttemptStatus.IN_PROGRESS).first()
+            if not (active and not active.is_expired) and not series_start_allowed(request.user, exam):
+                messages.warning(request, "This series test is unavailable or requires the matching series pack.")
+                return redirect("exams:series")
         response = super().get(request, *args, **kwargs)
-        if self.object.is_private_practice:
+        if self.object.is_private_practice or hasattr(self.object, "series_slot"):
             patch_cache_control(response, private=True, no_store=True)
         return response
 
@@ -147,6 +156,17 @@ class ExamInstructionsView(ActiveUserRequiredMixin, DetailView):
             can_start = False
             block_reason = f"You have reached the maximum allowed attempts ({exam.max_attempts}) for this examination."
 
+        context["series_exam"] = hasattr(exam, "series_slot")
+        if not exam.is_private_practice and not active_attempt:
+            from .series import series_start_allowed
+            series_allowed = series_start_allowed(user, exam)
+            if series_allowed is False:
+                can_start, block_reason = False, "This test requires the matching series pack or is not ready."
+            elif series_allowed is True and user_attempts.exclude(status=ExamAttempt.AttemptStatus.IN_PROGRESS).exists():
+                can_start, block_reason = False, "You have already completed this test. Retakes are not available."
+            elif exam.classroom_sessions.exists():
+                can_start, block_reason = False, "Join this test using the classroom code."
+            context["series_exam"] = series_allowed is not None
         if exam.is_private_practice:
             from apps.payments.services import private_attempt_limit
             limit = private_attempt_limit(user, exam)
@@ -186,6 +206,10 @@ class ExamStartView(ActiveUserRequiredMixin, View):
     def dispatch(self, request, *args, **kwargs):
         try:
             return super().dispatch(request, *args, **kwargs)
+        except User.DoesNotExist:
+            # Authentication may have loaded the account before an admin
+            # deleted it. The locked start must not create an orphan attempt.
+            raise Http404() from None
         except OperationalError as exc:
             # SQLite can report contention while the authentication middleware
             # lazily loads the user, before post() can retry its transaction.
@@ -237,11 +261,32 @@ class ExamStartView(ActiveUserRequiredMixin, View):
                     messages.info(request, "Resuming your active examination session.")
                     return redirect("exams:exam_session", attempt_uuid=active_attempt.attempt_uuid)
 
+            # The middleware may have read the old verified address before a
+            # concurrent profile edit committed. New starts use the locked row;
+            # already-running attempts above are still resumable.
+            if user.needs_email_verification:
+                return redirect("accounts:verification_pending")
+
             # Re-check after locking the fresh user and test. Unknown questions
             # cannot be offered until an authorized reviewer classifies them.
             if not exam_matches_student(user, exam):
                 from django.http import Http404
                 raise Http404()
+
+            from .series import series_start_allowed
+            series_allowed = series_start_allowed(user, exam)
+            if series_allowed is False:
+                messages.error(request, "This series test is unavailable or requires its track-specific series pack.")
+                return redirect("exams:series")
+            if exam.classroom_sessions.exists():
+                messages.error(request, "This test is available through its classroom join code.")
+                return redirect("exams:classroom_join")
+            if series_allowed is True:
+                prior = ExamAttempt.objects.filter(exam=exam, student=user).exclude(
+                    status=ExamAttempt.AttemptStatus.IN_PROGRESS).order_by("-started_at").first()
+                if prior:
+                    messages.info(request, "You have already completed this series test. Retakes are not available.")
+                    return redirect("exams:exam_completed", attempt_uuid=prior.attempt_uuid)
 
             # 2. Status and schedule validations
             if exam.status != Exam.ExamStatus.PUBLISHED:
@@ -308,8 +353,9 @@ class ExamStartView(ActiveUserRequiredMixin, View):
                 attempt.last_active_question = ordered_questions[0]
                 attempt.save(update_fields=["last_active_question", "expires_at"])
 
-                # Track freemium trial usage for students
-                if user.is_student and not user.free_test_attempted:
+                # Preserve the legacy institutional trial indicator, but a
+                # series attempt is a separate allowance and must not consume it.
+                if user.is_student and series_allowed is None and not user.free_test_attempted:
                     user.free_test_attempted = True
                     user.save(update_fields=["free_test_attempted"])
 
@@ -356,6 +402,8 @@ class ExamStartView(ActiveUserRequiredMixin, View):
                         return redirect("exams:exam_completed", attempt_uuid=active.attempt_uuid)
                     messages.info(request, "Resuming your existing practice attempt; the original timer continues.")
                     return redirect("exams:exam_session", attempt_uuid=active.attempt_uuid)
+                if user.needs_email_verification:
+                    return redirect("accounts:verification_pending")
                 if not exam_matches_student(user, exam):
                     from django.http import Http404
                     raise Http404()
@@ -366,18 +414,13 @@ class ExamStartView(ActiveUserRequiredMixin, View):
                 if not exam_questions:
                     messages.error(request, "This practice test contains no questions.")
                     return redirect("questions:practice_list")
-                from apps.payments.services import QuotaExceeded, consume, private_attempt_limit
+                from apps.payments.services import private_attempt_limit
                 limit = private_attempt_limit(user, exam)
                 completed = ExamAttempt.objects.filter(exam=exam, student=user).exclude(
-                    status=ExamAttempt.AttemptStatus.IN_PROGRESS).count()
-                if limit is not None and completed >= limit:
-                    messages.error(request, f"You have reached the practice attempt limit ({limit}) for this test.")
-                    return redirect("exams:exam_instructions", slug=exam.slug)
-                try:
-                    consume(user, "attempts")
-                except QuotaExceeded as exc:
-                    messages.error(request, str(exc))
-                    return redirect("payments:plans")
+                    status=ExamAttempt.AttemptStatus.IN_PROGRESS).order_by("-started_at")
+                if limit is not None and completed.count() >= limit:
+                    messages.info(request, "You have already completed this practice test. Retakes are not available.")
+                    return redirect("exams:exam_completed", attempt_uuid=completed.first().attempt_uuid)
                 attempt = ExamAttempt.objects.create(
                     exam=exam, student=user, is_private_practice=True,
                     status=ExamAttempt.AttemptStatus.IN_PROGRESS, total_marks=exam.total_marks,
@@ -429,6 +472,7 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
             return redirect("exams:exam_completed", attempt_uuid=attempt.attempt_uuid)
 
         exam = attempt.exam
+        is_series = not attempt.classroom_session_id and hasattr(exam, "series_slot")
 
         # Fetch candidate responses with attached questions and options
         responses_qs = (
@@ -449,6 +493,8 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
                 return reverse("questions:practice_bank_figure", args=[fig.pk]) if fig.private_image else None
             if exam.is_classroom_only:
                 return reverse("exams:classroom_attempt_figure", args=[attempt.attempt_uuid, fig.pk]) if fig.private_image else None
+            if is_series:
+                return reverse("exams:series_attempt_figure", args=[attempt.attempt_uuid, fig.pk]) if fig.private_image else None
             return fig.image.url if fig.image else None
 
         for resp in responses_qs:
@@ -459,7 +505,7 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
             # buttons. The printed choices live inside the image, so options must
             # stay in fixed A..E order (never shuffled) to match the picture.
             all_q_figures = list(q.figures.all())
-            private_images = bool(exam.is_private_practice or exam.is_classroom_only)
+            private_images = bool(exam.is_private_practice or exam.is_classroom_only or is_series)
             wants_crop = use_original_image(q, image_first=exam.image_first_mode, private=private_images)
             crop_figures = primary_question_crops(q, image_first=wants_crop, private=private_images)
             crop_urls = [u for u in (figure_url(f) for f in crop_figures) if u]
@@ -478,7 +524,7 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
             sanitized_options = []
             for opt in options_list:
                 option_images = [u for u in (figure_url(f) for f in opt.figures.all()) if u]
-                if not (exam.is_private_practice or exam.is_classroom_only) and opt.image:
+                if not private_images and opt.image:
                     option_images = [opt.image.url] + option_images
                 sanitized_options.append(
                     {
@@ -505,6 +551,10 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
                 ]
             elif exam.is_classroom_only:
                 question_images = ([reverse("exams:classroom_attempt_image", args=[attempt.attempt_uuid, q.pk])] if q.private_image else []) + [
+                    u for u in (figure_url(f) for f in diagram_figures) if u
+                ]
+            elif is_series:
+                question_images = ([reverse("exams:series_attempt_image", args=[attempt.attempt_uuid, q.pk])] if q.private_image else []) + [
                     u for u in (figure_url(f) for f in diagram_figures) if u
                 ]
             else:
@@ -572,10 +622,12 @@ class ExamSessionView(ActiveUserRequiredMixin, View):
             "strict_mode": exam.strict_exam_mode,
             "tab_switch_count": attempt.tab_switch_warnings,
             "tab_switch_limit": STRICT_TAB_SWITCH_LIMIT,
+            "is_series": is_series,
         }
         response = render(request, "exams/exam_session.html", context)
-        if exam.is_private_practice or attempt.classroom_session_id:
-            patch_cache_control(response, private=True, no_store=True)
+        # Every live test contains account-scoped responses and unreleased
+        # question content, including ordinary exams and paid series.
+        patch_cache_control(response, private=True, no_store=True)
         return response
 
 
@@ -630,16 +682,18 @@ class ExamSaveAnswerView(ActiveUserRequiredMixin, View):
         # when the current response happens to be a single-choice question.
         has_typed_responses = attempt.responses.filter(
             exam_question__question__question_type__in=("mcq_multiple", "numerical")).exists()
+        is_series = not attempt.classroom_session_id and hasattr(attempt.exam, "series_slot")
+        reliable = bool(attempt.exam.is_private_practice or attempt.classroom_session_id or has_typed_responses or is_series)
 
         with transaction.atomic():
-            if attempt.exam.is_private_practice or attempt.classroom_session_id or has_typed_responses:
-                if (attempt.classroom_session_id or has_typed_responses) and connection.vendor == "sqlite":
+            if reliable:
+                if connection.vendor == "sqlite":
+                    # SQLite's SELECT FOR UPDATE is a no-op; acquire a writer
+                    # lock before reading even for single-choice private tests.
                     ExamAttempt.objects.filter(pk=attempt.pk).update(id=F("id"))
-                # Classroom controls lock the session and then an attempt.
-                # Lock only this attempt on PostgreSQL, not the joined exam row,
-                # so end-now and an answer save cannot deadlock in reverse order.
-                lock_scope = ("self",) if attempt.classroom_session_id else ()
-                attempt = ExamAttempt.objects.select_for_update(of=lock_scope).select_related("exam").get(pk=attempt.pk)
+                # Lock the attempt, not the joined exam, so a start or
+                # classroom end operation cannot take the locks in reverse order.
+                attempt = ExamAttempt.objects.select_for_update(of=("self",)).select_related("exam").get(pk=attempt.pk)
                 if attempt.is_expired or attempt.status != ExamAttempt.AttemptStatus.IN_PROGRESS:
                     if attempt.status == ExamAttempt.AttemptStatus.IN_PROGRESS and attempt.is_expired:
                         attempt.submit_attempt(is_timeout=True)
@@ -689,7 +743,7 @@ class ExamSaveAnswerView(ActiveUserRequiredMixin, View):
                 if action == "clear":
                     resp.selected_option = None
                 elif action == "mark_review":
-                    if selected_option_id is not None or attempt.exam.is_private_practice or attempt.classroom_session_id:
+                    if selected_option_id is not None or reliable:
                         resp.selected_option = valid_opt
                 elif selected_option_id is not None:
                     resp.selected_option = valid_opt
@@ -910,34 +964,33 @@ class ExamSubmitView(ActiveUserRequiredMixin, View):
         is_timeout = False
         has_typed_responses = attempt.responses.filter(
             exam_question__question__question_type__in=("mcq_multiple", "numerical")).exists()
+        is_series = not attempt.classroom_session_id and hasattr(attempt.exam, "series_slot")
+        reliable = bool(attempt.classroom_session_id or attempt.exam.is_private_practice or has_typed_responses or is_series)
         if request.content_type == "application/json":
             try:
                 parsed = json.loads(request.body)
             except (ValueError, TypeError):
                 parsed = None
             if not isinstance(parsed, dict):
-                if attempt.classroom_session_id or attempt.exam.is_private_practice or has_typed_responses:
+                if reliable:
                     # Never turn a malformed final-answer payload into a
                     # successful submission with missing data.
                     return JsonResponse({"error": "Invalid submission payload."}, status=400)
             else:
                 data = parsed
-                if ((attempt.classroom_session_id or attempt.exam.is_private_practice or has_typed_responses)
-                        and not isinstance(data.get("is_timeout", False), bool)):
+                if reliable and not isinstance(data.get("is_timeout", False), bool):
                     return JsonResponse({"error": "Invalid timeout flag."}, status=400)
                 is_timeout = bool(data.get("is_timeout", False))
         else:
             is_timeout = request.POST.get("is_timeout") == "true"
 
         with transaction.atomic():
-            # Serialize classroom answer saves, final submit and timeouts even on
+            # Serialize reliable saves, final submit and timeouts even on
             # SQLite, which otherwise ignores SELECT FOR UPDATE.
-            if (attempt.classroom_session_id or has_typed_responses) and connection.vendor == "sqlite":
+            if reliable and connection.vendor == "sqlite":
                 ExamAttempt.objects.filter(pk=attempt.pk).update(id=F("id"))
             locked_attempt = ExamAttempt.objects.select_for_update(of=("self",)).select_related("exam").get(id=attempt.id)
             if locked_attempt.status == ExamAttempt.AttemptStatus.IN_PROGRESS:
-                reliable = (locked_attempt.exam.is_private_practice or locked_attempt.classroom_session_id is not None
-                            or has_typed_responses)
                 if reliable and is_timeout and not locked_attempt.is_expired:
                     # The browser timer may round down or run fast. Only the
                     # server deadline can turn an active attempt into a timeout.
@@ -1033,7 +1086,7 @@ class ExamCompletedView(ActiveUserRequiredMixin, DetailView):
             # Never show a successful-submission screen for a live attempt.
             return redirect("exams:exam_session", attempt_uuid=attempt.attempt_uuid)
         response = super().get(request, *args, **kwargs)
-        if attempt.exam.is_private_practice or attempt.classroom_session_id:
+        if attempt.exam.is_private_practice or attempt.classroom_session_id or hasattr(attempt.exam, "series_slot"):
             patch_cache_control(response, private=True, no_store=True)
         return response
 
@@ -1041,20 +1094,22 @@ class ExamCompletedView(ActiveUserRequiredMixin, DetailView):
         context = super().get_context_data(**kwargs)
         attempt = self.object
         exam = attempt.exam
+        is_series = not attempt.classroom_session_id and hasattr(exam, "series_slot")
 
         context.update(
             {
                 "exam": exam,
+                "is_series": is_series,
                 "total_questions": attempt.total_questions_count,
                 "answered_count": attempt.answered_count,
                 "unanswered_count": attempt.total_questions_count - attempt.answered_count,
                 "marked_review_count": attempt.marked_review_count,
                 "time_taken_minutes": round(attempt.time_taken_seconds / 60, 1),
                 "show_results": (attempt.classroom_session.student_results_visible if attempt.classroom_session_id
-                                 else exam.show_result_immediately and not exam.is_private_practice),
+                                 else (exam.show_result_immediately or is_series) and not exam.is_private_practice),
             }
         )
-        if attempt.classroom_session_id and context["show_results"]:
+        if (attempt.classroom_session_id and context["show_results"]) or is_series or exam.is_private_practice:
             from .classroom_results import classroom_result_summary
             context["classroom_summary"] = classroom_result_summary(attempt)
         elif context["show_results"] and attempt.has_ungraded_keys:

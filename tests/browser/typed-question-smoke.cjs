@@ -158,7 +158,7 @@ const {chromium} = require('playwright-core');
     await Promise.all([student.waitForURL('**/classroom/take/**'), student.getByRole('button', {name:'Join test'}).click()]);
     await Promise.all([student.waitForURL('**/exams/session/**'), student.getByRole('button', {name:/Start test/}).click()]);
     await take(student, '0', false);
-    await student.getByRole('link', {name:'View classroom result'}).click();
+    await student.getByRole('link', {name:'View result & review'}).click();
     await student.getByRole('link', {name:'Review answers'}).click();
     assert((await student.locator('body').textContent()).includes('Partial credit'));
     assert((await student.locator('body').textContent()).includes('Checked explanation 1'));
