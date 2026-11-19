@@ -1,0 +1,18 @@
+{% if paper.target_type %}
+<div class="small text-muted mb-2">Target: <strong>{{ paper.get_target_type_display }}</strong></div>
+{% else %}
+<div class="alert alert-warning small" role="status">
+  <strong>This older paper has no confirmed JEE/NEET target.</strong>
+  {% if paper.target_exam %}Previous label: {{ paper.target_exam }}.{% endif %}
+  Check the source and choose its target; it was not guessed from the title or category. Confirming also labels compatible unclassified questions from this paper.
+  {% if user.is_student and not user.exam_track %}
+    <a href="{% url 'accounts:profile' %}">Choose your profile track first.</a>
+  {% else %}
+  <form method="post" action="{% url 'questions:paper_set_target' paper.pk %}" class="d-flex flex-wrap gap-2 mt-2">{% csrf_token %}
+    <label class="visually-hidden" for="paper-target-{{ paper.pk }}">Exam target for {{ paper.title }}</label>
+    <select id="paper-target-{{ paper.pk }}" name="target_type" class="form-select form-select-sm" style="max-width:260px" required>{% include 'questions/_target_options.html' %}</select>
+    <button class="btn btn-sm btn-outline-dark">Confirm target</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}

@@ -97,7 +97,7 @@ class ClassroomPaperUploadView(PrivateClassroomMixin, View):
         upload = data["pdf_file"]
         paper = QuestionPaperUpload.objects.create(
             title=data["title"], category=data["category"] or _classroom_category(), subject=data["subject"],
-            target_exam=data["target_exam"], uploaded_by=request.user,
+            target_type=data["target_type"], uploaded_by=request.user,
             is_classroom_private=True, private_pdf_file=upload, file_size_bytes=upload.size,
             total_pages=form.pdf_page_count, image_first=data["image_first"],
             extraction_mode=QuestionPaperUpload.ExtractionMode.LOCAL,
@@ -154,6 +154,9 @@ class ClassroomPaperReviewView(PrivateClassroomMixin, View):
             with transaction.atomic():
                 paper = _locked_paper(request.user, pk)
                 _editable(paper)
+                if not paper.target_type:
+                    messages.error(request, "Choose the paper's JEE or NEET target before creating a test.")
+                    return redirect("questions:classroom_paper_review", pk=paper.pk)
                 included = list(paper.extracted_questions.filter(include_in_practice=True)
                                 .prefetch_related("figures").order_by("question_number", "id"))
                 form = ClassroomCreateForm(request.POST, questions=included,
@@ -169,7 +172,7 @@ class ClassroomPaperReviewView(PrivateClassroomMixin, View):
                     return redirect("exams:classroom_session", pk=existing.pk)
                 exam = Exam.objects.create(
                     is_classroom_only=True, slug=f"classroom-{uuid.uuid4().hex}", title=paper.title,
-                    subject=paper.subject, target_exam=paper.target_exam, category=paper.category,
+                    subject=paper.subject, target_exam=paper.target_exam, target_type=paper.target_type, category=paper.category,
                     creator=request.user, status=Exam.ExamStatus.PUBLISHED, is_free=True,
                     duration_minutes=form.cleaned_data["duration_minutes"], total_marks=Decimal("0.00"),
                     passing_percentage=Decimal("0.00"), shuffle_questions=False, shuffle_options=False,
@@ -191,7 +194,7 @@ class ClassroomPaperReviewView(PrivateClassroomMixin, View):
                         numeric_tolerance=staged.numeric_tolerance, multi_scoring_mode=staged.multi_scoring_mode,
                         partial_credit_per_choice=staged.partial_credit_per_choice,
                         answer_status=AnswerStatus.MANUALLY_VERIFIED if correct else AnswerStatus.NEEDS_REVIEW,
-                        category=paper.category, creator=request.user, source_paper=paper,
+                        category=paper.category, creator=request.user, source_paper=paper, target_type=paper.target_type,
                         subject=paper.subject or "General", topic=paper.target_exam,
                         question_text=staged.question_text, tables=staged.tables,
                         source_regions=staged.source_regions, primary_image_region=staged.primary_image_region,

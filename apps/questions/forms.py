@@ -3,6 +3,9 @@ import pymupdf as fitz
 from django import forms
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.db.models import Q
+from django.utils import timezone
+from apps.core.exam_targets import targets_for_track, track_for_target
 from apps.exams.models import Category
 from .structured_forms import add_tables_editor, clean_tables_editor
 from .models import ExtractedQuestion, QuestionPaperUpload
@@ -86,19 +89,20 @@ class QuestionPaperUploadForm(BootstrapFormMixin, forms.ModelForm):
             "title",
             "category",
             "subject",
-            "target_exam",
+            "target_type",
             "pdf_file",
             "image_first",
         ]
         widgets = {
             "title": forms.TextInput(attrs={"placeholder": "e.g. JEE Advanced 2024 Paper 1 (Physics)"}),
             "subject": forms.TextInput(attrs={"placeholder": "e.g. Physics / Mechanics"}),
-            "target_exam": forms.TextInput(attrs={"placeholder": "e.g. JEE Advanced, NEET, UPSC"}),
         }
 
     def __init__(self, *args, **kwargs):
         user = kwargs.pop("user", None)
         super().__init__(*args, **kwargs)
+        self.fields["target_type"].required = True
+        self.fields["target_type"].help_text = "Choose the paper's target. Students only see matching tests."
 
         self.fields["image_first"].label = "Image-first (students take the test on the original PDF image)"
         self.fields["image_first"].help_text = (
@@ -337,6 +341,7 @@ class QuestionBankForm(BootstrapFormMixin, forms.ModelForm):
         model = Question
         fields = [
             "category",
+            "target_type",
             "subject",
             "topic",
             "chapter",
@@ -375,6 +380,8 @@ class QuestionBankForm(BootstrapFormMixin, forms.ModelForm):
         super().__init__(*args, **kwargs)
 
         add_tables_editor(self, self.instance)
+        self.fields["target_type"].required = True
+        self.fields["target_type"].help_text = "Choose which exam this question is for. Review old unclassified questions before use."
         for name in ("multi_scoring_mode", "partial_credit_per_choice", "numeric_tolerance"):
             self.fields[name].required = False
         self.previous_key = ""
@@ -430,6 +437,18 @@ class QuestionBankForm(BootstrapFormMixin, forms.ModelForm):
                 self.fields["correct_option"].initial = self.previous_key
             else:
                 self.fields["typed_key"].initial = self.previous_key
+
+    def clean_target_type(self):
+        target = self.cleaned_data["target_type"]
+        if self.instance.pk:
+            if target != self.instance.target_type and self.instance.exam_instances.filter(
+                    Q(exam__attempts__expires_at__isnull=True) | Q(exam__attempts__expires_at__gt=timezone.now()),
+                    exam__attempts__status="in_progress").exists():
+                raise ValidationError("Wait for active attempts using this question to finish before changing its target.")
+            allowed = targets_for_track(track_for_target(target))
+            if self.instance.exam_instances.exclude(exam__target_type="").exclude(exam__target_type__in=allowed).exists():
+                raise ValidationError("This question is already used in a test tagged for the other exam. Remove it there first; existing attempts cannot be altered.")
+        return target
 
     def clean(self):
         cleaned_data = clean_tables_editor(self, super().clean())

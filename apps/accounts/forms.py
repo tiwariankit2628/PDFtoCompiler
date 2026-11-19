@@ -7,7 +7,35 @@ from django.contrib.auth.forms import (
     UserCreationForm,
 )
 from apps.exams.models import Category
+from apps.core.exam_targets import ExamTrack
 from .models import User
+
+
+STUDENT_TARGET_CHOICES = [("", "Select your exam"), ("JEE", "JEE (Main and Advanced)"), ("NEET", "NEET")]
+
+
+def _configure_student_target(form):
+    form.fields["target_exam"] = forms.ChoiceField(
+        choices=STUDENT_TARGET_CHOICES, required=True, label="Target exam",
+        help_text="JEE includes both Main and Advanced. You can change this after finishing active tests.",
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    if form.instance.pk:
+        form.initial["target_exam"] = (form.instance.exam_track or "").upper()
+
+
+def _validate_track_change(form, target):
+    if not form.instance.pk or not target or target.lower() == form.instance.exam_track:
+        return target
+    from django.db.models import Q
+    from django.utils import timezone
+    from apps.exams.models import ExamAttempt
+    if ExamAttempt.objects.filter(
+        Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()),
+        student=form.instance, status=ExamAttempt.AttemptStatus.IN_PROGRESS,
+    ).exists():
+        raise forms.ValidationError("Finish your active test before changing your target exam. Your timer will continue normally.")
+    return target
 
 
 class BootstrapFormMixin:
@@ -98,14 +126,7 @@ class StudentRegistrationForm(BootstrapFormMixin, forms.ModelForm):
         required=True,
         widget=forms.EmailInput(attrs={"placeholder": "name@example.com"}),
     )
-    target_exam = forms.CharField(
-        label="Target Examination",
-        max_length=150,
-        required=False,
-        widget=forms.TextInput(
-            attrs={"placeholder": "e.g. JEE Advanced, NEET, UPSC, SSC, GATE"}
-        ),
-    )
+    target_exam = forms.ChoiceField(label="Target examination", choices=STUDENT_TARGET_CHOICES, required=True)
     password = forms.CharField(
         label="Password",
         widget=forms.PasswordInput(attrs={"placeholder": "Minimum 8 characters"}),
@@ -161,6 +182,7 @@ class StudentRegistrationForm(BootstrapFormMixin, forms.ModelForm):
         user = super().save(commit=False)
         user.set_password(self.cleaned_data["password"])
         user.role = User.Roles.STUDENT
+        user.exam_track = self.cleaned_data["target_exam"].lower()
         if commit:
             user.save()
         return user
@@ -188,11 +210,23 @@ class PublicRegistrationForm(StudentRegistrationForm):
         initial=User.Roles.STUDENT,
     )
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Teachers may register without a track; students must choose one even
+        # if a legacy client omits the role field (which defaults to STUDENT).
+        self.fields["target_exam"].required = False
+
     def clean_role(self):
         role = (self.cleaned_data.get("role") or User.Roles.STUDENT)
         if role not in self.PUBLIC_ROLES:
             raise forms.ValidationError("Choose either Student or Teacher.")
         return role
+
+    def clean(self):
+        cleaned = super().clean()
+        if (cleaned.get("role") or User.Roles.STUDENT) == User.Roles.STUDENT and not cleaned.get("target_exam"):
+            self.add_error("target_exam", "Students must choose JEE or NEET.")
+        return cleaned
 
     def save(self, commit=True):
         # Build the user without committing, then apply only the vetted role.
@@ -201,6 +235,8 @@ class PublicRegistrationForm(StudentRegistrationForm):
         if role not in self.PUBLIC_ROLES:
             role = User.Roles.STUDENT
         user.role = role
+        if role != User.Roles.STUDENT:
+            user.exam_track = ""
         # Hard guarantees: public registration never grants elevated access.
         user.is_staff = False
         user.is_superuser = False
@@ -210,9 +246,29 @@ class PublicRegistrationForm(StudentRegistrationForm):
 
 
 class UserProfileForm(BootstrapFormMixin, forms.ModelForm):
-    """
-    Profile editing form for users.
-    """
+    """Student targets are explicit; teachers keep their existing profile text."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # target_exam predates structured tracks and may contain valuable free
+        # text.  The selection field is only a UI adapter for exam_track.
+        self.original_target_exam = self.instance.target_exam
+        if self.instance.is_student:
+            _configure_student_target(self)
+
+    def clean_target_exam(self):
+        value = self.cleaned_data.get("target_exam", "")
+        return _validate_track_change(self, value) if self.instance.is_student else value
+
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        if user.is_student:
+            user.target_exam = self.original_target_exam
+            user.exam_track = self.cleaned_data["target_exam"].lower()
+        if commit:
+            user.save()
+            self.save_m2m()
+        return user
 
     class Meta:
         model = User
@@ -247,6 +303,10 @@ class UserProfileForm(BootstrapFormMixin, forms.ModelForm):
 
 class StudentAdminCreateForm(BootstrapFormMixin, forms.ModelForm):
     """Admin form to create a new student candidate."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _configure_student_target(self)
 
     password = forms.CharField(
         label="Initial Password",
@@ -285,6 +345,7 @@ class StudentAdminCreateForm(BootstrapFormMixin, forms.ModelForm):
         user = super().save(commit=False)
         user.set_password(self.cleaned_data["password"])
         user.role = User.Roles.STUDENT
+        user.exam_track = self.cleaned_data["target_exam"].lower()
         if commit:
             user.save()
         return user
@@ -292,6 +353,23 @@ class StudentAdminCreateForm(BootstrapFormMixin, forms.ModelForm):
 
 class StudentAdminUpdateForm(BootstrapFormMixin, forms.ModelForm):
     """Admin form to edit existing student candidate."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.original_target_exam = self.instance.target_exam
+        _configure_student_target(self)
+
+    def clean_target_exam(self):
+        return _validate_track_change(self, self.cleaned_data.get("target_exam", ""))
+
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        user.target_exam = self.original_target_exam
+        user.exam_track = self.cleaned_data["target_exam"].lower()
+        if commit:
+            user.save()
+            self.save_m2m()
+        return user
 
     class Meta:
         model = User

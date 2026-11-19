@@ -18,6 +18,7 @@ from django.views import View
 from django.views.generic import DetailView, ListView
 
 from apps.core.permissions import ActiveUserRequiredMixin, TeacherRequiredMixin
+from apps.core.exam_targets import student_exam_queryset
 from apps.core.utils import log_audit
 from apps.questions.presentation import missing_crop_pages, primary_question_crops, use_original_image
 from .analytics import compute_student_attempt_analytics, compute_exam_institutional_analytics
@@ -392,7 +393,7 @@ class ExamLeaderboardView(ActiveUserRequiredMixin, DetailView):
         queryset = super().get_queryset().filter(is_private_practice=False, is_classroom_only=False)
         # Do not reveal unpublished scores through the leaderboard.
         if self.request.user.is_student:
-            queryset = queryset.filter(show_result_immediately=True)
+            queryset = student_exam_queryset(queryset.filter(show_result_immediately=True), self.request.user)
         return queryset
 
     def get_context_data(self, **kwargs):

@@ -178,8 +178,8 @@ class DisconnectedGraphicWorkflowTests(TestCase):
                                      MEDIA_ROOT=os.path.join(self.root.name, "media"),
                                      STATIC_ROOT=os.path.join(self.root.name, "static"))
         settings.enable(); self.addCleanup(settings.disable)
-        self.owner = User.objects.create_user(username="fragment-owner", email="fragment-owner@example.test", role=User.Roles.STUDENT)
-        self.other = User.objects.create_user(username="fragment-other", email="fragment-other@example.test", role=User.Roles.STUDENT)
+        self.owner = User.objects.create_user(username="fragment-owner", email="fragment-owner@example.test", role=User.Roles.STUDENT, exam_track="jee")
+        self.other = User.objects.create_user(username="fragment-other", email="fragment-other@example.test", role=User.Roles.STUDENT, exam_track="jee")
         self.teacher = User.objects.create_user(username="fragment-teacher", email="fragment-teacher@example.test", role=User.Roles.TEACHER, is_staff=True)
         self.category = Category.objects.create(name="Disconnected figures", slug="disconnected-figures")
 
@@ -187,7 +187,7 @@ class DisconnectedGraphicWorkflowTests(TestCase):
         doc = disconnected_fixture(); data = doc.write(); doc.close()
         kwargs = {"private_pdf_file" if private else "pdf_file": SimpleUploadedFile("synthetic.pdf", data, content_type="application/pdf")}
         return QuestionPaperUpload.objects.create(title="Fragments", category=self.category, image_first=False,
-                    uploaded_by=self.owner if private else self.teacher, is_student_private=private, subject="Physics", **kwargs)
+                    uploaded_by=self.owner if private else self.teacher, is_student_private=private, subject="Physics", **kwargs, target_type="jee")
 
     def test_private_option_fragments_are_owner_only_and_reach_cbt(self):
         paper = self.paper(private=True)

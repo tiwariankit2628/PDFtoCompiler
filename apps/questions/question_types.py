@@ -157,9 +157,8 @@ def classify_question(text, options):
     if option_count >= 2:
         if _MULTIPLE_CORRECT.search(text):
             return MULTIPLE, (
-                "Multiple-correct question detected: the bank grades one correct "
-                "option, so confirm the question type and intended answers before "
-                "approval."
+                "Multiple-correct question detected: check the printed type, "
+                "answers and marking rules before approval."
             )
         if _AMBIGUOUS_CORRECT.search(text):
             if _combination_choice_set(text, options):
@@ -168,9 +167,8 @@ def classify_question(text, options):
                     "original and confirm that exactly one printed choice is selected."
                 )
             return MULTIPLE, (
-                "Multiple-correct question detected: the bank grades one correct "
-                "option, so confirm the question type and intended answers before "
-                "approval."
+                "Multiple-correct question detected: check the printed type, "
+                "answers and marking rules before approval."
             )
         return SINGLE, ""
 

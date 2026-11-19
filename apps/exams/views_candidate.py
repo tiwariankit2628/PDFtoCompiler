@@ -23,6 +23,7 @@ from django.views import View
 from django.views.generic import DetailView, ListView
 
 from apps.core.permissions import ActiveUserRequiredMixin
+from apps.core.exam_targets import ExamTarget, exam_matches_student, student_exam_queryset
 from apps.core.utils import log_audit
 from apps.questions.presentation import missing_crop_pages, primary_question_crops, use_original_image
 from .models import Category, Exam, ExamAttempt, ExamQuestion, ExamResponse, ExamSecurityLog
@@ -48,6 +49,9 @@ class ExamCatalogView(ActiveUserRequiredMixin, ListView):
             .prefetch_related("exam_questions")
         )
 
+        qs = student_exam_queryset(qs, self.request.user)
+        if not self.request.user.is_student:
+            qs = qs.filter(target_type__in=ExamTarget.values)
         cat_slug = self.request.GET.get("category", "").strip()
         if cat_slug:
             qs = qs.filter(category__slug=cat_slug)
@@ -71,7 +75,8 @@ class ExamCatalogView(ActiveUserRequiredMixin, ListView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["categories"] = Category.objects.filter(is_active=True)
+        # Do not expose unrelated category names in a student's filter.
+        context["categories"] = Category.objects.filter(is_active=True, pk__in=self.get_queryset().values("category_id")).distinct()
         context["selected_category"] = self.request.GET.get("category", "")
         context["selected_type"] = self.request.GET.get("type", "")
         context["search_query"] = self.request.GET.get("q", "")
@@ -92,7 +97,8 @@ class ExamInstructionsView(ActiveUserRequiredMixin, DetailView):
     slug_url_kwarg = "slug"
 
     def get_queryset(self):
-        return super().get_queryset().filter(is_classroom_only=False).filter(Q(is_private_practice=False) | Q(is_private_practice=True, creator=self.request.user))
+        qs = super().get_queryset().filter(is_classroom_only=False).filter(Q(is_private_practice=False) | Q(is_private_practice=True, creator=self.request.user))
+        return student_exam_queryset(qs, self.request.user, include_active=True)
 
     def get(self, request, *args, **kwargs):
         response = super().get(request, *args, **kwargs)
@@ -190,110 +196,131 @@ class ExamStartView(ActiveUserRequiredMixin, View):
             return response
 
     def post(self, request, slug):
-        user = request.user
-        exam = get_object_or_404(
-            Exam.objects.filter(is_classroom_only=False).filter(Q(is_private_practice=False) | Q(is_private_practice=True, creator=user)),
-            slug=slug,
-        )
+        candidates = Exam.objects.filter(is_classroom_only=False).filter(
+            Q(is_private_practice=False) | Q(is_private_practice=True, creator=request.user))
+        exam = get_object_or_404(candidates, slug=slug)
         if exam.is_private_practice:
             return self.start_private(request, exam)
-        now = timezone.now()
+        for retry in range(5):
+            try:
+                return self._start_public_once(request, exam)
+            except OperationalError as exc:
+                if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
+                    raise
+                if retry == 4:
+                    response = HttpResponse("Exams are busy. Please retry; any active timer continues.", status=503)
+                    response["Retry-After"] = "1"
+                    return response
+                time.sleep(0.025 * (2 ** retry))
 
-        # 1. Check for active attempt
-        active_attempt = ExamAttempt.objects.filter(
-            exam=exam,
-            student=user,
-            status=ExamAttempt.AttemptStatus.IN_PROGRESS,
-        ).first()
-
-        if active_attempt:
-            if active_attempt.is_expired:
-                active_attempt.auto_timeout_if_expired()
-            else:
-                messages.info(request, "Resuming your active examination session.")
-                return redirect("exams:exam_session", attempt_uuid=active_attempt.attempt_uuid)
-
-        # 2. Status and schedule validations
-        if exam.status != Exam.ExamStatus.PUBLISHED:
-            messages.error(request, "This examination is not currently active.")
-            return redirect("exams:exam_instructions", slug=exam.slug)
-
-        if exam.start_time and now < exam.start_time:
-            messages.error(request, "This examination has not started yet.")
-            return redirect("exams:exam_instructions", slug=exam.slug)
-
-        if exam.end_time and now > exam.end_time:
-            messages.error(request, "This examination window has ended.")
-            return redirect("exams:exam_instructions", slug=exam.slug)
-
-        # 3. Attempt limit validation
-        completed_count = ExamAttempt.objects.filter(
-            exam=exam, student=user, classroom_session__isnull=True,
-            status__in=ExamAttempt.FINAL_STATUSES,
-        ).count()
-
-        if exam.max_attempts > 0 and completed_count >= exam.max_attempts:
-            messages.error(
-                request,
-                f"You have reached the maximum allowed attempts ({exam.max_attempts}) for this examination.",
-            )
-            return redirect("exams:exam_instructions", slug=exam.slug)
-
-        # 4. Questions check
-        exam_questions = list(
-            exam.exam_questions.select_related("question").order_by("order", "id")
-        )
-        if not exam_questions:
-            messages.error(request, "This examination has no questions assigned.")
-            return redirect("exams:exam_instructions", slug=exam.slug)
-
-        # 5. Atomic Attempt & Response Creation
+    def _start_public_once(self, request, exam):
+        from apps.payments.services import lock_practice_user
         with transaction.atomic():
-            started_at = timezone.now()
-            expires_at = started_at + timedelta(minutes=exam.duration_minutes)
+            user = lock_practice_user(request.user)
+            if not user.is_active:
+                raise PermissionDenied()
+            exam = get_object_or_404(Exam.objects.select_for_update(), pk=exam.pk,
+                                     is_private_practice=False, is_classroom_only=False)
+            now = timezone.now()
 
-            attempt = ExamAttempt.objects.create(
+            # 1. Check for active attempt
+            active_attempt = ExamAttempt.objects.filter(
                 exam=exam,
                 student=user,
                 status=ExamAttempt.AttemptStatus.IN_PROGRESS,
-                started_at=started_at,
-                expires_at=expires_at,
-                total_marks=exam.total_marks,
-            )
+            ).first()
 
-            # Question ordering
-            ordered_questions = list(exam_questions)
-            if exam.shuffle_questions:
-                random.shuffle(ordered_questions)
+            if active_attempt:
+                if active_attempt.is_expired:
+                    active_attempt.auto_timeout_if_expired()
+                else:
+                    messages.info(request, "Resuming your active examination session.")
+                    return redirect("exams:exam_session", attempt_uuid=active_attempt.attempt_uuid)
 
-            responses = []
-            for idx, eq in enumerate(ordered_questions):
-                responses.append(
-                    ExamResponse(
-                        attempt=attempt,
-                        exam_question=eq,
-                        order=idx + 1,
-                        is_visited=(idx == 0),  # First question marked visited on launch
-                    )
+            # Re-check after locking the fresh user and test. Unknown questions
+            # cannot be offered until an authorized reviewer classifies them.
+            if not exam_matches_student(user, exam):
+                from django.http import Http404
+                raise Http404()
+
+            # 2. Status and schedule validations
+            if exam.status != Exam.ExamStatus.PUBLISHED:
+                messages.error(request, "This examination is not currently active.")
+                return redirect("exams:exam_instructions", slug=exam.slug)
+
+            if exam.start_time and now < exam.start_time:
+                messages.error(request, "This examination has not started yet.")
+                return redirect("exams:exam_instructions", slug=exam.slug)
+
+            if exam.end_time and now > exam.end_time:
+                messages.error(request, "This examination window has ended.")
+                return redirect("exams:exam_instructions", slug=exam.slug)
+
+            # 3. Attempt limit validation
+            completed_count = ExamAttempt.objects.filter(
+                exam=exam, student=user, classroom_session__isnull=True,
+                status__in=ExamAttempt.FINAL_STATUSES,
+            ).count()
+
+            if exam.max_attempts > 0 and completed_count >= exam.max_attempts:
+                messages.error(
+                    request,
+                    f"You have reached the maximum allowed attempts ({exam.max_attempts}) for this examination.",
                 )
-            ExamResponse.objects.bulk_create(responses)
+                return redirect("exams:exam_instructions", slug=exam.slug)
 
-            attempt.last_active_question = ordered_questions[0]
-            attempt.save(update_fields=["last_active_question"])
-
-            # Track freemium trial usage for students
-            if user.is_student and not user.free_test_attempted:
-                user.free_test_attempted = True
-                user.save(update_fields=["free_test_attempted"])
-
-            log_audit(
-                user,
-                "EXAM_SESSION_STARTED",
-                f"Candidate started examination '{exam.title}' (Attempt #{attempt.id})",
-                request=request,
+            # 4. Questions check
+            exam_questions = list(
+                exam.exam_questions.select_related("question").order_by("order", "id")
             )
+            if not exam_questions:
+                messages.error(request, "This examination has no questions assigned.")
+                return redirect("exams:exam_instructions", slug=exam.slug)
 
-        return redirect("exams:exam_session", attempt_uuid=attempt.attempt_uuid)
+            # 5. Atomic Attempt & Response Creation. auto_now_add supplies the
+            # authoritative start, so derive the expiry from that exact value.
+            with transaction.atomic():
+                attempt = ExamAttempt.objects.create(
+                    exam=exam,
+                    student=user,
+                    status=ExamAttempt.AttemptStatus.IN_PROGRESS,
+                    total_marks=exam.total_marks,
+                )
+                attempt.expires_at = attempt.started_at + timedelta(minutes=exam.duration_minutes)
+
+                # Question ordering
+                ordered_questions = list(exam_questions)
+                if exam.shuffle_questions:
+                    random.shuffle(ordered_questions)
+
+                responses = []
+                for idx, eq in enumerate(ordered_questions):
+                    responses.append(
+                        ExamResponse(
+                            attempt=attempt,
+                            exam_question=eq,
+                            order=idx + 1,
+                            is_visited=(idx == 0),  # First question marked visited on launch
+                        )
+                    )
+                ExamResponse.objects.bulk_create(responses)
+
+                attempt.last_active_question = ordered_questions[0]
+                attempt.save(update_fields=["last_active_question", "expires_at"])
+
+                # Track freemium trial usage for students
+                if user.is_student and not user.free_test_attempted:
+                    user.free_test_attempted = True
+                    user.save(update_fields=["free_test_attempted"])
+
+                log_audit(
+                    user,
+                    "EXAM_SESSION_STARTED",
+                    f"Candidate started examination '{exam.title}' (Attempt #{attempt.id})",
+                    request=request,
+                )
+
+            return redirect("exams:exam_session", attempt_uuid=attempt.attempt_uuid)
 
     def start_private(self, request, exam):
         # SQLite cannot lock rows with SELECT FOR UPDATE. A competing writer
@@ -315,9 +342,13 @@ class ExamStartView(ActiveUserRequiredMixin, View):
         # select_for_update is unavailable; an existing expiry is never reset.
         try:
             with transaction.atomic():
-                exam = Exam.objects.select_for_update().get(pk=exam.pk, creator=request.user, is_private_practice=True)
+                from apps.payments.services import lock_practice_user
+                user = lock_practice_user(request.user)
+                if not user.is_active or not user.is_student:
+                    raise PermissionDenied()
+                exam = Exam.objects.select_for_update().get(pk=exam.pk, creator=user, is_private_practice=True)
                 active = ExamAttempt.objects.select_for_update().filter(
-                    exam=exam, student=request.user, status=ExamAttempt.AttemptStatus.IN_PROGRESS
+                    exam=exam, student=user, status=ExamAttempt.AttemptStatus.IN_PROGRESS
                 ).first()
                 if active:
                     if active.is_expired:
@@ -325,6 +356,9 @@ class ExamStartView(ActiveUserRequiredMixin, View):
                         return redirect("exams:exam_completed", attempt_uuid=active.attempt_uuid)
                     messages.info(request, "Resuming your existing practice attempt; the original timer continues.")
                     return redirect("exams:exam_session", attempt_uuid=active.attempt_uuid)
+                if not exam_matches_student(user, exam):
+                    from django.http import Http404
+                    raise Http404()
                 if exam.status != Exam.ExamStatus.PUBLISHED or exam.duration_minutes <= 0:
                     messages.error(request, "This practice test is not available.")
                     return redirect("questions:practice_list")
@@ -333,19 +367,19 @@ class ExamStartView(ActiveUserRequiredMixin, View):
                     messages.error(request, "This practice test contains no questions.")
                     return redirect("questions:practice_list")
                 from apps.payments.services import QuotaExceeded, consume, private_attempt_limit
-                limit = private_attempt_limit(request.user, exam)
-                completed = ExamAttempt.objects.filter(exam=exam, student=request.user).exclude(
+                limit = private_attempt_limit(user, exam)
+                completed = ExamAttempt.objects.filter(exam=exam, student=user).exclude(
                     status=ExamAttempt.AttemptStatus.IN_PROGRESS).count()
                 if limit is not None and completed >= limit:
                     messages.error(request, f"You have reached the practice attempt limit ({limit}) for this test.")
                     return redirect("exams:exam_instructions", slug=exam.slug)
                 try:
-                    consume(request.user, "attempts")
+                    consume(user, "attempts")
                 except QuotaExceeded as exc:
                     messages.error(request, str(exc))
                     return redirect("payments:plans")
                 attempt = ExamAttempt.objects.create(
-                    exam=exam, student=request.user, is_private_practice=True,
+                    exam=exam, student=user, is_private_practice=True,
                     status=ExamAttempt.AttemptStatus.IN_PROGRESS, total_marks=exam.total_marks,
                 )
                 # auto_now_add supplies the authoritative start; expiry is

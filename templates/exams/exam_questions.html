@@ -200,6 +200,7 @@
                     </div>
                 </form>
 
+                <p class="small text-muted">Showing questions tagged for {{ exam.get_target_type_display|default:"this exam" }}. Edit older unclassified questions in the bank before adding them.</p>
                 {% if available_questions %}
                 <form method="post" action="{% url 'exams:exam_add_questions_bulk' exam.pk %}">
                     {% csrf_token %}

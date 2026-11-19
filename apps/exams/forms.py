@@ -1,6 +1,7 @@
 from django import forms
 from django.db.models import Q
 from django.utils.text import slugify
+from apps.core.exam_targets import ExamTarget, track_for_target, targets_for_track
 from .models import Category
 
 
@@ -102,7 +103,7 @@ class ExamForm(BootstrapFormMixin, forms.ModelForm):
             "category",
             "subject",
             "topics",
-            "target_exam",
+            "target_type",
             "description",
             "instructions",
             "duration_minutes",
@@ -126,7 +127,6 @@ class ExamForm(BootstrapFormMixin, forms.ModelForm):
             "title": forms.TextInput(attrs={"placeholder": "e.g. JEE Advanced Full Mock Test 1 (Physics & Math)"}),
             "subject": forms.TextInput(attrs={"placeholder": "e.g. Engineering Physics, Quantitative Aptitude"}),
             "topics": forms.TextInput(attrs={"placeholder": "e.g. Mechanics, Electromagnetism, Optics"}),
-            "target_exam": forms.TextInput(attrs={"placeholder": "e.g. JEE Advanced 2026, NEET UG, UPSC CSE"}),
             "description": forms.Textarea(attrs={"rows": 3, "placeholder": "Overview and syllabus coverage of this test..."}),
             "instructions": forms.Textarea(
                 attrs={
@@ -141,6 +141,9 @@ class ExamForm(BootstrapFormMixin, forms.ModelForm):
     def __init__(self, *args, **kwargs):
         user = kwargs.pop("user", None)
         super().__init__(*args, **kwargs)
+        self.previous_target_type = self.instance.target_type
+        self.fields["target_type"].required = True
+        self.fields["target_type"].help_text = "Choose the exam this test is for; JEE students can access Main and Advanced."
 
         # Preserve the existing policy: a teacher with active assignments sees
         # those categories; otherwise they see all active categories. The server
@@ -167,6 +170,16 @@ class ExamForm(BootstrapFormMixin, forms.ModelForm):
         field.queryset = categories
         self.category_choices_empty = not categories.exists()
 
+    def clean_target_type(self):
+        target = self.cleaned_data["target_type"]
+        if self.instance.pk:
+            if self.previous_target_type and self.previous_target_type != target and self.instance.has_attempts:
+                raise forms.ValidationError("The target cannot be changed after attempts exist. Duplicate the test for a different target.")
+            allowed = targets_for_track(track_for_target(target))
+            if self.instance.exam_questions.exclude(question__target_type="").exclude(question__target_type__in=allowed).exists():
+                raise forms.ValidationError("This test contains questions tagged for the other exam. Remove or review those questions first.")
+        return target
+
     def clean(self):
         cleaned_data = super().clean()
         start = cleaned_data.get("start_time")
@@ -174,6 +187,12 @@ class ExamForm(BootstrapFormMixin, forms.ModelForm):
 
         if start and end and end <= start:
             raise forms.ValidationError("Examination End Window must be later than Start Window.")
+
+        target = cleaned_data.get("target_type")
+        if self.instance.pk and target and cleaned_data.get("status") in ("published", "scheduled"):
+            allowed = targets_for_track(track_for_target(target))
+            if self.instance.exam_questions.exclude(question__target_type__in=allowed).exists():
+                self.add_error("target_type", "Classify every assigned question for this exam track before publishing or scheduling.")
 
         return cleaned_data
 

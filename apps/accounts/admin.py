@@ -27,12 +27,13 @@ class UserAdmin(BaseUserAdmin):
         "first_name",
         "last_name",
         "role",
+        "exam_track",
         "is_verified",
         "free_test_attempted",
         "is_staff",
         "date_joined",
     )
-    list_filter = ("role", "is_verified", "free_test_attempted", "is_staff", "is_active")
+    list_filter = ("role", "exam_track", "is_verified", "free_test_attempted", "is_staff", "is_active")
     search_fields = ("username", "email", "first_name", "last_name", "phone", "target_exam")
     ordering = ("-date_joined",)
 
@@ -50,9 +51,11 @@ class UserAdmin(BaseUserAdmin):
         (
             "Candidate & Institutional Profile",
             {
+                "description": "Student exam tracks are changed through the profile or student-management page, which protects active attempts. The legacy target label is retained separately.",
                 "fields": (
                     "phone",
                     "avatar",
+                    "exam_track",
                     "target_exam",
                     "institute_name",
                     "bio",
@@ -62,5 +65,5 @@ class UserAdmin(BaseUserAdmin):
         ),
     )
 
-    readonly_fields = ("verification_token",)
+    readonly_fields = ("verification_token", "exam_track")
 

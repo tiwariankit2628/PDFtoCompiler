@@ -62,7 +62,11 @@ def require_feature(user, feature):
 
 
 def lock_practice_user(user):
-    """Serialize starts and sensitive reads, including on SQLite development DBs."""
+    """Serialize test starts, target changes and sensitive practice reads.
+
+    Return a fresh user after acquiring the lock: request.user may have been
+    loaded before a concurrent target change committed.
+    """
     if not transaction.get_connection().in_atomic_block:
         raise RuntimeError("lock_practice_user() must be inside transaction.atomic()")
     users = get_user_model().objects.filter(pk=user.pk)
@@ -71,8 +75,8 @@ def lock_practice_user(user):
         # lock before checking active attempts; the stored value is unchanged.
         if not users.update(last_login=F("last_login")):
             raise get_user_model().DoesNotExist()
-    else:
-        users.select_for_update().get()
+        return users.get()
+    return users.select_for_update().get()
 
 
 def consume(user, kind):

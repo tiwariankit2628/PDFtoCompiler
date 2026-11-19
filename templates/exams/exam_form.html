@@ -80,9 +80,11 @@
                         </div>
 
                         <div class="col-md-6">
-                            <label class="form-label small fw-bold">Target Examination</label>
-                            {{ form.target_exam }}
-                            {% if form.target_exam.errors %}<div class="text-danger small mt-1">{{ form.target_exam.errors.0 }}</div>{% endif %}
+                            <label class="form-label small fw-bold" for="{{ form.target_type.id_for_label }}">Target Examination <span class="text-danger">*</span></label>
+                            {{ form.target_type }}
+                            <div class="form-text">{{ form.target_type.help_text }}</div>
+                            {% if form.target_type.errors %}<div class="text-danger small mt-1">{{ form.target_type.errors.0 }}</div>{% endif %}
+                            {% if exam.target_exam and not exam.target_type %}<div class="form-text">Previous unclassified label: {{ exam.target_exam }}. Please choose explicitly.</div>{% endif %}
                         </div>
 
                         <div class="col-12">

@@ -1,9 +1,11 @@
 from django.urls import path
-from . import views, figure_views, practice_views, practice_bank, answer_views, practice_estimate_views, classroom_views, answer_key_image_views
+from . import views, figure_views, practice_views, practice_bank, answer_views, practice_estimate_views, classroom_views, answer_key_image_views, target_views
 
 app_name = "questions"
 
 urlpatterns = [
+    path("papers/<int:pk>/set-target/", target_views.PaperTargetView.as_view(), name="paper_set_target"),
+    path("practice/tests/<int:pk>/set-target/", target_views.LegacyPracticeTestTargetView.as_view(), name="practice_test_set_target"),
     # Teacher-owned classroom paper workspace (private storage, local extraction).
     path("classroom/upload/", classroom_views.ClassroomPaperUploadView.as_view(), name="classroom_paper_upload"),
     path("classroom/papers/<int:pk>/review/", classroom_views.ClassroomPaperReviewView.as_view(), name="classroom_paper_review"),

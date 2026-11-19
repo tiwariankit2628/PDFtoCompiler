@@ -54,14 +54,15 @@ class ClassroomWorkflowTests(TestCase):
         os.makedirs(os.path.join(root.name, "static"), exist_ok=True)
         self.teacher = User.objects.create_user(username="class_teacher", email="class_teacher@test.example", password="test", role=User.Roles.TEACHER)
         self.other_teacher = User.objects.create_user(username="class_other", email="class_other@test.example", password="test", role=User.Roles.TEACHER)
-        self.student = User.objects.create_user(username="class_student", email="class_student@test.example", password="test", role=User.Roles.STUDENT)
-        self.other_student = User.objects.create_user(username="class_student2", email="class_student2@test.example", password="test", role=User.Roles.STUDENT)
+        self.student = User.objects.create_user(username="class_student", email="class_student@test.example", password="test", role=User.Roles.STUDENT, exam_track="jee")
+        self.other_student = User.objects.create_user(username="class_student2", email="class_student2@test.example", password="test", role=User.Roles.STUDENT, exam_track="jee")
 
     def upload(self):
         self.client.force_login(self.teacher)
         response = self.client.post(reverse("questions:classroom_paper_upload"), {
             "title": "Local PDF classroom", "subject": "Science", "image_first": "on",
             "pdf_file": SimpleUploadedFile("paper.pdf", classroom_pdf(), content_type="application/pdf"),
+            "target_type": "jee",
         })
         self.assertEqual(response.status_code, 302, getattr(response, "context", None))
         paper = QuestionPaperUpload.objects.get(uploaded_by=self.teacher, is_classroom_private=True)
@@ -408,6 +409,7 @@ class ClassroomWorkflowTests(TestCase):
         response = self.client.post(reverse("questions:classroom_paper_upload"), {
             "title": "Real local OCR classroom", "image_first": "on",
             "pdf_file": SimpleUploadedFile("scanned.pdf", pdf, content_type="application/pdf"),
+            "target_type": "jee",
         })
         self.assertEqual(response.status_code, 302)
         paper = QuestionPaperUpload.objects.get(uploaded_by=self.teacher, title="Real local OCR classroom")
@@ -424,6 +426,7 @@ class ClassroomWorkflowTests(TestCase):
                 response = self.client.post(reverse("questions:classroom_paper_upload"), {
                     "title": "Rejected provider", "extraction_mode": mode,
                     "pdf_file": SimpleUploadedFile("paper.pdf", classroom_pdf(), content_type="application/pdf"),
+                    "target_type": "jee",
                 })
                 self.assertEqual(response.status_code, 200)
                 self.assertIn("extraction_mode", response.context["form"].errors)

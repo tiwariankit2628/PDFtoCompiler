@@ -17,21 +17,21 @@ from .models import Question, QuestionOption
 @override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"])
 class PracticePhase7ConcurrencyTests(TransactionTestCase):
     def setUp(self):
-        self.user = User.objects.create_user("racephase7", email="racephase7@example.test", password="x", role=User.Roles.STUDENT)
+        self.user = User.objects.create_user("racephase7", email="racephase7@example.test", password="x", role=User.Roles.STUDENT, exam_track="jee")
         self.plan = PracticePlan.objects.get(is_default=True)
         self.plan.monthly_attempts = 1
         self.plan.attempts_per_test = None
         self.plan.save()
         category = Category.objects.create(name="Race private", slug="race-private")
         self.question = Question.objects.create(category=category, creator=self.user, is_private_practice=True,
-                          key_verified=True, subject="Science", question_text="Race question")
+                          key_verified=True, subject="Science", question_text="Race question", target_type="jee")
         self.correct = QuestionOption.objects.create(question=self.question, option_key="A", option_text="One", is_correct=True)
         QuestionOption.objects.create(question=self.question, option_key="B", option_text="Two")
         self.exams = []
         for i in range(2):
             exam = Exam.objects.create(title=f"Race {i}", slug=f"race-7-{i}", category=category,
                 creator=self.user, is_private_practice=True, status=Exam.ExamStatus.PUBLISHED,
-                duration_minutes=30, max_attempts=0, total_marks=4)
+                duration_minutes=30, max_attempts=0, total_marks=4, target_type="jee")
             ExamQuestion.objects.create(exam=exam, question=self.question, order=1)
             self.exams.append(exam)
 

@@ -127,6 +127,7 @@ class ImageFirstExtractionTests(TestCase):
         paper = QuestionPaperUpload.objects.create(
             title="IF teacher", category=self.category, subject="Science", uploaded_by=self.teacher,
             image_first=True, pdf_file=SimpleUploadedFile("if.pdf", make_two_column_pdf(), content_type="application/pdf"),
+            target_type="jee",
         )
         self.assertGreaterEqual(PDFQuestionExtractor(paper).extract(), 1)
         for q in paper.extracted_questions.all():
@@ -141,6 +142,7 @@ class ImageFirstExtractionTests(TestCase):
         paper = QuestionPaperUpload.objects.create(
             title="Plain teacher", category=self.category, subject="Science", uploaded_by=self.teacher,
             image_first=False, pdf_file=SimpleUploadedFile("plain.pdf", make_two_column_pdf(), content_type="application/pdf"),
+            target_type="jee",
         )
         self.assertGreaterEqual(PDFQuestionExtractor(paper).extract(), 1)
         self.assertFalse(paper.figures.filter(source="question_crop").exists())
@@ -160,8 +162,8 @@ class ImageFirstPrivatePracticeTests(TestCase):
         override.enable()
         os.makedirs(os.path.join(self.root.name, "static"), exist_ok=True)
         self.addCleanup(override.disable)
-        self.student = User.objects.create_user(username="if_owner", email="if_owner@example.test", password="x", role=User.Roles.STUDENT)
-        self.other = User.objects.create_user(username="if_other", email="if_other@example.test", password="x", role=User.Roles.STUDENT)
+        self.student = User.objects.create_user(username="if_owner", email="if_owner@example.test", password="x", role=User.Roles.STUDENT, exam_track="jee")
+        self.other = User.objects.create_user(username="if_other", email="if_other@example.test", password="x", role=User.Roles.STUDENT, exam_track="jee")
         self.client.force_login(self.student)
 
     def _upload(self, image_first=True):
@@ -169,6 +171,7 @@ class ImageFirstPrivatePracticeTests(TestCase):
             "title": "Secret IF practice", "subject": "Physics",
             "image_first": "on" if image_first else "",
             "pdf_file": SimpleUploadedFile("paper.pdf", make_two_column_pdf(), content_type="application/pdf"),
+            "target_type": "jee",
         })
         self.assertEqual(response.status_code, 302)
         paper = QuestionPaperUpload.objects.get(uploaded_by=self.student, is_student_private=True)
@@ -260,12 +263,13 @@ class PublicImageFirstShuffleTests(TestCase):
         self.addCleanup(override.disable)
         self.category = Category.objects.create(name="Pub", slug="pub", is_active=True)
         self.teacher = User.objects.create_user(username="pub_teacher", email="pub_teacher@example.test", role=User.Roles.TEACHER, is_staff=True)
-        self.student = User.objects.create_user(username="pub_student", email="pub_student@example.test", role=User.Roles.STUDENT)
+        self.student = User.objects.create_user(username="pub_student", email="pub_student@example.test", role=User.Roles.STUDENT, exam_track="jee")
 
     def test_public_image_first_keeps_options_in_order(self):
         bank = Question.objects.create(
             category=self.category, subject="Science", question_text="See image", is_image_first=True,
             creator=self.teacher, key_verified=True,
+            target_type="jee",
         )
         for i, key in enumerate("ABCD"):
             QuestionOption.objects.create(question=bank, option_key=key, option_text="", is_correct=(key == "C"), order=i)
@@ -273,6 +277,7 @@ class PublicImageFirstShuffleTests(TestCase):
         exam = Exam.objects.create(
             title="Public IF", slug="public-if", category=self.category, creator=self.teacher,
             status=Exam.ExamStatus.PUBLISHED, shuffle_options=True, image_first_mode=True,
+            target_type="jee",
         )
         eq = ExamQuestion.objects.create(exam=exam, question=bank, order=1, positive_marks=4, negative_marks=1)
         attempt = ExamAttempt.objects.create(exam=exam, student=self.student, expires_at=timezone.now() + timedelta(minutes=30))

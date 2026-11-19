@@ -116,6 +116,7 @@ class StackedFractionExtractionTests(TestCase):
         return QuestionPaperUpload.objects.create(
             title="Fractions", category=self.category, subject="Physics", uploaded_by=self.teacher,
             pdf_file=SimpleUploadedFile("paper.pdf", content, content_type="application/pdf"),
+            target_type="jee",
         )
 
     def test_option_fractions_extracted_and_not_leaked_into_stem(self):

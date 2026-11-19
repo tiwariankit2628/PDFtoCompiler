@@ -10,7 +10,8 @@
             <h2 class="fw-bold text-dark mb-1">
                 <i class="bi bi-collection-play text-primary me-2"></i> Online Examinations Catalog
             </h2>
-            <p class="text-muted mb-0">Browse and participate in CBT practice tests and assessments.</p>
+            <p class="text-muted mb-0">{% if user.is_student and user.exam_track %}Showing {{ user.get_exam_track_display }} tests.{% elif user.is_student %}Choose JEE or NEET in your profile to see matching tests.{% else %}Browse classified JEE and NEET tests.{% endif %}</p>
+            {% if user.is_student and not user.exam_track %}<a href="{% url 'accounts:profile' %}">Choose your exam track</a>{% endif %}
         </div>
         <div>
             <a href="{% url 'core:dashboard_router' %}" class="btn btn-outline-secondary btn-sm">
@@ -73,6 +74,7 @@
                     {% endif %}
                 </div>
 
+                <div class="small fw-semibold text-muted mb-1">{{ exam.get_target_type_display }}</div>
                 <h5 class="fw-bold text-dark mb-2">{{ exam.title }}</h5>
                 <p class="text-secondary small mb-3 flex-grow-1">
                     {{ exam.description|default:"Comprehensive Computer-Based Examination simulation."|truncatechars:110 }}

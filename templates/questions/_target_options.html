@@ -1,0 +1,7 @@
+<option value="">Select an exam</option>
+{% if not user.is_student or user.exam_track == 'jee' %}
+<option value="jee">JEE (Main and Advanced)</option>
+<option value="jee_main">JEE Main</option>
+<option value="jee_advanced">JEE Advanced</option>
+{% endif %}
+{% if not user.is_student or user.exam_track == 'neet' %}<option value="neet">NEET</option>{% endif %}

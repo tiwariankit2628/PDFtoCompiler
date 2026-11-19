@@ -159,6 +159,7 @@ class _ExtractionFixture(TestCase):
         return QuestionPaperUpload.objects.create(
             title=title, category=self.category, subject="Science", uploaded_by=self.teacher,
             pdf_file=SimpleUploadedFile("paper.pdf", content, content_type="application/pdf"),
+            target_type="jee",
         )
 
 
@@ -249,6 +250,23 @@ class CombinationExtractionTests(_ExtractionFixture):
         self.assertEqual([q.detected_type for q in paper.extracted_questions.order_by("question_number")],
                          [ExtractedQuestion.DetectedType.SINGLE, ExtractedQuestion.DetectedType.MULTIPLE,
                           ExtractedQuestion.DetectedType.SINGLE])
+
+    def test_ambiguous_or_unbounded_section_text_is_not_removed(self):
+        with fitz.open() as document:
+            page = document.new_page(width=600, height=800)
+            page.insert_text((40, 60), "Q1 Read the question carefully.")
+            page.insert_text((40, 95), "Section B: Consider the circuit in the diagram.")
+            page.insert_text((40, 120), "Part A")
+            page.insert_text((40, 160), "Q2 Read the last question carefully.")
+            page.insert_text((40, 195), "SECTION C: SINGLE-CORRECT QUESTIONS")
+            paper = self.paper(document.write())
+        self.assertEqual(PDFQuestionExtractor(paper).extract(), 2)
+        first, last = list(paper.extracted_questions.order_by("question_number"))
+        self.assertIn("Section B: Consider the circuit", first.question_text)
+        self.assertIn("Part A", first.question_text)  # a bare subpart is not enough evidence
+        # Without a following question anchor the last heading is ambiguous;
+        # do not trim it or invent a boundary.
+        self.assertIn("SECTION C: SINGLE-CORRECT QUESTIONS", last.question_text)
 
     def test_individual_question_multi_select_instruction_does_not_change_the_next_question(self):
         with fitz.open() as document:
@@ -395,6 +413,7 @@ class ApprovalTypeMappingTests(_ExtractionFixture):
         existing = Question.objects.create(
             category=self.category, subject="Science",
             question_text=q3.question_text, question_type=Question.QuestionType.MCQ_SINGLE,
+            target_type="jee",
         )
         for index, opt in enumerate(q3.options):
             QuestionOption.objects.create(

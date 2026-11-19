@@ -99,7 +99,7 @@ class BrowserUpgradeSmokeTests(StaticLiveServerTestCase):
         teacher.assigned_categories.add(category)
         paper = QuestionPaperUpload.objects.create(title="Teacher table", category=category, uploaded_by=teacher,
             pdf_file=SimpleUploadedFile("teacher.pdf", ruled_table_pdf()), total_pages=1,
-            status=QuestionPaperUpload.ProcessingStatus.EXTRACTED)
+            status=QuestionPaperUpload.ProcessingStatus.EXTRACTED, target_type="jee")
         question = ExtractedQuestion.objects.create(paper=paper, question_number=1, page_number=1,
             question_text="Teacher prompt [[table:1]]", options=[{"key": "A", "text": "yes"}, {"key": "B", "text": "no"}],
             tables=[{"columns": 2, "rows": [[cell("Teacher header", 2, header=True)], [cell("Left"), cell("Right")]]}])
@@ -186,12 +186,12 @@ class BrowserLocalImprovementsTests(StaticLiveServerTestCase):
             self.fail("Set CHROMIUM_PATH and install Node and browser dependencies first.")
         stub = LocalStub(); self.addCleanup(stub.close)
         student = User.objects.create_user(username="local_browser_student", email="localbrowser@example.test",
-                    password="BrowserPracticePass987!", role=User.Roles.STUDENT)
+                    password="BrowserPracticePass987!", role=User.Roles.STUDENT, exam_track="jee")
         category = Category.objects.create(name="Browser local", slug="browser-local")
         exam = Exam.objects.create(title="Browser ungraded test", slug="browser-ungraded-test", category=category,
-                                   creator=student, is_private_practice=True)
+                                   creator=student, is_private_practice=True, target_type="jee")
         question = Question.objects.create(category=category, creator=student, is_private_practice=True,
-                                           subject="Math", question_text="What is two plus two?")
+                                           subject="Math", question_text="What is two plus two?", target_type="jee")
         QuestionOption.objects.create(question=question, option_key="A", option_text="Three", order=0)
         selected = QuestionOption.objects.create(question=question, option_key="B", option_text="Four", order=1)
         exam_question = ExamQuestion.objects.create(exam=exam, question=question, order=1)
@@ -240,12 +240,12 @@ class BrowserSourceSnapshotTests(StaticLiveServerTestCase):
         if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):
             self.fail("Set CHROMIUM_PATH and install Node and browser dependencies first.")
         student = User.objects.create_user(username="source_browser_student", email="source-browser@example.test",
-            password="SourceBrowserPass987!", role=User.Roles.STUDENT)
+            password="SourceBrowserPass987!", role=User.Roles.STUDENT, exam_track="jee")
         category = Category.objects.create(name="Browser source", slug="browser-source")
         doc = math_pdf(); content = doc.write(); doc.close()
         paper = QuestionPaperUpload.objects.create(title="Browser source", category=category, uploaded_by=student,
             is_student_private=True, subject="Math",
-            private_pdf_file=SimpleUploadedFile("source.pdf", content, content_type="application/pdf"))
+            private_pdf_file=SimpleUploadedFile("source.pdf", content, content_type="application/pdf"), target_type="jee")
         self.assertEqual(PDFQuestionExtractor(paper).extract(), 2)
         self.assertTrue(paper.extracted_questions.get(question_number=1).figures.filter(source="option-source").exists())
         self.client.force_login(student)
@@ -276,13 +276,13 @@ class BrowserSourceSnapshotTests(StaticLiveServerTestCase):
         if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):
             self.fail("Set CHROMIUM_PATH and install Node and browser dependencies first.")
         student = User.objects.create_user(username="source_browser_student", email="source-public@example.test",
-            password="SourceBrowserPass987!", role=User.Roles.STUDENT)
+            password="SourceBrowserPass987!", role=User.Roles.STUDENT, exam_track="jee")
         teacher = User.objects.create_user(username="source_browser_teacher", email="source-teacher@example.test",
             role=User.Roles.TEACHER)
         category = Category.objects.create(name="Browser public image", slug="browser-public-image")
         question = Question.objects.create(category=category, creator=teacher, subject="Math",
             question_text="Select the correct answer.", is_image_first=True, key_verified=True,
-            answer_status=AnswerStatus.MANUALLY_VERIFIED)
+            answer_status=AnswerStatus.MANUALLY_VERIFIED, target_type="jee")
         for order, key in enumerate("ABCD"):
             QuestionOption.objects.create(question=question, option_key=key, option_text=f"Choice {key}",
                                           is_correct=(key == "C"), order=order)
@@ -291,7 +291,7 @@ class BrowserSourceSnapshotTests(StaticLiveServerTestCase):
                 image=SimpleUploadedFile(f"{kind}.png", png(), content_type="image/png"))
         exam = Exam.objects.create(title="Public image-first browser test", slug="browser-public-image",
             category=category, creator=teacher, status=Exam.ExamStatus.PUBLISHED, is_free=True,
-            image_first_mode=True, shuffle_options=True, shuffle_questions=False)
+            image_first_mode=True, shuffle_options=True, shuffle_questions=False, target_type="jee")
         ExamQuestion.objects.create(exam=exam, question=question, order=1, positive_marks=4, negative_marks=1)
         self.client.force_login(student)
         self.assertEqual(self.client.post(reverse("exams:exam_start", args=[exam.slug])).status_code, 302)
@@ -325,12 +325,12 @@ class BrowserSourceSnapshotTests(StaticLiveServerTestCase):
         if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):
             self.fail("Set CHROMIUM_PATH and install Node and browser dependencies first.")
         student = User.objects.create_user(username="source_browser_student", email="source-continuation@example.test",
-            password="SourceBrowserPass987!", role=User.Roles.STUDENT)
+            password="SourceBrowserPass987!", role=User.Roles.STUDENT, exam_track="jee")
         category = Category.objects.create(name="Browser continuation", slug="browser-continuation")
         doc = math_pdf(continuation=True); content = doc.write(); doc.close()
         paper = QuestionPaperUpload.objects.create(title="Browser continuation", category=category, uploaded_by=student,
             is_student_private=True, subject="Math", image_first=True,
-            private_pdf_file=SimpleUploadedFile("continuation.pdf", content, content_type="application/pdf"))
+            private_pdf_file=SimpleUploadedFile("continuation.pdf", content, content_type="application/pdf"), target_type="jee")
         self.assertEqual(PDFQuestionExtractor(paper).extract(), 2)
         first = paper.extracted_questions.get(question_number=1)
         self.assertEqual(list(first.figures.filter(source="question_crop").values_list("page_number", flat=True)), [1, 2])
@@ -377,12 +377,12 @@ class BrowserSourceSnapshotTests(StaticLiveServerTestCase):
         if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):
             self.fail("Set CHROMIUM_PATH and install Node and browser dependencies first.")
         student = User.objects.create_user(username="source_browser_student", email="source-missing@example.test",
-            password="SourceBrowserPass987!", role=User.Roles.STUDENT)
+            password="SourceBrowserPass987!", role=User.Roles.STUDENT, exam_track="jee")
         category = Category.objects.create(name="Browser missing crop", slug="browser-missing-crop")
         doc = math_pdf(); content = doc.write(); doc.close()
         paper = QuestionPaperUpload.objects.create(title="Browser missing crop", category=category, uploaded_by=student,
             is_student_private=True, subject="Math", image_first=True,
-            private_pdf_file=SimpleUploadedFile("missing.pdf", content, content_type="application/pdf"))
+            private_pdf_file=SimpleUploadedFile("missing.pdf", content, content_type="application/pdf"), target_type="jee")
         self.assertEqual(PDFQuestionExtractor(paper).extract(), 2)
         self.client.force_login(student)
         self.assertEqual(self.client.post(reverse("questions:practice_settings", args=[paper.pk]),
@@ -416,12 +416,12 @@ class BrowserSourceSnapshotTests(StaticLiveServerTestCase):
         if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):
             self.fail("Set CHROMIUM_PATH and install Node and browser dependencies first.")
         student = User.objects.create_user(username="source_browser_student", email="source-parallel-image@example.test",
-            password="SourceBrowserPass987!", role=User.Roles.STUDENT)
+            password="SourceBrowserPass987!", role=User.Roles.STUDENT, exam_track="jee")
         category = Category.objects.create(name="Browser parallel image", slug="browser-parallel-image")
         doc = parallel_pdf(); content = doc.write(); doc.close()
         paper = QuestionPaperUpload.objects.create(title="Browser parallel image", category=category, uploaded_by=student,
             is_student_private=True, subject="Math", image_first=True,
-            private_pdf_file=SimpleUploadedFile("parallel-image.pdf", content, content_type="application/pdf"))
+            private_pdf_file=SimpleUploadedFile("parallel-image.pdf", content, content_type="application/pdf"), target_type="jee")
         self.assertEqual(PDFQuestionExtractor(paper).extract(), 3)
         self.assertTrue(paper.extracted_questions.get(question_number=1).figures.filter(source="parallel-source").exists())
         self.client.force_login(student)
@@ -461,14 +461,14 @@ class BrowserSourceSnapshotTests(StaticLiveServerTestCase):
         if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):
             self.fail("Set CHROMIUM_PATH and install Node and browser dependencies first.")
         student = User.objects.create_user(username="source_browser_student", email="source-parallel@example.test",
-            password="SourceBrowserPass987!", role=User.Roles.STUDENT)
+            password="SourceBrowserPass987!", role=User.Roles.STUDENT, exam_track="jee")
         category = Category.objects.create(name="Browser parallel", slug="browser-parallel")
         doc = parallel_pdf(); content = doc.write(); doc.close()
         # Keep this fixture in text mode to verify its source-region fallback
         # and shuffled choice mapping still work without a primary question crop.
         paper = QuestionPaperUpload.objects.create(title="Browser parallel", category=category, uploaded_by=student,
             is_student_private=True, subject="Math", image_first=False,
-            private_pdf_file=SimpleUploadedFile("parallel.pdf", content, content_type="application/pdf"))
+            private_pdf_file=SimpleUploadedFile("parallel.pdf", content, content_type="application/pdf"), target_type="jee")
         self.assertEqual(PDFQuestionExtractor(paper).extract(), 3)
         self.assertTrue(paper.extracted_questions.get(question_number=1).figures.filter(source="parallel-source").exists())
         self.client.force_login(student)
@@ -521,11 +521,11 @@ class BrowserAnswerKeyImageTests(StaticLiveServerTestCase):
         if not shutil.which("node") or not os.environ.get("CHROMIUM_PATH"):
             self.fail("Set CHROMIUM_PATH and install Node and browser dependencies first.")
         user = User.objects.create_user(username="key_browser_user", email="key-browser@example.test",
-            password="KeyBrowserPass987!", role="STUDENT" if mode == "student" else "TEACHER")
+            password="KeyBrowserPass987!", role="STUDENT" if mode == "student" else "TEACHER", exam_track="jee")
         category = Category.objects.create(name="Browser key", slug="browser-key")
         flags = {"is_student_private": mode == "student", "is_classroom_private": mode == "classroom"}
         paper = QuestionPaperUpload.objects.create(title="Browser key paper", category=category, uploaded_by=user,
-            status=QuestionPaperUpload.ProcessingStatus.EXTRACTED, image_first=False, **flags)
+            status=QuestionPaperUpload.ProcessingStatus.EXTRACTED, image_first=False, **flags, target_type="jee")
         for number in (1, 2, 7):
             ExtractedQuestion.objects.create(paper=paper, question_number=number, question_text=f"Question {number}?",
                                              options=list(OPTIONS), detected_type="mcq_single", is_flagged=False)

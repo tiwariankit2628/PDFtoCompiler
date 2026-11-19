@@ -19,9 +19,10 @@
 <div class="d-flex justify-content-between align-items-center mb-2"><strong>{{ page_obj.paginator.count }} question{{ page_obj.paginator.count|pluralize }}</strong><span class="small text-muted">Selection applies to this page</span></div>
 {% for question in page_obj %}
 <div class="card border shadow-sm mb-3"><div class="card-body"><div class="d-flex gap-3">
-  <input class="form-check-input mt-1 flex-shrink-0" type="checkbox" name="question_ids" value="{{ question.pk }}" id="q-{{ question.pk }}" aria-label="Select question {{ forloop.counter }}">
+  <input class="form-check-input mt-1 flex-shrink-0" type="checkbox" name="question_ids" value="{{ question.pk }}" id="q-{{ question.pk }}" aria-label="Select question {{ forloop.counter }}" {% if not question.target_type %}disabled{% endif %}>
   <div class="flex-grow-1" style="min-width:0">
     <label for="q-{{ question.pk }}" class="fw-semibold small text-primary">Select question {{ forloop.counter }}</label>
+    {% if question.target_type %}<span class="badge text-bg-light border">{{ question.get_target_type_display }}</span>{% else %}<span class="badge text-bg-warning">Unclassified — edit to choose target</span>{% endif %}
     <div class="small text-muted mt-1">{{ question.subject }}{% if question.topic %} · {{ question.topic }}{% endif %}{% if question.chapter %} · {{ question.chapter }}{% endif %} · {{ question.get_difficulty_display }} · {% if question.confirmed_key %}Confirmed key {{ question.confirmed_key.option_key }}{% else %}Ungraded{% endif %}</div>
     {% if question.image_notice %}<p class="small text-danger fw-semibold mt-2 mb-1">{{ question.image_notice }} <a href="{% url 'questions:practice_bank_images' question.pk %}">Repair images</a></p>{% endif %}
     {% if question.source_crop_warning %}<p class="small text-warning-emphasis mt-2 mb-1">Source warning: {{ question.source_crop_warning }} Check the current image and recrop if needed.</p>{% endif %}

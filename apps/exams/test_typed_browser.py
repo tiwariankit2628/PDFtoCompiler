@@ -32,12 +32,12 @@ class TypedQuestionBrowserTests(StaticLiveServerTestCase):
             MEDIA_ROOT=os.path.join(root, "media"), PRIVATE_PRACTICE_ROOT=os.path.join(root, "private")
         ):
             password = "TypedBrowserPass987!"
-            student = User.objects.create_user("typed_browser_s", email="typed-browser-s@example.test", password=password, role="STUDENT")
+            student = User.objects.create_user("typed_browser_s", email="typed-browser-s@example.test", password=password, role="STUDENT", exam_track="jee")
             teacher = User.objects.create_user("typed_browser_t", email="typed-browser-t@example.test", password=password, role="TEACHER")
             category = Category.objects.create(name="Typed browser", slug="typed-browser")
             def make_paper(owner, **flags):
                 paper = QuestionPaperUpload.objects.create(title="Typed browser paper", category=category, uploaded_by=owner,
-                    status=QuestionPaperUpload.ProcessingStatus.EXTRACTED, image_first=False, **flags)
+                    status=QuestionPaperUpload.ProcessingStatus.EXTRACTED, image_first=False, **flags, target_type="jee")
                 result = []
                 for number, kind in ((1, "mcq_multiple"), (2, "numerical"), (3, "mcq_single")):
                     result.append(ExtractedQuestion.objects.create(paper=paper, question_number=number,
@@ -51,10 +51,10 @@ class TypedQuestionBrowserTests(StaticLiveServerTestCase):
             # owner explicitly corrects the type. Exercise re-answer in a real UI.
             legacy_question = Question.objects.create(category=category, creator=teacher, subject="Math",
                 question_text="Legacy numerical", question_type="numerical", numeric_key=Decimal("3.5"),
-                numeric_tolerance=0, typed_key_verified=True, answer_status="manually_verified")
+                numeric_tolerance=0, typed_key_verified=True, answer_status="manually_verified", target_type="jee")
             legacy_option = QuestionOption.objects.create(question=legacy_question, option_key="A", option_text="Old choice")
             legacy_exam = Exam.objects.create(title="Legacy numerical", slug="legacy-browser-number", category=category,
-                creator=teacher, status="published", duration_minutes=15, total_marks=4, is_free=True)
+                creator=teacher, status="published", duration_minutes=15, total_marks=4, is_free=True, target_type="jee")
             eq = ExamQuestion.objects.create(exam=legacy_exam, question=legacy_question, order=1, positive_marks=4, negative_marks=1)
             legacy_attempt = ExamAttempt.objects.create(exam=legacy_exam, student=student, total_marks=4,
                 last_active_question=eq, expires_at=timezone.now() + timedelta(minutes=15))

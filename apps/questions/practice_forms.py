@@ -6,6 +6,7 @@ from django import forms
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
+from apps.core.exam_targets import ExamTarget, targets_for_track
 
 from .forms import (
     BootstrapFormMixin,
@@ -20,6 +21,8 @@ from .structured_forms import add_tables_editor, clean_tables_editor
 
 class PracticeUploadForm(BootstrapFormMixin, forms.Form):
     title = forms.CharField(max_length=255, label="Practice test title")
+    target_type = forms.ChoiceField(label="Exam this paper is for", choices=[("", "Select an exam")] + list(ExamTarget.choices),
+        help_text="Choose the format printed on the paper. JEE Main and Advanced are both available to JEE students.")
     subject = forms.CharField(max_length=150, required=False)
     pdf_file = forms.FileField(label="Question paper PDF", widget=forms.ClearableFileInput(attrs={"accept": ".pdf,application/pdf"}))
     image_first = forms.BooleanField(
@@ -27,6 +30,12 @@ class PracticeUploadForm(BootstrapFormMixin, forms.Form):
         help_text="Recommended. Each question shows the original PDF crop with A/B/C/D buttons below — no retyping.",
     )
     extraction_mode = local_extraction_field()
+
+    def __init__(self, *args, user=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if user is not None:
+            allowed = targets_for_track(user.exam_track)
+            self.fields["target_type"].choices = [("", "Select an exam")] + [(value, label) for value, label in ExamTarget.choices if value in allowed]
 
     def clean_extraction_mode(self):
         return clean_local_extraction_mode(self.cleaned_data.get("extraction_mode"))

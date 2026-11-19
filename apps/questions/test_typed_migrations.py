@@ -12,9 +12,9 @@ class TypedQuestionMigrationTests(TransactionTestCase):
     """Uses only Django's disposable test DB, never an operator database."""
     migrate_from = [("questions", "0016_flag_pdf_derived_questions"), ("exams", "0012_seed_empty_categories"),
                     ("accounts", "0002_user_assigned_categories")]
-    migrate_to = [("questions", "0017_extractedquestion_multi_scoring_mode_and_more"),
-                  ("exams", "0013_examresponse_numerical_response_and_more"),
-                  ("accounts", "0002_user_assigned_categories")]
+    migrate_to = [("questions", "0018_question_target_type_questionpaperupload_target_type"),
+                  ("exams", "0014_exam_target_type"),
+                  ("accounts", "0003_user_exam_track_alter_user_target_exam")]
 
     def setUp(self):
         super().setUp()

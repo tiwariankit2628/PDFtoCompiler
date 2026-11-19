@@ -18,19 +18,19 @@ from .models import AIAnswerSuggestion, ExtractedQuestion, Question, QuestionOpt
                    AI_ANSWER_ENABLED=True, AI_ANSWER_MODEL="mock-model", GEMINI_API_KEY="test-only")
 class AIConcurrencyTests(TransactionTestCase):
     def setUp(self):
-        self.user = User.objects.create_user("ai_race", email="ai_race@example.test", password="x", role=User.Roles.STUDENT)
+        self.user = User.objects.create_user("ai_race", email="ai_race@example.test", password="x", role=User.Roles.STUDENT, exam_track="jee")
         plan = PracticePlan.objects.get(is_default=True); plan.monthly_ai_suggestions = 1; plan.save()
         category = Category.objects.create(name="AI Race", slug="ai-race")
         paper = QuestionPaperUpload.objects.create(title="Awaiting AI", category=category, uploaded_by=self.user,
-            is_student_private=True, status=QuestionPaperUpload.ProcessingStatus.EXTRACTED)
+            is_student_private=True, status=QuestionPaperUpload.ProcessingStatus.EXTRACTED, target_type="jee")
         self.staged = ExtractedQuestion.objects.create(paper=paper, question_number=1, question_text="Which?",
             options=[{"key": "A", "text": "yes"}, {"key": "B", "text": "no"}])
         bank = Question.objects.create(category=category, creator=self.user, is_private_practice=True,
-            question_text="Independent test question", subject="Science")
+            question_text="Independent test question", subject="Science", target_type="jee")
         QuestionOption.objects.create(question=bank, option_key="A", option_text="yes")
         QuestionOption.objects.create(question=bank, option_key="B", option_text="no")
         self.exam = Exam.objects.create(title="Independent", slug="ai-race-exam", category=category, creator=self.user,
-            status=Exam.ExamStatus.PUBLISHED, is_private_practice=True, duration_minutes=30, max_attempts=0)
+            status=Exam.ExamStatus.PUBLISHED, is_private_practice=True, duration_minutes=30, max_attempts=0, target_type="jee")
         ExamQuestion.objects.create(exam=self.exam, question=bank, order=1)
 
     def test_duplicate_request_is_reused_and_test_starts_while_provider_is_waiting(self):

@@ -560,7 +560,7 @@ class MixedExtractionTests(TestCase):
         category = Category.objects.create(name="Mixed", slug="mixed")
         self.paper = QuestionPaperUpload.objects.create(
             title="Mixed local", category=category, uploaded_by=teacher,
-            pdf_file=SimpleUploadedFile("mixed.pdf", mixed_pdf(), content_type="application/pdf"))
+            pdf_file=SimpleUploadedFile("mixed.pdf", mixed_pdf(), content_type="application/pdf"), target_type="jee")
 
     def test_missing_ocr_does_not_downgrade_digital_page_or_drop_its_figure(self):
         with patch("apps.questions.extractor.fitz.get_tessdata", side_effect=RuntimeError("missing")), \
@@ -636,7 +636,7 @@ class InstitutionalGraphicWorkflowTests(TestCase):
         data = doc.write(); doc.close()
         paper = QuestionPaperUpload.objects.create(
             title="Teacher figures", uploaded_by=self.teacher, category=self.category, subject="Science", image_first=False,
-            pdf_file=SimpleUploadedFile("teacher.pdf", data, content_type="application/pdf"))
+            pdf_file=SimpleUploadedFile("teacher.pdf", data, content_type="application/pdf"), target_type="jee")
         self.assertEqual(PDFQuestionExtractor(paper).extract(), 1)
         item = paper.extracted_questions.get()
         figures = list(item.figures.order_by("option_key"))
@@ -668,8 +668,8 @@ class PrivateGraphicWorkflowTests(TestCase):
                                      STATIC_ROOT=os.path.join(root.name, "static"),
                                      PRIVATE_PRACTICE_ROOT=os.path.join(root.name, "private"))
         override.enable(); self.addCleanup(override.disable)
-        self.owner = User.objects.create_user(username="image-owner", email="image-owner@example.test", password="x", role=User.Roles.STUDENT)
-        self.other = User.objects.create_user(username="image-other", email="image-other@example.test", password="x", role=User.Roles.STUDENT)
+        self.owner = User.objects.create_user(username="image-owner", email="image-owner@example.test", password="x", role=User.Roles.STUDENT, exam_track="jee")
+        self.other = User.objects.create_user(username="image-other", email="image-other@example.test", password="x", role=User.Roles.STUDENT, exam_track="jee")
         self.category = Category.objects.create(name="Image choices", slug="image-choices")
 
     def paper(self, doc, image_first=False):
@@ -677,7 +677,7 @@ class PrivateGraphicWorkflowTests(TestCase):
         return QuestionPaperUpload.objects.create(
             title="Private graphics", uploaded_by=self.owner, category=self.category, subject="Science",
             is_student_private=True, image_first=image_first,
-            private_pdf_file=SimpleUploadedFile("private.pdf", data, content_type="application/pdf"))
+            private_pdf_file=SimpleUploadedFile("private.pdf", data, content_type="application/pdf"), target_type="jee")
 
     def test_option_images_remain_private_and_survive_practice_creation(self):
         from django.urls import reverse

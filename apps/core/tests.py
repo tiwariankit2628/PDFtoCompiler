@@ -31,6 +31,7 @@ class CoreViewTests(TestCase):
             email="stu@test.com",
             password="Password123!",
             role=User.Roles.STUDENT,
+            exam_track="jee",
         )
         self.category = Category.objects.create(
             name="General Science",
@@ -122,6 +123,7 @@ class CoreViewTests(TestCase):
             category=self.category,
             creator=self.teacher,
             status=Exam.ExamStatus.PUBLISHED,
+            target_type="jee",
         )
         ExamAttempt.objects.create(
             exam=exam,
@@ -141,9 +143,9 @@ class CoreViewTests(TestCase):
 
     def test_student_dashboard_metrics_do_not_leak_unreleased_or_in_progress_scores(self):
         released = Exam.objects.create(title="Released", slug="released", category=self.category,
-            creator=self.teacher, status=Exam.ExamStatus.PUBLISHED, show_result_immediately=True)
+            creator=self.teacher, status=Exam.ExamStatus.PUBLISHED, show_result_immediately=True, target_type="jee")
         hidden = Exam.objects.create(title="Unreleased", slug="unreleased", category=self.category,
-            creator=self.teacher, status=Exam.ExamStatus.PUBLISHED, show_result_immediately=False)
+            creator=self.teacher, status=Exam.ExamStatus.PUBLISHED, show_result_immediately=False, target_type="jee")
         ExamAttempt.objects.create(exam=released, student=self.student, status=ExamAttempt.AttemptStatus.SUBMITTED,
             percentage=80, is_passed=True)
         ExamAttempt.objects.create(exam=hidden, student=self.student, status=ExamAttempt.AttemptStatus.SUBMITTED,

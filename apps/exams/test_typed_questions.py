@@ -52,15 +52,15 @@ class TypedQuestionWorkflowTests(TestCase):
         self.enterContext(override_settings(MEDIA_ROOT=os.path.join(root.name, "media"),
             STATIC_ROOT=os.path.join(root.name, "static"), PRIVATE_PRACTICE_ROOT=os.path.join(root.name, "private")))
         self.teacher = User.objects.create_user("typed_teacher", email="typed-t@example.test", password="test", role=User.Roles.TEACHER)
-        self.student = User.objects.create_user("typed_student", email="typed-s@example.test", password="test", role=User.Roles.STUDENT)
-        self.other = User.objects.create_user("typed_other", email="typed-o@example.test", password="test", role=User.Roles.STUDENT)
+        self.student = User.objects.create_user("typed_student", email="typed-s@example.test", password="test", role=User.Roles.STUDENT, exam_track="jee")
+        self.other = User.objects.create_user("typed_other", email="typed-o@example.test", password="test", role=User.Roles.STUDENT, exam_track="jee")
         self.category = Category.objects.create(name="Typed workflow", slug="typed-workflow")
 
     def paper(self, mode):
         owner = self.student if mode == "student" else self.teacher
         paper = QuestionPaperUpload.objects.create(title=f"Typed {mode}", category=self.category,
             uploaded_by=owner, subject="Physics", status=QuestionPaperUpload.ProcessingStatus.EXTRACTED,
-            is_student_private=mode == "student", is_classroom_private=mode == "classroom")
+            is_student_private=mode == "student", is_classroom_private=mode == "classroom", target_type="jee")
         for number, kind, opts in ((1, "mcq_multiple", OPTIONS), (2, "numerical", []),
                                    (3, "mcq_single", OPTIONS), (4, "mcq_multiple", OPTIONS)):
             ExtractedQuestion.objects.create(paper=paper, question_number=number, question_text=f"Question {number}",
@@ -132,7 +132,7 @@ class TypedQuestionWorkflowTests(TestCase):
         # A later owner bank edit creates a new version, leaving old attempts intact.
         bank = questions[0]
         options = {opt.option_key: opt.option_text for opt in bank.options.all()}
-        edit = {"question_type": "mcq_multiple", "question_text": bank.question_text, "subject": bank.subject,
+        edit = {"target_type": "jee", "question_type": "mcq_multiple", "question_text": bank.question_text, "subject": bank.subject,
                 "topic": "", "chapter": "", "difficulty": bank.difficulty, "language": bank.language,
                 "positive_marks": "4", "negative_marks": "1", "multi_scoring_mode": "exact",
                 "partial_credit_per_choice": "0", "numeric_tolerance": "0", "typed_key": "[B,D]",
@@ -294,7 +294,7 @@ class TypedQuestionWorkflowTests(TestCase):
 
     def test_public_typed_authoring_active_edit_and_historical_snapshot(self):
         self.client.force_login(self.teacher)
-        data = {"category": self.category.pk, "subject": "Physics", "topic": "", "chapter": "",
+        data = {"target_type": "jee", "category": self.category.pk, "subject": "Physics", "topic": "", "chapter": "",
                 "difficulty": "medium", "language": "en", "question_text": "Choose the valid choices",
                 "question_type": "mcq_multiple", "positive_marks": "4", "negative_marks": "1",
                 "multi_scoring_mode": "per_correct", "partial_credit_per_choice": "1", "numeric_tolerance": "0",
@@ -313,7 +313,7 @@ class TypedQuestionWorkflowTests(TestCase):
         self.assertEqual(self.client.post(reverse("questions:question_edit", args=[q.pk]), dict(data, confirm_answer_key="on")).status_code, 302)
         q.refresh_from_db(); self.assertTrue(q.typed_key_verified)
         exam = Exam.objects.create(title="Public typed", slug="public-typed", category=self.category, creator=self.teacher,
-            status=Exam.ExamStatus.PUBLISHED, is_free=True, duration_minutes=20, shuffle_questions=False, shuffle_options=False)
+            status=Exam.ExamStatus.PUBLISHED, is_free=True, duration_minutes=20, shuffle_questions=False, shuffle_options=False, target_type="jee")
         ExamQuestion.objects.create(exam=exam, question=q, order=1, positive_marks=4, negative_marks=1)
         exam.recalculate_marks()
         self.client.force_login(self.student)
@@ -348,9 +348,9 @@ class TypedQuestionWorkflowTests(TestCase):
 
     def test_legacy_public_typed_review_does_not_reinterpret_an_old_score(self):
         exam = Exam.objects.create(title="Historical typed", slug="historical-typed", category=self.category,
-            creator=self.teacher, status="published", is_free=True, total_marks=4)
+            creator=self.teacher, status="published", is_free=True, total_marks=4, target_type="jee")
         question = Question.objects.create(category=self.category, creator=self.teacher, subject="Math",
-            question_type="mcq_multiple", question_text="Old typed question", explanation="Current explanation")
+            question_type="mcq_multiple", question_text="Old typed question", explanation="Current explanation", target_type="jee")
         choice = QuestionOption.objects.create(question=question, option_key="A", option_text="Old answer", is_correct=True)
         QuestionOption.objects.create(question=question, option_key="B", option_text="Another choice")
         eq = ExamQuestion.objects.create(exam=exam, question=question, order=1, positive_marks=4, negative_marks=1)
@@ -375,7 +375,7 @@ class TypedQuestionWorkflowTests(TestCase):
         # A different missing key must not make the old typed maximum appear
         # known when rendering a partial result.
         single = Question.objects.create(category=self.category, creator=self.teacher, subject="Math",
-            question_type="mcq_single", question_text="Unconfirmed PDF", is_pdf_derived=True)
+            question_type="mcq_single", question_text="Unconfirmed PDF", is_pdf_derived=True, target_type="jee")
         eq2 = ExamQuestion.objects.create(exam=exam, question=single, order=2, positive_marks=4, negative_marks=1)
         attempt.responses.create(exam_question=eq2, order=2, key_confirmed_at_grading=False)
         from .pdf_key_results import partial_pdf_result_summary
@@ -391,7 +391,7 @@ class TypedQuestionWorkflowTests(TestCase):
         self.client.post(reverse("questions:paper_bulk_approve", args=[paper.pk]))
         staged = list(paper.extracted_questions.order_by("question_number"))
         for q in staged: q.refresh_from_db()
-        exam = Exam.objects.create(title="Readiness", slug="typed-readiness", category=self.category, creator=self.teacher)
+        exam = Exam.objects.create(title="Readiness", slug="typed-readiness", category=self.category, creator=self.teacher, target_type="jee")
         multi = ExamQuestion.objects.create(exam=exam, question=staged[0].approved_question, order=1, positive_marks=4, negative_marks=1)
         ExamQuestion.objects.create(exam=exam, question=staged[1].approved_question, order=2, positive_marks=4, negative_marks=1)
         for name in ("exams:exam_questions", "exams:exam_preview"):
@@ -428,10 +428,10 @@ class TypedQuestionWorkflowTests(TestCase):
     def test_multiple_rule_cases_and_legacy_single_response(self):
         self.client.force_login(self.student)
         exam = Exam.objects.create(title="Rules", slug="typed-rules", category=self.category, creator=self.teacher,
-            status=Exam.ExamStatus.PUBLISHED, is_free=True, duration_minutes=30, shuffle_questions=False)
+            status=Exam.ExamStatus.PUBLISHED, is_free=True, duration_minutes=30, shuffle_questions=False, target_type="jee")
         q = Question.objects.create(category=self.category, creator=self.teacher, subject="Math", question_text="Select",
             question_type="mcq_multiple", typed_key_verified=True, answer_status=AnswerStatus.MANUALLY_VERIFIED,
-            multi_scoring_mode="per_correct", partial_credit_per_choice=Decimal("1"))
+            multi_scoring_mode="per_correct", partial_credit_per_choice=Decimal("1"), target_type="jee")
         for k in "ABCD":
             QuestionOption.objects.create(question=q, option_key=k, option_text=k, is_correct=k in "AC")
         eq = ExamQuestion.objects.create(exam=exam, question=q, order=1, positive_marks=4, negative_marks=1)

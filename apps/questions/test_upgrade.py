@@ -171,12 +171,12 @@ class AISuggestionTests(TestCase):
         self.root = tempfile.TemporaryDirectory(); self.addCleanup(self.root.cleanup)
         self.settings_override = override_settings(PRIVATE_PRACTICE_ROOT=os.path.join(self.root.name, "private"), MEDIA_ROOT=os.path.join(self.root.name, "media"))
         self.settings_override.enable(); self.addCleanup(self.settings_override.disable)
-        self.student = User.objects.create_user(username="ai-owner", email="ai-owner@example.test", role=User.Roles.STUDENT, password="x")
-        self.other = User.objects.create_user(username="ai-other", email="ai-other@example.test", role=User.Roles.STUDENT, password="x")
+        self.student = User.objects.create_user(username="ai-owner", email="ai-owner@example.test", role=User.Roles.STUDENT, password="x", exam_track="jee")
+        self.other = User.objects.create_user(username="ai-other", email="ai-other@example.test", role=User.Roles.STUDENT, password="x", exam_track="jee")
         self.category = Category.objects.create(name="AI test category", slug="ai-test-category")
         self.paper = QuestionPaperUpload.objects.create(title="Private source", uploaded_by=self.student,
             category=self.category, is_student_private=True, status=QuestionPaperUpload.ProcessingStatus.EXTRACTED,
-            private_pdf_file=SimpleUploadedFile("source.pdf", make_two_column_pdf(), content_type="application/pdf"))
+            private_pdf_file=SimpleUploadedFile("source.pdf", make_two_column_pdf(), content_type="application/pdf"), target_type="jee")
         self.question = ExtractedQuestion.objects.create(paper=self.paper, question_number=1,
             question_text="Match [[table:1]]", tables=sample_table(),
             options=[{"key": "A", "text": r"$\\frac{1}{2}$"}, {"key": "B", "text": "2"}],
@@ -370,7 +370,7 @@ class AISuggestionTests(TestCase):
         teacher = User.objects.create_user(username="ai-teacher", email="ai-teacher@example.test", role=User.Roles.TEACHER, is_staff=True)
         outsider = User.objects.create_user(username="ai-outsider", email="ai-outsider@example.test", role=User.Roles.TEACHER, is_staff=True)
         paper = QuestionPaperUpload.objects.create(title="Teacher paper", uploaded_by=teacher, category=self.category,
-            pdf_file=SimpleUploadedFile("source.pdf", make_two_column_pdf()), status=QuestionPaperUpload.ProcessingStatus.EXTRACTED)
+            pdf_file=SimpleUploadedFile("source.pdf", make_two_column_pdf()), status=QuestionPaperUpload.ProcessingStatus.EXTRACTED, target_type="jee")
         question = ExtractedQuestion.objects.create(paper=paper, question_number=1, question_text="Which?",
             options=[{"key": "A", "text": "Yes"}, {"key": "B", "text": "No"}])
         url = reverse("questions:answer_request", args=[question.pk])
@@ -450,7 +450,7 @@ class AISuggestionTests(TestCase):
         from .test_cloud_pipeline import CLOUD_SETTINGS, synthetic_pdf, mathpix_result, gemini_questions
         paper = QuestionPaperUpload.objects.create(title="Mock cloud", category=self.category, uploaded_by=self.student,
             is_student_private=True, extraction_mode="cloud", cloud_consent_at=timezone.now(),
-            private_pdf_file=SimpleUploadedFile("cloud.pdf", synthetic_pdf(), content_type="application/pdf"))
+            private_pdf_file=SimpleUploadedFile("cloud.pdf", synthetic_pdf(), content_type="application/pdf"), target_type="jee")
         data = gemini_questions(); data[0]["source_regions"] = [{"page": 1, "box": [.05, .08, .49, .65]}, {"page": 2, "box": [.05, .05, .49, .2]}]
         mathpix, gemini = Mock(pdf_id="mock-id"), Mock()
         mathpix.read_pdf.return_value = mathpix_result(); mathpix.delete.return_value = True
@@ -470,8 +470,8 @@ class AISuggestionTests(TestCase):
         from django.apps import apps
         from .models import Question, QuestionOption
         teacher = User.objects.create_user(username="legacy_teacher", email="legacy_teacher@example.test", role=User.Roles.TEACHER)
-        valid = Question.objects.create(category=self.category, creator=teacher, subject="Science", question_text="Valid")
-        ambiguous = Question.objects.create(category=self.category, creator=teacher, subject="Science", question_text="Ambiguous")
+        valid = Question.objects.create(category=self.category, creator=teacher, subject="Science", question_text="Valid", target_type="jee")
+        ambiguous = Question.objects.create(category=self.category, creator=teacher, subject="Science", question_text="Ambiguous", target_type="jee")
         QuestionOption.objects.create(question=valid, option_key="A", option_text="x", is_correct=True)
         QuestionOption.objects.create(question=ambiguous, option_key="A", option_text="x", is_correct=True)
         QuestionOption.objects.create(question=ambiguous, option_key="B", option_text="y", is_correct=True)

@@ -30,15 +30,15 @@ class PracticePhase7Tests(TestCase):
         override.enable()
         self.addCleanup(override.disable)
         os.makedirs(os.path.join(self.root.name, "static"))
-        self.student = User.objects.create_user("phase7-owner", email="phase7@example.test", password="x", role=User.Roles.STUDENT)
-        self.other = User.objects.create_user("phase7-other", email="other7@example.test", password="x", role=User.Roles.STUDENT)
+        self.student = User.objects.create_user("phase7-owner", email="phase7@example.test", password="x", role=User.Roles.STUDENT, exam_track="jee")
+        self.other = User.objects.create_user("phase7-other", email="other7@example.test", password="x", role=User.Roles.STUDENT, exam_track="jee")
         self.client.force_login(self.student)
         self.free = PracticePlan.objects.get(is_default=True)
 
     def upload(self, title="Science", *, image_first=False):
         response = self.client.post(reverse("questions:practice_upload"), {
             "title": title, "subject": "Physics", "image_first": "on" if image_first else "",
-            "pdf_file": SimpleUploadedFile("test.pdf", make_two_column_pdf(), content_type="application/pdf")})
+            "pdf_file": SimpleUploadedFile("test.pdf", make_two_column_pdf(), content_type="application/pdf"), "target_type": "jee"})
         self.assertEqual(response.status_code, 302)
         paper = QuestionPaperUpload.objects.get(title=title, uploaded_by=self.student)
         for question in paper.extracted_questions.filter(include_in_practice=True).prefetch_related("figures"):
@@ -70,7 +70,7 @@ class PracticePhase7Tests(TestCase):
 
     def bank_edit_data(self, question, **changes):
         options = {o.option_key: o.option_text for o in question.options.all()}
-        data = {"question_text": question.question_text, "subject": question.subject,
+        data = {"target_type": "jee", "question_text": question.question_text, "subject": question.subject,
                 "topic": "Mechanics", "chapter": "Motion", "difficulty": "hard", "language": "bilingual",
                 "positive_marks": str(question.positive_marks), "negative_marks": str(question.negative_marks),
                 "explanation": "Checked explanation", "correct_option": "B",
@@ -411,7 +411,7 @@ class PracticePhase7Tests(TestCase):
         self.free.save()
         paper = self.upload()
         duplicate = self.client.post(reverse("questions:practice_upload"), {
-            "title": "Denied", "pdf_file": SimpleUploadedFile("two.pdf", make_two_column_pdf(), content_type="application/pdf")})
+            "title": "Denied", "pdf_file": SimpleUploadedFile("two.pdf", make_two_column_pdf(), content_type="application/pdf"), "target_type": "jee"})
         self.assertRedirects(duplicate, reverse("payments:plans"), fetch_redirect_response=False)
         self.assertFalse(QuestionPaperUpload.objects.filter(title="Denied").exists())
         exam = self.create_exam(paper)

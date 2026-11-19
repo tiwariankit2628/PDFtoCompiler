@@ -44,12 +44,11 @@ class User(AbstractUser):
     institute_name = models.CharField(
         "School / College / Institute", max_length=200, blank=True
     )
-    target_exam = models.CharField(
-        "Target Examination",
-        max_length=150,
-        blank=True,
-        help_text="E.g., JEE Advanced, NEET-UG, UPSC CSE, SSC CGL, GATE, etc.",
-    )
+    # Retain the original free-text value for existing accounts. The new
+    # classification is separate so an ambiguous old value is never guessed.
+    target_exam = models.CharField("Target Examination", max_length=150, blank=True)
+    from apps.core.exam_targets import ExamTrack
+    exam_track = models.CharField("Exam track", max_length=12, choices=ExamTrack.choices, blank=True, db_index=True)
     bio = models.TextField("Bio / Notes", blank=True, max_length=500)
 
     # Examination Eligibility / Freemium tracking

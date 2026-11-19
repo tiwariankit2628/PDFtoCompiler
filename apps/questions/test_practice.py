@@ -39,8 +39,8 @@ class StudentPracticeTests(TestCase):
         self.override.enable()
         os.makedirs(os.path.join(self.root.name, "static"), exist_ok=True)
         self.addCleanup(self.override.disable)
-        self.student = User.objects.create_user(username="owner", email="owner@example.test", password="x", role=User.Roles.STUDENT)
-        self.other = User.objects.create_user(username="other", email="other@example.test", password="x", role=User.Roles.STUDENT)
+        self.student = User.objects.create_user(username="owner", email="owner@example.test", password="x", role=User.Roles.STUDENT, exam_track="jee")
+        self.other = User.objects.create_user(username="other", email="other@example.test", password="x", role=User.Roles.STUDENT, exam_track="jee")
         self.teacher = User.objects.create_user(username="teacher", email="teacher@example.test", password="x", role=User.Roles.TEACHER, is_staff=True)
         self.admin = User.objects.create_superuser(username="admin", email="admin@example.test", password="x", role=User.Roles.SUPER_ADMIN)
         self.client.force_login(self.student)
@@ -49,6 +49,7 @@ class StudentPracticeTests(TestCase):
         response = self.client.post(reverse("questions:practice_upload"), {
             "title": "Secret physics practice", "subject": "Physics",
             "pdf_file": SimpleUploadedFile("paper.pdf", make_two_column_pdf(), content_type="application/pdf"),
+            "target_type": "jee",
         })
         self.assertEqual(response.status_code, 302)
         paper = QuestionPaperUpload.objects.get(uploaded_by=self.student, is_student_private=True)
@@ -395,7 +396,7 @@ class StudentPracticeTests(TestCase):
 
     def test_student_upload_rejects_invalid_files_and_private_storage_misconfiguration(self):
         bad = SimpleUploadedFile("bad.pdf", b"not a pdf", content_type="application/pdf")
-        response = self.client.post(reverse("questions:practice_upload"), {"title": "Bad", "pdf_file": bad})
+        response = self.client.post(reverse("questions:practice_upload"), {"title": "Bad", "pdf_file": bad, "target_type": "jee"})
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "invalid or damaged")
         self.assertFalse(QuestionPaperUpload.objects.exists())
@@ -456,6 +457,7 @@ class StudentPracticeTests(TestCase):
         document.close()
         response = self.client.post(reverse("questions:practice_upload"), {
             "title": "Manual", "pdf_file": SimpleUploadedFile("blank.pdf", source, content_type="application/pdf"),
+            "target_type": "jee",
         })
         self.assertEqual(response.status_code, 302)
         paper = QuestionPaperUpload.objects.get(title="Manual")
@@ -478,6 +480,7 @@ class StudentPracticeTests(TestCase):
         with patch("apps.questions.practice_views.extract_private_practice_paper.delay", side_effect=ConnectionError("broker secret")):
             response = self.client.post(reverse("questions:practice_upload"), {
                 "title": "Queue failure", "pdf_file": SimpleUploadedFile("paper.pdf", make_two_column_pdf(), content_type="application/pdf"),
+                "target_type": "jee",
             })
         self.assertEqual(response.status_code, 302)
         paper = QuestionPaperUpload.objects.get(title="Queue failure")
@@ -588,6 +591,7 @@ class StudentPracticeTests(TestCase):
             response = self.client.post(reverse("questions:practice_upload"), {
                 "title": "Cloud request", "extraction_mode": "cloud", "cloud_consent": "on",
                 "pdf_file": SimpleUploadedFile("cloud.pdf", make_two_column_pdf(), content_type="application/pdf"),
+                "target_type": "jee",
             })
         self.assertEqual(response.status_code, 200)
         self.assertFalse(QuestionPaperUpload.objects.exists())
@@ -642,6 +646,7 @@ class StudentPracticeTests(TestCase):
         paper = QuestionPaperUpload.objects.create(
             title="No consent", category=category, uploaded_by=self.student, is_student_private=True,
             extraction_mode="cloud", private_pdf_file=SimpleUploadedFile("cloud.pdf", synthetic_pdf()),
+            target_type="jee",
         )
         mathpix, gemini = Mock(pdf_id="mock-id"), Mock()
         with override_settings(**CLOUD_SETTINGS):
@@ -763,13 +768,14 @@ class PrivateAttemptConcurrencyTests(TransactionTestCase):
         from apps.payments.models import PracticeUsage
         from .models import QuestionOption
 
-        student = User.objects.create_user(username="race", email="race@example.test", password="x", role=User.Roles.STUDENT)
+        student = User.objects.create_user(username="race", email="race@example.test", password="x", role=User.Roles.STUDENT, exam_track="jee")
         category = Category.objects.create(name="Practice race", slug="practice-race", is_active=False)
         exam = Exam.objects.create(
             title="Concurrent practice", category=category, creator=student, is_private_practice=True,
             status=Exam.ExamStatus.PUBLISHED, duration_minutes=45, is_free=True, max_attempts=0,
+            target_type="jee",
         )
-        q = Question.objects.create(category=category, creator=student, is_private_practice=True, subject="General", question_text="Pick one")
+        q = Question.objects.create(category=category, creator=student, is_private_practice=True, subject="General", question_text="Pick one", target_type="jee")
         QuestionOption.objects.create(question=q, option_key="A", option_text="One")
         QuestionOption.objects.create(question=q, option_key="B", option_text="Two")
         ExamQuestion.objects.create(exam=exam, question=q, order=1)

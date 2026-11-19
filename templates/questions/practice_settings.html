@@ -7,6 +7,7 @@
   <div><a href="{% url 'questions:practice_list' %}" class="small review-hero-link">← My PDF practice</a><h2 class="fw-bold mt-2 mb-1">Review & test settings</h2><p class="review-hero-subtitle mb-0">{{ paper.title }} · {{ paper.get_status_display }}</p></div>
   <a class="btn btn-light" href="{% url 'questions:practice_pdf' paper.pk %}" target="_blank" rel="noopener">Open source PDF</a>
 </div>
+{% include 'questions/_paper_target.html' %}
 {% if paper.status == 'pending' or paper.status == 'processing' %}
 <div class="alert alert-info">Extraction is in progress. <a href="">Refresh this page</a> to check again. Do not close or re-upload the paper.</div>
 {% else %}
@@ -37,7 +38,7 @@
         {% if form.acknowledge_review.errors %}<div class="text-danger small">{{ form.acknowledge_review.errors|striptags }}</div>{% endif %}</div>{% endif %}
       {% if unassigned_figure_count %}<div class="form-check mt-3">{{ form.acknowledge_unassigned }}<label class="form-check-label" for="{{ form.acknowledge_unassigned.id_for_label }}">{{ form.acknowledge_unassigned.label }}</label>
         {% if form.acknowledge_unassigned.errors %}<div class="text-danger small">{{ form.acknowledge_unassigned.errors|striptags }}</div>{% endif %}</div>{% endif %}
-      <button class="btn btn-primary fw-semibold mt-4" {% if not total_questions %}disabled{% endif %}>Create private test</button>
+      <button class="btn btn-primary fw-semibold mt-4" {% if not total_questions or not paper.target_type %}disabled{% endif %}>Create private test</button>
       <p class="small text-muted mt-2 mb-0">Duration and questions are fixed when created. You can take a new attempt later; resuming never resets an active timer.</p>
     </form>
   </div></div>

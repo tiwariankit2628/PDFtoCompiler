@@ -7,6 +7,7 @@
   <div><a href="{% url 'exams:classroom_hub' %}" class="small review-hero-link">← Classroom</a><h2 class="fw-bold mt-2 mb-1">Review your classroom test</h2><p class="review-hero-subtitle mb-0">{{ paper.title }} · {{ paper.get_status_display }}</p></div>
   <a class="btn btn-light" href="{% url 'questions:classroom_paper_pdf' paper.pk %}" target="_blank" rel="noopener">Open original PDF</a>
 </div>
+{% include 'questions/_paper_target.html' %}
 {% if paper.status == 'pending' or paper.status == 'processing' %}
   <div class="alert alert-info">Extraction is running. Refresh this page to check progress.</div>
 {% else %}
@@ -32,7 +33,7 @@
           {% if field.name == 'answer_key_text' %}{% include 'questions/_manual_key_preview.html' %}{% endif %}
         </div>{% endif %}
       {% endif %}{% endfor %}
-      <button class="btn btn-primary fw-bold" {% if not total_questions %}disabled{% endif %}>Create test &amp; join code</button>
+      <button class="btn btn-primary fw-bold" {% if not total_questions or not paper.target_type %}disabled{% endif %}>Create test &amp; join code</button>
     </form>
   </div></div>
   <div class="col-xl-5"><div class="card border shadow-sm p-4 h-100">

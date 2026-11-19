@@ -47,7 +47,7 @@ class SidebarHighlightIntegrationTests(TestCase):
     def setUp(self):
         self.category = Category.objects.create(name="Nav", slug="nav", is_active=True)
         self.student = User.objects.create_user(username="nav_student", email="nav@test.com",
-                                                 password="Password123!", role=User.Roles.STUDENT)
+                                                 password="Password123!", role=User.Roles.STUDENT, exam_track="jee")
         self.client.login(username="nav_student", password="Password123!")
 
     def _assert_single_active(self, response, expected_url):
@@ -86,6 +86,7 @@ class SidebarHighlightIntegrationTests(TestCase):
         question = Question.objects.create(
             category=self.category, creator=self.student, is_private_practice=True,
             subject="Physics", question_text="Owned bank question",
+            target_type="jee",
         )
         for i, key in enumerate("AB"):
             QuestionOption.objects.create(question=question, option_key=key, option_text=key, order=i)

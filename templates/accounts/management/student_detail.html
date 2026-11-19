@@ -41,7 +41,7 @@
                     </li>
                     <li class="d-flex justify-content-between">
                         <span class="text-muted">Target Exam</span>
-                        <span class="badge bg-light text-dark border">{{ student.target_exam|default:"Not specified" }}</span>
+                        <span class="badge bg-light text-dark border">{{ student.get_exam_track_display|default:"Not classified" }}</span>
                     </li>
                     <li class="d-flex justify-content-between">
                         <span class="text-muted">Institute / College</span>

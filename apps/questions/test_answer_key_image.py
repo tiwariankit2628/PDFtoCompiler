@@ -290,8 +290,8 @@ class AnswerImageEndpointTests(TestCase):
         settings.enable()
         self.addCleanup(settings.disable)
         self.category = Category.objects.create(name="Key tests", slug="key-tests")
-        self.student = User.objects.create_user(username="key_student", email="ks@example.test", password="x", role="STUDENT")
-        self.other = User.objects.create_user(username="key_other", email="ko@example.test", password="x", role="STUDENT")
+        self.student = User.objects.create_user(username="key_student", email="ks@example.test", password="x", role="STUDENT", exam_track="jee")
+        self.other = User.objects.create_user(username="key_other", email="ko@example.test", password="x", role="STUDENT", exam_track="jee")
         self.teacher = User.objects.create_user(username="key_teacher", email="kt@example.test", password="x", role="TEACHER")
         self.other_teacher = User.objects.create_user(username="key_teacher2", email="kt2@example.test", password="x", role="TEACHER")
         self.admin = User.objects.create_superuser(username="key_admin", email="ka@example.test", password="x", role="SUPER_ADMIN")
@@ -302,7 +302,7 @@ class AnswerImageEndpointTests(TestCase):
     def make_paper(self, owner, **flags):
         paper = QuestionPaperUpload.objects.create(title="Key preview paper", category=self.category,
                     uploaded_by=owner, status=QuestionPaperUpload.ProcessingStatus.EXTRACTED,
-                    image_first=False, **flags)
+                    image_first=False, **flags, target_type="jee")
         for number in (1, 2):
             ExtractedQuestion.objects.create(paper=paper, question_number=number, question_text=f"Question {number}?",
                                              options=list(OPTIONS), detected_type="mcq_single")
@@ -411,7 +411,7 @@ class AnswerImageEndpointTests(TestCase):
 
     def test_active_student_attempt_blocks_preview_before_ocr(self):
         exam = Exam.objects.create(title="Active", category=self.category, creator=self.student,
-                                   is_private_practice=True, status="published", duration_minutes=20)
+                                   is_private_practice=True, status="published", duration_minutes=20, target_type="jee")
         attempt = ExamAttempt.objects.create(exam=exam, student=self.student, is_private_practice=True,
                       expires_at=timezone.now() + timedelta(minutes=20), status="in_progress")
         self.client.force_login(self.student)
@@ -554,20 +554,20 @@ class AnswerImageEndpointTests(TestCase):
                 owner = self.student if private else self.teacher
                 q = Question.objects.create(category=self.category, creator=owner, subject="Science",
                     question_text="A bank question?", is_private_practice=private, is_pdf_derived=not private,
-                    answer_status=AnswerStatus.NEEDS_REVIEW, key_verified=False)
+                    answer_status=AnswerStatus.NEEDS_REVIEW, key_verified=False, target_type="jee")
                 for i, key in enumerate("ABCD"):
                     QuestionOption.objects.create(question=q, option_key=key, option_text=f"Choice {key}",
                                                   is_correct=key == "B", order=i)
                 self.client.force_login(owner)
                 if private:
                     url = reverse("questions:practice_bank_edit", args=[q.pk])
-                    data = {"question_text": q.question_text, "subject": "Science", "topic": "", "chapter": "",
+                    data = {"target_type": "jee", "question_text": q.question_text, "subject": "Science", "topic": "", "chapter": "",
                             "difficulty": "medium", "language": "en", "positive_marks": "4", "negative_marks": "1",
                             "correct_option": "B", **{f"option_{k}": f"Choice {k}" for k in "ABCD"}}
                     option_name = "option_B"
                 else:
                     url = reverse("questions:question_edit", args=[q.pk])
-                    data = {"category": self.category.pk, "subject": "Science", "topic": "", "chapter": "",
+                    data = {"target_type": "jee", "category": self.category.pk, "subject": "Science", "topic": "", "chapter": "",
                             "difficulty": "medium", "language": "en", "question_type": "mcq_single",
                             "question_text": q.question_text, "positive_marks": "4", "negative_marks": "1",
                             "correct_option": "B", **{f"option_text_{k}": f"Choice {k}" for k in "ABCD"}}
@@ -632,7 +632,7 @@ class AnswerImageEndpointTests(TestCase):
         response.save(update_fields=["selected_option"])
         attempt.submit_attempt()
         self.assertTrue(attempt.responses.get().is_correct)
-        bank_edit = {"question_text": q.question_text, "subject": "General", "topic": "Updated", "chapter": "",
+        bank_edit = {"target_type": "jee", "question_text": q.question_text, "subject": "General", "topic": "Updated", "chapter": "",
                      "difficulty": "medium", "language": "en", "positive_marks": "4", "negative_marks": "1",
                      "correct_option": "B"}
         self.assertEqual(self.client.post(reverse("questions:practice_bank_edit", args=[bank.pk]), bank_edit).status_code, 302)
@@ -709,7 +709,7 @@ class AnswerImageEndpointTests(TestCase):
         self.assertIsNotNone(bank)
         self.assertTrue(bank.is_image_first)
         self.assertEqual(bank.options.count(), 4)
-        edit = {"category": self.category.pk, "subject": "General", "topic": "Edited metadata", "chapter": "",
+        edit = {"target_type": "jee", "category": self.category.pk, "subject": "General", "topic": "Edited metadata", "chapter": "",
                 "difficulty": "medium", "language": "en", "question_type": "mcq_single", "question_text": "",
                 "positive_marks": "4", "negative_marks": "1", "correct_option": "B"}
         self.assertEqual(self.client.post(reverse("questions:question_edit", args=[bank.pk]), edit).status_code, 302)
@@ -720,7 +720,7 @@ class AnswerImageEndpointTests(TestCase):
         # an image-only question must display its original and keep choice order.
         exam = Exam.objects.create(title="Teacher crop-only", category=self.category, creator=self.teacher,
             status=Exam.ExamStatus.PUBLISHED, is_free=True, duration_minutes=20,
-            image_first_mode=False, shuffle_questions=False, shuffle_options=True)
+            image_first_mode=False, shuffle_questions=False, shuffle_options=True, target_type="jee")
         from apps.exams.models import ExamQuestion
         ExamQuestion.objects.create(exam=exam, question=bank, order=1, positive_marks=4, negative_marks=1)
         exam.recalculate_marks()
@@ -753,7 +753,7 @@ class AnswerImageEndpointTests(TestCase):
         staged = paper.extracted_questions.get(question_number=1)
         bank = Question.objects.create(category=self.category, creator=self.teacher, source_paper=paper,
             subject="Science", question_text=staged.question_text, is_pdf_derived=True, is_image_first=True,
-            answer_status=AnswerStatus.MANUALLY_VERIFIED)
+            answer_status=AnswerStatus.MANUALLY_VERIFIED, target_type="jee")
         for key in "ABCD":
             QuestionOption.objects.create(question=bank, option_key=key, option_text=f"Choice {key}", is_correct=key == "B")
         staged.approved_question, staged.status = bank, ExtractedQuestion.Status.APPROVED

@@ -996,7 +996,10 @@
                 [...failedSaves].forEach(id => {
                     const q = questions.find(item => item.response_id === id);
                     if (!q) return;
-                    const action = q.is_marked_for_review ? 'mark_review' : (hasAnswer(q) ? 'navigate' : 'clear');
+                    // An old single-choice response on a newly typed question
+                    // must survive retries until the student explicitly clears
+                    // or replaces it. Empty typed fields alone are not a clear.
+                    const action = q.is_marked_for_review ? 'mark_review' : ((hasAnswer(q) || q.legacy_selection) ? 'navigate' : 'clear');
                     queueResponseSave(q, action, 0);
                 });
             }

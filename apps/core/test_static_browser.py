@@ -75,12 +75,14 @@ class ProductionStaticBrowserTests(LiveServerTestCase):
         question = Question.objects.create(
             category=category, creator=teacher, subject="Mathematics",
             question_text=r"Find $x^2$ when $x=2$. " + long_formula,
+            target_type="jee",
         )
         QuestionOption.objects.create(question=question, option_key="A", option_text="4", is_correct=True)
         QuestionOption.objects.create(question=question, option_key="B", option_text=long_formula)
         exam = Exam.objects.create(
             title="Browser Static Exam", slug="browser-static-exam", category=category,
             creator=teacher, status=Exam.ExamStatus.PUBLISHED, is_free=True,
+            target_type="jee",
         )
         exam_question = ExamQuestion.objects.create(exam=exam, question=question, order=1)
         attempt = ExamAttempt.objects.create(

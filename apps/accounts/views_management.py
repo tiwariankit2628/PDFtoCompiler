@@ -1,6 +1,8 @@
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
+from django.db import OperationalError, connection, transaction
 from django.db.models import Count, Q
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
 from django.views.generic import CreateView, DetailView, ListView, UpdateView, View
@@ -117,6 +119,25 @@ class StudentUpdateView(AdminRequiredMixin, UpdateView):
 
     def get_queryset(self):
         return User.objects.filter(role=User.Roles.STUDENT)
+
+    def post(self, request, *args, **kwargs):
+        from apps.payments.services import lock_practice_user
+        try:
+            with transaction.atomic():
+                # Acquire before constructing/validating the form, and in the
+                # same order as candidate starts and student profile changes.
+                try:
+                    lock_practice_user(User(pk=kwargs["pk"]))
+                except User.DoesNotExist:
+                    from django.http import Http404
+                    raise Http404() from None
+                return super().post(request, *args, **kwargs)
+        except OperationalError as exc:
+            if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
+                raise
+            response = HttpResponse("The student account is busy. Please retry.", status=503)
+            response["Retry-After"] = "1"
+            return response
 
     def form_valid(self, form):
         response = super().form_valid(form)

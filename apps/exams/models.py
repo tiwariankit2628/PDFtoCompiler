@@ -96,7 +96,10 @@ class Exam(models.Model):
     description = models.TextField("Examination Description", blank=True)
     subject = models.CharField("Subject / Domain", max_length=150, blank=True, db_index=True)
     topics = models.CharField("Topics / Syllabus Covered", max_length=255, blank=True)
+    # Legacy text is retained; target_type is the explicit access classification.
     target_exam = models.CharField("Target Examination", max_length=150, blank=True)
+    from apps.core.exam_targets import ExamTarget
+    target_type = models.CharField("Target examination", max_length=16, choices=ExamTarget.choices, blank=True, db_index=True)
 
     is_free = models.BooleanField(
         "Free Examination",

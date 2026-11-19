@@ -29,6 +29,7 @@ from decimal import Decimal
 import random
 
 from apps.core.permissions import ActiveUserRequiredMixin, StudentRequiredMixin, TeacherRequiredMixin
+from apps.core.exam_targets import exam_matches_student, targets_for_track, track_for_target
 from apps.core.utils import log_audit
 from django.views import View
 
@@ -175,6 +176,10 @@ class ClassroomSessionCreateView(ClassroomNoStoreMixin, TeacherRequiredMixin, Vi
         if not exam.exam_questions.exists():
             messages.error(request, "This test has no questions yet.")
             return redirect("exams:classroom_hub")
+        allowed = targets_for_track(track_for_target(exam.target_type))
+        if not allowed or exam.exam_questions.exclude(question__target_type__in=allowed).exists():
+            messages.error(request, "Choose the test's JEE or NEET target and review questions tagged for the other exam first.")
+            return redirect("exams:exam_edit", pk=exam.pk) if not exam.is_classroom_only else redirect("exams:classroom_hub")
         session = ClassroomSession.create_for(
             exam, request.user,
             label=(request.POST.get("label") or "").strip()[:120],
@@ -304,8 +309,9 @@ class ClassroomLeaderboardView(ClassroomNoStoreMixin, ActiveUserRequiredMixin, V
         if not is_owner:
             # Students see it only if the teacher allowed it and they participated.
             if not (session.show_leaderboard_to_students
-                    and session.participants.filter(student=request.user).exists()):
-                raise PermissionDenied("This leaderboard is private to the teacher.")
+                    and session.participants.filter(student=request.user).exists()
+                    and exam_matches_student(request.user, session.exam)):
+                raise PermissionDenied("This leaderboard is not available for this account.")
         _finalize_overdue(session)
         response = render(request, "exams/classroom/leaderboard.html", {
             "session": session, "leaderboard": _session_leaderboard(session), "is_owner": is_owner,
@@ -414,6 +420,10 @@ class ClassroomJoinView(ClassroomNoStoreMixin, StudentRequiredMixin, View):
 
     def _join_once(self, request, session_id, code):
         with transaction.atomic():
+            from apps.payments.services import lock_practice_user
+            user = lock_practice_user(request.user)
+            if not user.is_active or not user.is_student:
+                raise PermissionDenied()
             # Serialize code regeneration, joining and end-now. Re-check the
             # submitted code after taking the lock, not only before it.
             if connection.vendor == "sqlite":
@@ -424,12 +434,16 @@ class ClassroomJoinView(ClassroomNoStoreMixin, StudentRequiredMixin, View):
                 _register_failed_guess(request.user)
                 messages.error(request, "That code is no longer valid. Ask your teacher for the current code.")
                 return redirect("exams:classroom_join")
+            session.exam = Exam.objects.select_for_update().get(pk=session.exam_id)
 
             active = session.attempts.filter(student=request.user, status=ExamAttempt.AttemptStatus.IN_PROGRESS).first()
             if active and not active.is_expired:
                 return redirect("exams:exam_session", attempt_uuid=active.attempt_uuid)
             if active:
                 active.auto_timeout_if_expired()
+            if not exam_matches_student(user, session.exam):
+                messages.error(request, "This test is not available for your selected exam, or its target has not been set. Ask your teacher to check it.")
+                return redirect("exams:classroom_join")
             if session.is_ended:
                 messages.error(request, "This session has ended and is no longer accepting students.")
                 return redirect("exams:classroom_join")
@@ -453,6 +467,11 @@ class ClassroomTakeView(ClassroomNoStoreMixin, StudentRequiredMixin, View):
         joined = session.participants.filter(student=request.user).exists()
         if not joined:
             raise PermissionDenied("Join this session with its code first.")
+        # Existing live attempts survive a classification change or upgrade.
+        active = session.attempts.filter(student=request.user, status=ExamAttempt.AttemptStatus.IN_PROGRESS).first()
+        if not (active and not active.is_expired) and not exam_matches_student(request.user, session.exam):
+            from django.http import Http404
+            raise Http404()
         return session
 
     def get(self, request, pk):
@@ -486,11 +505,16 @@ class ClassroomTakeView(ClassroomNoStoreMixin, StudentRequiredMixin, View):
 
     def _start_once(self, request, session):
         with transaction.atomic():
+            from apps.payments.services import lock_practice_user
+            user = lock_practice_user(request.user)
+            if not user.is_active or not user.is_student:
+                raise PermissionDenied()
             # End-now locks the same row. SQLite needs a write to acquire the
             # lock because SELECT FOR UPDATE is ignored there.
             if connection.vendor == "sqlite":
                 ClassroomSession.objects.filter(pk=session.pk).update(id=F("id"))
             session = ClassroomSession.objects.select_for_update(of=("self",)).select_related("exam").get(pk=session.pk)
+            session.exam = Exam.objects.select_for_update().get(pk=session.exam_id)
             # Resume an existing active attempt rather than starting a new one.
             active = (ExamAttempt.objects.select_for_update()
                       .filter(classroom_session=session, student=request.user,
@@ -501,6 +525,9 @@ class ClassroomTakeView(ClassroomNoStoreMixin, StudentRequiredMixin, View):
                 else:
                     return redirect("exams:exam_session", attempt_uuid=active.attempt_uuid)
 
+            if not exam_matches_student(user, session.exam):
+                from django.http import Http404
+                raise Http404()
             if session.is_ended or session.exam.status != Exam.ExamStatus.PUBLISHED:
                 messages.error(request, "This session has ended or its test is no longer available.")
                 return redirect("exams:classroom_take", pk=session.pk)

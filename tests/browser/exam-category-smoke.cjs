@@ -67,6 +67,7 @@ const assert = require('assert');
       assert.strictEqual(await page.locator('#id_subject').inputValue(), subject);
       assert(!(await section.locator('[data-category-empty]').isVisible()));
       await page.locator('#id_category').selectOption({label: 'NEET & JEE'});
+      await page.locator('#id_target_type').selectOption('jee');
       await Promise.all([
         page.waitForURL('**/questions/'),
         page.getByRole('button', {name: /Save & Build Questions/}).click(),

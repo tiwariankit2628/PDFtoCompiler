@@ -18,16 +18,16 @@ from apps.questions.models import AnswerStatus, Question, QuestionOption
 class TypedConcurrencyTests(TransactionTestCase):
     def setUp(self):
         self.teacher = User.objects.create_user("typed_race_t", email="typed-race-t@example.test", password="x", role="TEACHER")
-        self.student = User.objects.create_user("typed_race_s", email="typed-race-s@example.test", password="x", role="STUDENT")
+        self.student = User.objects.create_user("typed_race_s", email="typed-race-s@example.test", password="x", role="STUDENT", exam_track="jee")
         category = Category.objects.create(name="Typed race", slug="typed-race")
         self.exam = Exam.objects.create(title="Mixed typed race", slug="mixed-typed-race", creator=self.teacher,
             category=category, status="published", is_free=True, duration_minutes=30,
-            shuffle_questions=False, shuffle_options=False)
+            shuffle_questions=False, shuffle_options=False, target_type="jee")
         multi = Question.objects.create(category=category, creator=self.teacher, question_text="Select both",
             question_type="mcq_multiple", typed_key_verified=True, answer_status=AnswerStatus.MANUALLY_VERIFIED,
-            subject="Math", multi_scoring_mode="exact")
+            subject="Math", multi_scoring_mode="exact", target_type="jee")
         self.options = [QuestionOption.objects.create(question=multi, option_key=k, option_text=k, is_correct=k in "AC") for k in "ABC"]
-        single = Question.objects.create(category=category, creator=self.teacher, question_text="Select one", subject="Math")
+        single = Question.objects.create(category=category, creator=self.teacher, question_text="Select one", subject="Math", target_type="jee")
         self.single = QuestionOption.objects.create(question=single, option_key="A", option_text="A", is_correct=True)
         QuestionOption.objects.create(question=single, option_key="B", option_text="B")
         ExamQuestion.objects.create(exam=self.exam, question=multi, order=1, positive_marks=4, negative_marks=1)

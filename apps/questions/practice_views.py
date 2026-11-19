@@ -7,7 +7,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.core.files.base import ContentFile
 from django.db import OperationalError, connection, transaction
-from django.db.models import Max
+from django.db.models import Exists, Max, OuterRef, Q
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -15,6 +15,7 @@ from django.utils.cache import patch_cache_control
 from django.views import View
 
 from apps.core.permissions import StudentRequiredMixin
+from apps.core.exam_targets import targets_for_track
 from apps.exams.models import Category, Exam, ExamAttempt, ExamQuestion
 from apps.payments.services import QuotaExceeded, FeatureUnavailable, consume, lock_practice_user, require_feature
 from apps.core.utils import log_audit
@@ -51,7 +52,9 @@ class PrivateStudentMixin(StudentRequiredMixin):
                     and request.user.is_active and request.user.is_student):
                 # Coordinate with private test starts, which also lock this user.
                 with transaction.atomic():
-                    lock_practice_user(request.user)
+                    # A track update may have committed while this request was
+                    # waiting. All authorization below must use the locked row.
+                    request.user = lock_practice_user(request.user)
                     active = active_private_attempt(request.user)
                     if active:
                         messages.info(request, "Finish your active practice test before opening answers, the source paper or question bank.")
@@ -71,12 +74,18 @@ class PrivateStudentMixin(StudentRequiredMixin):
 
 
 def owned_paper(user, pk):
-    return get_object_or_404(QuestionPaperUpload, pk=pk, uploaded_by=user, is_student_private=True)
+    # Unknown legacy papers remain available to their owner for review and
+    # explicit classification. Known papers from the other track are hidden.
+    allowed = targets_for_track(user.exam_track)
+    return get_object_or_404(QuestionPaperUpload.objects.filter(Q(target_type__in=allowed) | Q(target_type="")),
+                             pk=pk, uploaded_by=user, is_student_private=True)
 
 
 def owned_question(user, pk):
+    allowed = targets_for_track(user.exam_track)
     return get_object_or_404(
-        ExtractedQuestion.objects.select_related("paper").prefetch_related("figures"),
+        ExtractedQuestion.objects.select_related("paper").prefetch_related("figures").filter(
+            Q(paper__target_type__in=allowed) | Q(paper__target_type="")),
         pk=pk, paper__uploaded_by=user, paper__is_student_private=True,
     )
 
@@ -129,33 +138,49 @@ class PracticeListView(PrivateStudentMixin, View):
         ).select_related("exam")
         for attempt in overdue:
             attempt.auto_timeout_if_expired()
-        papers = QuestionPaperUpload.objects.filter(
-            uploaded_by=request.user, is_student_private=True
-        ).select_related("practice_exam").prefetch_related("practice_exam__attempts")
+        allowed = targets_for_track(request.user.exam_track)
+        active = ExamAttempt.objects.filter(
+            Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()),
+            student=request.user, status=ExamAttempt.AttemptStatus.IN_PROGRESS,
+        )
+        paper_conflicts = ExamQuestion.objects.filter(exam_id=OuterRef("practice_exam_id")).exclude(question__target_type__in=allowed)
+        papers = (QuestionPaperUpload.objects.filter(uploaded_by=request.user, is_student_private=True)
+                  .annotate(needs_exam_review=Exists(paper_conflicts),
+                            has_active_attempt=Exists(active.filter(exam_id=OuterRef("practice_exam_id"))))
+                  .filter(Q(target_type__in=allowed) | Q(target_type="") | Q(has_active_attempt=True))
+                  .select_related("practice_exam").prefetch_related("practice_exam__attempts"))
         # Do not share institutional result metrics with ungraded practice.
+        bank_conflicts = ExamQuestion.objects.filter(exam_id=OuterRef("pk")).exclude(question__target_type__in=allowed)
         bank_tests = (Exam.objects.filter(creator=request.user, is_private_practice=True, private_source_paper__isnull=True)
+                      .annotate(needs_exam_review=Exists(bank_conflicts),
+                                has_active_attempt=Exists(active.filter(exam_id=OuterRef("pk"))))
+                      .filter(Q(target_type__in=allowed) | Q(target_type="") | Q(has_active_attempt=True))
                       .prefetch_related("attempts").order_by("-created_at"))
         return render(request, "questions/practice_list.html", {"papers": papers, "bank_tests": bank_tests})
 
 
 class PracticeUploadView(PrivateStudentMixin, View):
     def get(self, request):
-        return render(request, "questions/practice_upload.html", {"form": PracticeUploadForm(), "max_pages": settings.PRACTICE_MAX_PDF_PAGES})
+        return render(request, "questions/practice_upload.html", {"form": PracticeUploadForm(user=request.user), "max_pages": settings.PRACTICE_MAX_PDF_PAGES})
 
     def post(self, request):
-        form = PracticeUploadForm(request.POST, request.FILES)
+        form = PracticeUploadForm(request.POST, request.FILES, user=request.user)
         if not form.is_valid():
             return render(request, "questions/practice_upload.html", {"form": form, "max_pages": settings.PRACTICE_MAX_PDF_PAGES})
         upload = form.cleaned_data["pdf_file"]
         try:
             with transaction.atomic():
+                user = lock_practice_user(request.user)
+                if form.cleaned_data["target_type"] not in targets_for_track(user.exam_track):
+                    form.add_error("target_type", "Your profile track changed. Choose a paper for your current exam.")
+                    return render(request, "questions/practice_upload.html", {"form": form, "max_pages": settings.PRACTICE_MAX_PDF_PAGES})
                 # Private practice extraction is local-only; PDFs are never sent
                 # to external providers (enforced by the form's local-only mode).
-                consume(request.user, "pdf_uploads")
+                consume(user, "pdf_uploads")
                 paper = QuestionPaperUpload.objects.create(
                     is_student_private=True, title=form.cleaned_data["title"],
-                    subject=form.cleaned_data["subject"], category=_system_category(),
-                    uploaded_by=request.user, private_pdf_file=upload, file_size_bytes=upload.size,
+                    subject=form.cleaned_data["subject"], target_type=form.cleaned_data["target_type"], category=_system_category(),
+                    uploaded_by=user, private_pdf_file=upload, file_size_bytes=upload.size,
                     total_pages=form.pdf_page_count,
                     extraction_mode=QuestionPaperUpload.ExtractionMode.LOCAL,
                     image_first=form.cleaned_data.get("image_first", True),
@@ -225,6 +250,9 @@ class PracticeSettingsView(PrivateStudentMixin, View):
             paper = get_object_or_404(QuestionPaperUpload.objects.select_for_update(), pk=pk, uploaded_by=request.user, is_student_private=True)
             if paper.practice_exam_id:
                 return redirect("exams:exam_instructions", slug=paper.practice_exam.slug)
+            if paper.target_type not in targets_for_track(request.user.exam_track):
+                messages.error(request, "Choose this paper's target exam before creating the test.")
+                return redirect("questions:practice_settings", pk=paper.pk)
             editable(paper)
             included = list(paper.extracted_questions.filter(include_in_practice=True).prefetch_related("figures").order_by("question_number", "id"))
             form = PracticeSettingsForm(request.POST, questions=included, unassigned_count=paper.figures.filter(question__isnull=True).count())
@@ -237,7 +265,7 @@ class PracticeSettingsView(PrivateStudentMixin, View):
                 return redirect("payments:plans")
             exam = Exam.objects.create(
                 is_private_practice=True, slug=f"practice-{uuid.uuid4().hex}", title=paper.title,
-                subject=paper.subject, category=paper.category, creator=request.user,
+                subject=paper.subject, target_type=paper.target_type, category=paper.category, creator=request.user,
                 status=Exam.ExamStatus.PUBLISHED, is_free=True, max_attempts=0,
                 duration_minutes=form.cleaned_data["duration_minutes"],
                 total_marks=Decimal("0.00"), passing_percentage=form.cleaned_data["passing_percentage"] or Decimal("0.00"),
@@ -261,7 +289,7 @@ class PracticeSettingsView(PrivateStudentMixin, View):
                     numeric_tolerance=staged.numeric_tolerance, multi_scoring_mode=staged.multi_scoring_mode,
                     partial_credit_per_choice=staged.partial_credit_per_choice,
                     answer_status=AnswerStatus.STUDENT_CONFIRMED if correct else AnswerStatus.NEEDS_REVIEW, category=paper.category, creator=request.user,
-                    source_paper=paper, subject=paper.subject or "General",
+                    source_paper=paper, target_type=paper.target_type, subject=paper.subject or "General",
                     question_text=staged.question_text, tables=staged.tables, source_regions=staged.source_regions, primary_image_region=staged.primary_image_region, explanation=staged.explanation,
                     private_image=staged.private_image.name,
                     positive_marks=staged.positive_marks, negative_marks=staged.negative_marks,
@@ -439,18 +467,51 @@ class PracticeFigureFileView(PrivateStudentMixin, View):
     sensitive_during_attempt = True
     def get(self, request, pk):
         figure = get_object_or_404(ExtractedFigure, pk=pk, paper__uploaded_by=request.user, paper__is_student_private=True)
+        owned_paper(request.user, figure.paper_id)
         return _private_file_response(figure.private_image, "image/png")
+
+
+def _can_view_bank_asset(request, question):
+    """Track-scoped assets, with explicit exceptions for owned attempts.
+
+    A live pre-upgrade attempt must keep its images. Older result pages supply
+    an attempt UUID so past results still work after a student changes tracks,
+    without making every opposite-track bank image accessible by guessing IDs.
+    """
+    if question.target_type in targets_for_track(request.user.exam_track) or not question.target_type:
+        return True
+    related = question.exam_instances.filter(candidate_responses__attempt__student=request.user,
+                                              exam__is_private_practice=True, exam__creator=request.user)
+    if related.filter(
+        Q(candidate_responses__attempt__expires_at__isnull=True) |
+        Q(candidate_responses__attempt__expires_at__gt=timezone.now()),
+        candidate_responses__attempt__status=ExamAttempt.AttemptStatus.IN_PROGRESS,
+    ).exists():
+        return True
+    try:
+        attempt_id = uuid.UUID(request.GET.get("attempt", ""))
+    except (ValueError, TypeError, AttributeError):
+        return False
+    if active_private_attempt(request.user):
+        return False
+    return related.filter(candidate_responses__attempt__attempt_uuid=attempt_id,
+                          candidate_responses__attempt__status__in=ExamAttempt.FINAL_STATUSES).exists()
 
 
 class PracticeBankImageView(PrivateStudentMixin, View):
     def get(self, request, pk):
         question = get_object_or_404(Question, pk=pk, creator=request.user, is_private_practice=True)
+        if not _can_view_bank_asset(request, question):
+            raise Http404()
         return _private_file_response(question.private_image, "image/png")
 
 
 class PracticeBankFigureView(PrivateStudentMixin, View):
     def get(self, request, pk):
-        figure = get_object_or_404(QuestionFigure, pk=pk, question__creator=request.user, question__is_private_practice=True)
+        figure = get_object_or_404(QuestionFigure.objects.select_related("question"), pk=pk,
+                                   question__creator=request.user, question__is_private_practice=True)
+        if not _can_view_bank_asset(request, figure.question):
+            raise Http404()
         return _private_file_response(figure.private_image, "image/png")
 
 
@@ -663,9 +724,11 @@ class PracticeDeleteView(PrivateStudentMixin, View):
         import logging
         from .private_storage import private_practice_storage
 
-        owned_paper(request.user, pk)
         with transaction.atomic():
-            paper = get_object_or_404(QuestionPaperUpload.objects.select_for_update(), pk=pk, uploaded_by=request.user, is_student_private=True)
+            # Use the same fresh, locked track as a simultaneous profile change.
+            user = lock_practice_user(request.user)
+            owned_paper(user, pk)
+            paper = get_object_or_404(QuestionPaperUpload.objects.select_for_update(), pk=pk, uploaded_by=user, is_student_private=True)
             if paper.status in (paper.ProcessingStatus.PENDING, paper.ProcessingStatus.PROCESSING):
                 messages.warning(request, "Wait for extraction to finish before deleting this paper.")
                 return redirect("questions:practice_list")

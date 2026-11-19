@@ -260,6 +260,7 @@ class ExtractionAndApprovalSafetyTests(TestCase):
         return QuestionPaperUpload.objects.create(
             title=title, category=self.category, subject="Science", uploaded_by=self.teacher, image_first=image_first,
             pdf_file=SimpleUploadedFile("paper.pdf", content, content_type="application/pdf"),
+            target_type="jee",
         )
 
     def test_persist_correct_diagrams_and_source_links(self):

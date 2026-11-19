@@ -31,7 +31,7 @@ class PublicRegistrationTests(TestCase):
                 self.assertContains(response, f'value="{expected}" checked')
 
     def test_student_registration_creates_student_and_routes(self):
-        resp = self._post(username="stud1", email="s1@example.com", role="STUDENT")
+        resp = self._post(username="stud1", email="s1@example.com", role="STUDENT", target_exam="JEE")
         self.assertEqual(resp.status_code, 302)
         user = User.objects.get(username="stud1")
         self.assertEqual(user.role, User.Roles.STUDENT)
@@ -54,8 +54,8 @@ class PublicRegistrationTests(TestCase):
         self.assertEqual(follow.redirect_chain[-1][0], reverse("core:teacher_dashboard"))
 
     def test_missing_role_defaults_to_student_legacy_client(self):
-        # Legacy clients post no role field; they must keep working as students.
-        resp = self._post(username="legacy1", email="l1@example.com")
+        # A missing role defaults to student, which still requires an exam.
+        resp = self._post(username="legacy1", email="l1@example.com", target_exam="NEET")
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(User.objects.get(username="legacy1").role, User.Roles.STUDENT)
 
@@ -83,7 +83,7 @@ class PublicRegistrationTests(TestCase):
 class DashboardRoutingAndAccessTests(TestCase):
     def setUp(self):
         self.student = User.objects.create_user(
-            username="s_user", email="s_user@ex.com", password="Password123!", role=User.Roles.STUDENT)
+            username="s_user", email="s_user@ex.com", password="Password123!", role=User.Roles.STUDENT, exam_track="jee")
         self.teacher = User.objects.create_user(
             username="t_user", email="t_user@ex.com", password="Password123!", role=User.Roles.TEACHER)
 
@@ -132,7 +132,7 @@ class NavigationAndSectionRemovalTests(TestCase):
 
     def test_removed_student_dashboard_sections_absent(self):
         user = User.objects.create_user(
-            username="s_sec", email="s_sec@ex.com", password="Password123!", role=User.Roles.STUDENT)
+            username="s_sec", email="s_sec@ex.com", password="Password123!", role=User.Roles.STUDENT, exam_track="jee")
         self.client.login(username="s_sec", password="Password123!")
         html = self.client.get(reverse("core:student_dashboard")).content.decode()
         self.assertNotIn("Available Online Examinations", html)

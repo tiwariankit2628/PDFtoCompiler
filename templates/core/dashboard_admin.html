@@ -112,7 +112,7 @@
                     <div class="list-group-item d-flex justify-content-between align-items-center py-2 px-3">
                         <div>
                             <span class="fw-bold text-dark">{{ student.get_full_name|default:student.username }}</span>
-                            <span class="text-muted d-block" style="font-size: 0.75rem;">{{ student.email }} | {{ student.target_exam|default:"General Practice" }}</span>
+                            <span class="text-muted d-block" style="font-size: 0.75rem;">{{ student.email }} | {{ student.get_exam_track_display|default:"Not classified" }}</span>
                         </div>
                         <a href="{% url 'accounts:student_detail' student.pk %}" class="btn btn-sm btn-light border py-1 px-2">Details</a>
                     </div>

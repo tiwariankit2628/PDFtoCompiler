@@ -29,7 +29,7 @@ class ClassroomBase(TestCase):
         self.other_teacher = User.objects.create_user(username="cls_teacher2", email="t2@test.com",
                                                       password="Password123!", role=User.Roles.TEACHER, is_staff=True)
         self.student = User.objects.create_user(username="cls_student", email="s@test.com",
-                                                password="Password123!", role=User.Roles.STUDENT)
+                                                password="Password123!", role=User.Roles.STUDENT, exam_track="jee")
 
     def make_exam(self, *, keyed=3, questions=3, title="Classroom Quiz", creator=None):
         creator = creator or self.teacher
@@ -38,6 +38,7 @@ class ClassroomBase(TestCase):
             category=self.category, creator=creator, status=Exam.ExamStatus.PUBLISHED,
             subject="General", duration_minutes=30, total_marks=Decimal("12.00"),
             default_positive_marks=4, default_negative_marks=1, is_free=True,
+            target_type="jee",
         )
         for i in range(1, questions + 1):
             confirmed = i <= keyed
@@ -45,6 +46,7 @@ class ClassroomBase(TestCase):
                 category=self.category, subject="General", question_text=f"Q{i}?",
                 positive_marks=4, negative_marks=1, creator=creator,
                 answer_status=AnswerStatus.MANUALLY_VERIFIED if confirmed else AnswerStatus.NEEDS_REVIEW,
+                target_type="jee",
             )
             for j, key in enumerate("ABCD"):
                 QuestionOption.objects.create(question=q, option_key=key, option_text=key,
@@ -111,7 +113,7 @@ class JoinAndResumeTests(ClassroomBase):
 
     def test_more_than_40_students_can_join(self):
         session = self.session_for()
-        students = [User.objects.create(username=f"stud{i}", email=f"stud{i}@t.com", role=User.Roles.STUDENT)
+        students = [User.objects.create(username=f"stud{i}", email=f"stud{i}@t.com", role=User.Roles.STUDENT, exam_track="jee")
                     for i in range(42)]
         for s in students:
             self.join(s, session.code)
@@ -133,7 +135,7 @@ class JoinAndResumeTests(ClassroomBase):
         # Closing joining blocks NEW students but not those already joined.
         session.is_open = False
         session.save(update_fields=["is_open"])
-        newbie = User.objects.create(username="newbie", email="n@t.com", role=User.Roles.STUDENT)
+        newbie = User.objects.create(username="newbie", email="n@t.com", role=User.Roles.STUDENT, exam_track="jee")
         self.join(newbie, session.code)
         self.assertFalse(session.participants.filter(student=newbie).exists())
         # Ended session accepts no attempts.
@@ -168,9 +170,9 @@ class JoinAndResumeTests(ClassroomBase):
 class CountsMonitoringTests(ClassroomBase):
     def test_counts_are_distinct_and_isolated_between_teachers(self):
         session = self.session_for()
-        joined_only = User.objects.create(username="j1", email="j1@t.com", role=User.Roles.STUDENT)
-        started = User.objects.create(username="j2", email="j2@t.com", role=User.Roles.STUDENT)
-        submitted = User.objects.create(username="j3", email="j3@t.com", role=User.Roles.STUDENT)
+        joined_only = User.objects.create(username="j1", email="j1@t.com", role=User.Roles.STUDENT, exam_track="jee")
+        started = User.objects.create(username="j2", email="j2@t.com", role=User.Roles.STUDENT, exam_track="jee")
+        submitted = User.objects.create(username="j3", email="j3@t.com", role=User.Roles.STUDENT, exam_track="jee")
         for s in (joined_only, started, submitted):
             self.join(s, session.code)
         self.start(started, session)
@@ -235,9 +237,9 @@ class GradingAndLeaderboardTests(ClassroomBase):
     def test_leaderboard_ranks_ties_and_isolated(self):
         exam = self.make_exam(keyed=3, questions=3)
         session = self.session_for(exam=exam)
-        top = User.objects.create(username="top", email="top@t.com", role=User.Roles.STUDENT)
-        mid = User.objects.create(username="mid", email="mid@t.com", role=User.Roles.STUDENT)
-        tie = User.objects.create(username="tie", email="tie@t.com", role=User.Roles.STUDENT)
+        top = User.objects.create(username="top", email="top@t.com", role=User.Roles.STUDENT, exam_track="jee")
+        mid = User.objects.create(username="mid", email="mid@t.com", role=User.Roles.STUDENT, exam_track="jee")
+        tie = User.objects.create(username="tie", email="tie@t.com", role=User.Roles.STUDENT, exam_track="jee")
         self._take_and_answer(top, session, {1: "A", 2: "A", 3: "A"})   # 12
         self._take_and_answer(mid, session, {1: "A", 2: "A", 3: "B"})   # 8-1=7
         self._take_and_answer(tie, session, {1: "A", 2: "A", 3: "A"})   # 12 (tie with top)
@@ -265,8 +267,8 @@ class PrivacyTests(ClassroomBase):
     def test_students_cannot_see_others_results_or_leaderboard(self):
         exam = self.make_exam()
         session = self.session_for(exam=exam)
-        a = User.objects.create(username="a", email="a@t.com", role=User.Roles.STUDENT)
-        b = User.objects.create(username="b", email="b@t.com", role=User.Roles.STUDENT)
+        a = User.objects.create(username="a", email="a@t.com", role=User.Roles.STUDENT, exam_track="jee")
+        b = User.objects.create(username="b", email="b@t.com", role=User.Roles.STUDENT, exam_track="jee")
         self.join(a, session.code); self.start(a, session)
         attempt_a = session.attempts.get(student=a)
         # Student B cannot view A's result detail.
@@ -285,6 +287,6 @@ class PrivacyTests(ClassroomBase):
         self.client.force_login(self.student)
         self.assertEqual(self.client.get(reverse("exams:classroom_leaderboard", args=[session.pk])).status_code, 200)
         # A non-participant still cannot.
-        outsider = User.objects.create(username="out", email="out@t.com", role=User.Roles.STUDENT)
+        outsider = User.objects.create(username="out", email="out@t.com", role=User.Roles.STUDENT, exam_track="jee")
         self.client.force_login(outsider)
         self.assertEqual(self.client.get(reverse("exams:classroom_leaderboard", args=[session.pk])).status_code, 403)

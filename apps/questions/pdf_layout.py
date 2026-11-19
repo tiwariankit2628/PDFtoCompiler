@@ -84,6 +84,16 @@ NUMERICAL_SECTION_CUE = re.compile(
     re.IGNORECASE,
 )
 SINGLE_SECTION_CUE = re.compile(r"\bsingle[-\s]+(?:correct|answer|choice)\b", re.IGNORECASE)
+# Only unmistakable, standalone section labels are separated from the previous
+# question's *text*. Their original geometry and pixels are never cropped away.
+# Other lines stay in the extracted question unless they explicitly scope an
+# instruction to a group, and all separated boundaries require human review.
+SECTION_BOUNDARY_HEADING = re.compile(
+    r"^\s*(?:section|part)(?:\s+(?:[a-z]|\d{1,2}|[ivx]{1,5})(?=\s|[.():\-–—]|$))?"
+    r"\s*[.():\-–—]?\s*(?:(?:single|multiple|numerical|numeric|integer|only\s+one|one\s+or\s+more|more\s+than\s+one)\b[^\n?]{0,160})?\s*$"
+    r"|^\s*(?:numerical|numeric|integer)(?:[-\s]+(?:answer|value|response))?[-\s]+(?:type|questions?|section)\s*[:.\-–—]?\s*$",
+    re.IGNORECASE,
+)
 
 TABLE_REFERENCE = re.compile(
     r"\b(?:match\s+(?:the\s+)?(?:list|column)|(?:list|column)[-\s]*[i1]+|table)\b"
@@ -1166,6 +1176,62 @@ class DigitalQuestionLayout:
                         active = None
         return contexts
 
+    def _section_lines_before_anchor(self, by_page):
+        """Identify certain heading lines only when another question follows.
+
+        The full source segments remain unchanged. An ambiguous heading, an
+        unscoped instruction, or a heading without a following anchor is not
+        sufficient reason to remove text from the extracted question.
+        """
+        pending, confirmed = [], []
+        for page_index in range(len(self.doc)):
+            for column in self._reading_columns(page_index):
+                x0, x1 = self._column_bounds(page_index, column)
+                events = [(anchor.rect.y0, 1, anchor) for anchor in by_page.get(page_index, [])
+                          if x0 <= anchor.rect.x0 < x1]
+                events.extend((box.y0, 0, (text, box)) for text, box, _ in self.lines[page_index]
+                              if x0 <= box.x0 < x1)
+                events.sort(key=lambda event: (event[0], event[1]))
+                for _, kind, item in events:
+                    if kind == 1:
+                        # A bare "Part A" or "Section B" can also be part of
+                        # a question. Separate it only when a type or group
+                        # instruction provides stronger evidence of a boundary.
+                        if any(SECTION_SCOPE.search(line) or MULTIPLE_CORRECT.search(line)
+                               or SINGLE_CORRECT.search(line) or SINGLE_SECTION_CUE.search(line)
+                               or re.search(r"\b(?:numerical|numeric|integer)\b", line, re.I)
+                               for _, _, line in pending):
+                            confirmed.extend(pending)
+                        pending = []
+                        continue
+                    text, box = item
+                    text = text.strip()
+                    if (not text or PREFIXED_QUESTION.match(text) or NUMBERED_QUESTION.match(text)
+                            or OPTION_AT_START.match(text)):
+                        continue
+                    if SECTION_BOUNDARY_HEADING.fullmatch(text):
+                        pending.append((page_index, fitz.Rect(box), text))
+                    elif pending and len(text) <= 240 and SECTION_SCOPE.search(text):
+                        pending.append((page_index, fitz.Rect(box), text))
+        return confirmed
+
+    def _separate_section_lines(self, question, texts):
+        """Remove exact confirmed lines, retaining the full source rectangles."""
+        changed = False
+        for index, segment in enumerate(question.segments):
+            for page_index, box, line in self._section_lines:
+                center = (box.tl + box.br) / 2
+                if page_index != segment.page_index or not segment.rect.contains(center):
+                    continue
+                # Match the entire text line, not a substring in a statement or
+                # option. If text reconstruction changed it, keep it unchanged.
+                line_pattern = r"^[ \t]*" + r"[ \t]+".join(map(re.escape, line.split())) + r"[ \t]*(?:\r?\n|$)"
+                texts[index], count = re.subn(line_pattern, "", texts[index], count=1, flags=re.IGNORECASE | re.MULTILINE)
+                changed |= bool(count)
+        if changed:
+            question.issues.append("A following section heading or instruction was separated from this question's text; check the original boundaries.")
+        return texts
+
     def extract(self):
         anchors = self._anchors()
         if not anchors:
@@ -1178,6 +1244,7 @@ class DigitalQuestionLayout:
         for anchor in anchors:
             by_page.setdefault(anchor.page_index, []).append(anchor)
         section_types = self._section_types_by_anchor(by_page)
+        self._section_lines = self._section_lines_before_anchor(by_page)
         modes = {self._columns_on(index) for index in range(len(self.doc))}
         description = ({1: "single column", 2: "two columns", 3: "three columns"}.get(next(iter(modes)))
                        if len(modes) == 1 else "mixed page columns")
@@ -1255,11 +1322,11 @@ class DigitalQuestionLayout:
             elif multi:
                 possible_multi = True
             if question.multiple_correct_section:
-                question.issues.append("Printed section instructions may allow multiple correct choices; this test supports single-choice grading only. Review or exclude this question.")
+                question.issues.append("Printed section instructions may allow multiple correct choices. Confirm the type, key and marking rules against the original.")
             elif question.numerical_section:
-                question.issues.append("Printed section instructions indicate numerical answers; this test supports single-choice grading only. Review or exclude this question.")
+                question.issues.append("Printed section instructions indicate numerical answers. Confirm the type, key and marking rules against the original.")
             elif possible_multi:
-                question.issues.append("Earlier instructions may allow multiple correct choices. Check whether they apply here; this test supports single-choice grading only.")
+                question.issues.append("Earlier instructions may allow multiple correct choices. Check whether they apply here and confirm the type and marking rules.")
             if len(question.options) < 2:
                 question.issues.append("A complete supported answer-choice list was not found; image-only, numerical or incomplete questions need manual review.")
             elif len(question.options) < 5:
@@ -1902,6 +1969,7 @@ class DigitalQuestionLayout:
                 texts[index] = updated
                 break
         texts = self._structured_table_text(question, texts)
+        texts = self._separate_section_lines(question, texts)
         text = "\n".join(texts)
         question.text, question.options, first_option_offset, ambiguous = parse_options(text)
         grid_markers = None

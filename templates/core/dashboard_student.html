@@ -10,7 +10,7 @@
             <span class="workspace-kicker">YOUR PRACTICE SPACE / STUDENT</span>
             <h2 class="fw-bold mt-2 mb-1">Good to see you, {{ user.first_name|default:user.username }}.</h2>
             <p class="mb-0" style="color:rgba(255,255,255,.82);">
-                Your next step starts here. <strong class="text-white">{{ user.target_exam|default:"Make practice count." }}</strong>
+                Your next step starts here. <strong class="text-white">{% if user.exam_track %}{{ user.get_exam_track_display }}{% else %}Choose your exam track{% endif %}</strong>
                 {% if user.institute_name %} · {{ user.institute_name }}{% endif %}
             </p>
         </div>
@@ -27,6 +27,7 @@
         </div>
     </div>
 </div>
+{% if not user.exam_track %}<div class="alert alert-warning" role="status"><strong>Choose JEE or NEET to see matching tests.</strong> Your existing records and active attempts are safe. <a href="{% url 'accounts:profile' %}">Choose your exam in your profile</a>.</div>{% else %}<div class="small text-muted mb-3">Showing {{ user.get_exam_track_display }} content. <a href="{% url 'accounts:profile' %}">Change track</a> after finishing active tests. Your past results remain available.</div>{% endif %}
 
 <!-- Join a classroom test -->
 <div class="card border-0 shadow-sm rounded-4 mb-4">

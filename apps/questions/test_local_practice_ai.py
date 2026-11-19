@@ -86,11 +86,11 @@ class LocalPracticeEstimateTests(TestCase):
         override = override_settings(LOCAL_PRACTICE_AI_PORT=str(self.stub.port))
         override.enable()
         self.addCleanup(override.disable)
-        self.owner = User.objects.create_user(username="local-est-owner", email="local-est-owner@example.test", role=User.Roles.STUDENT)
-        self.other = User.objects.create_user(username="local-est-other", email="local-est-other@example.test", role=User.Roles.STUDENT)
+        self.owner = User.objects.create_user(username="local-est-owner", email="local-est-owner@example.test", role=User.Roles.STUDENT, exam_track="jee")
+        self.other = User.objects.create_user(username="local-est-other", email="local-est-other@example.test", role=User.Roles.STUDENT, exam_track="jee")
         self.category = Category.objects.create(name="Local estimate", slug="local-estimate")
         self.exam = Exam.objects.create(title="Private example", slug="private-local-estimate", category=self.category,
-                                        creator=self.owner, is_private_practice=True)
+                                        creator=self.owner, is_private_practice=True, target_type="jee")
         self.attempt = ExamAttempt.objects.create(exam=self.exam, student=self.owner,
                     status=ExamAttempt.AttemptStatus.SUBMITTED, total_marks=Decimal("12"), score_obtained=Decimal("4"), correct_count=1)
         self.response, self.question = self.add_question("What is two plus two?", ["Three", "Four"], selected="B")
@@ -101,7 +101,7 @@ class LocalPracticeEstimateTests(TestCase):
 
     def add_question(self, text, values, *, selected, verified=False):
         question = Question.objects.create(category=self.category, creator=self.owner, is_private_practice=True,
-                                           subject="Math", question_text=text, key_verified=verified)
+                                           subject="Math", question_text=text, key_verified=verified, target_type="jee")
         options = [QuestionOption.objects.create(question=question, option_key=chr(65 + i), option_text=value,
                                                   is_correct=verified and i == 0, order=i)
                    for i, value in enumerate(values)]
@@ -212,7 +212,7 @@ class LocalPracticeEstimateTests(TestCase):
             self.assertEqual(self.client.post(self.url(name), {"understand": "on"}, HTTP_ACCEPT="application/json").status_code, 404)
         self.client.force_login(self.owner)
         another = Exam.objects.create(title="Active", slug="active-estimate-private", category=self.category,
-                                      creator=self.owner, is_private_practice=True)
+                                      creator=self.owner, is_private_practice=True, target_type="jee")
         ExamAttempt.objects.create(exam=another, student=self.owner, status=ExamAttempt.AttemptStatus.IN_PROGRESS,
                                    expires_at=timezone.now() + timedelta(minutes=5))
         self.assertEqual(self.step().status_code, 423)
@@ -240,7 +240,7 @@ class LocalPracticeEstimateTests(TestCase):
         from unittest.mock import patch
         self.start()
         another = Exam.objects.create(title="Starting", slug="starting-estimate-private", category=self.category,
-                                      creator=self.owner, is_private_practice=True)
+                                      creator=self.owner, is_private_practice=True, target_type="jee")
         def while_model_is_running(response, options):
             ExamAttempt.objects.create(exam=another, student=self.owner, status=ExamAttempt.AttemptStatus.IN_PROGRESS,
                                        expires_at=timezone.now() + timedelta(minutes=5))
@@ -332,10 +332,10 @@ class VisionEstimateTests(TestCase):
         self.addCleanup(self.stub.close)
         port = override_settings(LOCAL_PRACTICE_AI_PORT=str(self.stub.port))
         port.enable(); self.addCleanup(port.disable)
-        self.owner = User.objects.create_user(username="vis-owner", email="vis-owner@example.test", role=User.Roles.STUDENT)
+        self.owner = User.objects.create_user(username="vis-owner", email="vis-owner@example.test", role=User.Roles.STUDENT, exam_track="jee")
         self.category = Category.objects.create(name="Vision", slug="vision")
         self.exam = Exam.objects.create(title="Vision practice", slug="vision-practice", category=self.category,
-                                        creator=self.owner, is_private_practice=True)
+                                        creator=self.owner, is_private_practice=True, target_type="jee")
         self.attempt = ExamAttempt.objects.create(exam=self.exam, student=self.owner,
                                                   status=ExamAttempt.AttemptStatus.SUBMITTED)
 
@@ -345,7 +345,7 @@ class VisionEstimateTests(TestCase):
         from PIL import Image
         from .models import QuestionFigure
         q = Question.objects.create(category=self.category, creator=self.owner, is_private_practice=True,
-                                    subject="Science", question_text="", is_image_first=True)
+                                    subject="Science", question_text="", is_image_first=True, target_type="jee")
         options = [QuestionOption.objects.create(question=q, option_key=chr(65 + i), option_text="", order=i)
                    for i in range(4)]
         buf = io.BytesIO(); Image.new("RGB", (60, 40), "red").save(buf, "PNG")

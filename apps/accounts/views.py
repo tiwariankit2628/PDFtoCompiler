@@ -7,6 +7,8 @@ from django.contrib.auth.views import (
     PasswordResetDoneView,
     PasswordResetView,
 )
+from django.db import OperationalError, connection, transaction
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -107,11 +109,23 @@ def profile_view(request):
     Allows user to view and update personal profile information.
     """
     if request.method == "POST":
-        form = UserProfileForm(request.POST, request.FILES, instance=request.user)
-        if form.is_valid():
-            form.save()
-            messages.success(request, "Your profile has been updated successfully.")
-            return redirect("accounts:profile")
+        from apps.payments.services import lock_practice_user
+        try:
+            with transaction.atomic():
+                # Starts and profile changes take the same lock before checking
+                # the active attempts, so neither can race the other.
+                user = lock_practice_user(request.user)
+                form = UserProfileForm(request.POST, request.FILES, instance=user)
+                if form.is_valid():
+                    form.save()
+                    messages.success(request, "Your profile has been updated successfully.")
+                    return redirect("accounts:profile")
+        except OperationalError as exc:
+            if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
+                raise
+            response = HttpResponse("Your profile is busy. Please retry; any test timer continues.", status=503)
+            response["Retry-After"] = "1"
+            return response
     else:
         form = UserProfileForm(instance=request.user)
 

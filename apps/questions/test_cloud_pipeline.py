@@ -222,7 +222,7 @@ class CloudWorkflowTests(TestCase):
         self.teacher = User.objects.create_user(username="cloud_teacher", email="cloud_teacher@example.test", role=User.Roles.TEACHER, is_staff=True)
         self.teacher.assigned_categories.add(self.category)
         self.other = User.objects.create_user(username="other_teacher", email="other_teacher@example.test", role=User.Roles.TEACHER, is_staff=True)
-        self.student = User.objects.create_user(username="cloud_student", email="cloud_student@example.test", role=User.Roles.STUDENT)
+        self.student = User.objects.create_user(username="cloud_student", email="cloud_student@example.test", role=User.Roles.STUDENT, exam_track="jee")
         self.client.force_login(self.teacher)
 
     def paper(self, **kwargs):
@@ -231,7 +231,7 @@ class CloudWorkflowTests(TestCase):
                         total_pages=2, extraction_mode=QuestionPaperUpload.ExtractionMode.CLOUD,
                         cloud_consent_at=timezone.now())
         defaults.update(kwargs)
-        return QuestionPaperUpload.objects.create(**defaults)
+        return QuestionPaperUpload.objects.create(**defaults, target_type="jee")
 
     def run_cloud(self, paper=None, questions=None):
         paper = paper or self.paper()
@@ -249,7 +249,7 @@ class CloudWorkflowTests(TestCase):
         values are rejected server-side rather than silently downgraded or run."""
         def fresh_files():
             return {"pdf_file": SimpleUploadedFile("file.pdf", synthetic_pdf(), content_type="application/pdf")}
-        base = {"title": "Local", "category": self.category.pk}
+        base = {"title": "Local", "category": self.category.pk, "target_type": "jee"}
         # An omitted method defaults to local and validates.
         default_form = QuestionPaperUploadForm(data=base, files=fresh_files(), user=self.teacher)
         self.assertTrue(default_form.is_valid(), default_form.errors)
@@ -279,6 +279,7 @@ class CloudWorkflowTests(TestCase):
             rejected = self.client.post(reverse("questions:paper_upload"), {
                 "title": "Crafted cloud", "category": self.category.pk, "extraction_mode": "cloud", "cloud_consent": "on",
                 "pdf_file": SimpleUploadedFile("file.pdf", synthetic_pdf(), content_type="application/pdf"),
+                "target_type": "jee",
             })
             self.assertEqual(rejected.status_code, 200)  # re-rendered with error, not a redirect
             self.assertFalse(QuestionPaperUpload.objects.filter(title="Crafted cloud").exists())
@@ -286,6 +287,7 @@ class CloudWorkflowTests(TestCase):
             ok = self.client.post(reverse("questions:paper_upload"), {
                 "title": "Local ok", "category": self.category.pk,
                 "pdf_file": SimpleUploadedFile("file.pdf", synthetic_pdf(), content_type="application/pdf"),
+                "target_type": "jee",
             })
         self.assertEqual(ok.status_code, 302)
         paper = QuestionPaperUpload.objects.get(title="Local ok")
@@ -567,6 +569,7 @@ class CloudWorkflowTests(TestCase):
             "category": self.category.pk, "subject": "Science", "difficulty": "medium", "language": "en",
             "question_type": "mcq_single", "question_text": "Edited image question", "positive_marks": "4",
             "negative_marks": "1", "option_text_A": "", "option_text_B": "", "correct_option": "",
+            "target_type": "jee",
         })
         self.assertEqual(result.status_code, 302)
         bank.refresh_from_db()
@@ -628,7 +631,7 @@ class CloudWorkflowTests(TestCase):
         q.refresh_from_db(); bank = q.approved_question
         bank.question_text = '</script><script>alert("xss")</script>'
         bank.save(update_fields=["question_text"])
-        exam = Exam.objects.create(title="Test", slug="cloud-exam", category=self.category, creator=self.teacher)
+        exam = Exam.objects.create(title="Test", slug="cloud-exam", category=self.category, creator=self.teacher, target_type="jee")
         eq = ExamQuestion.objects.create(exam=exam, question=bank, order=1)
         attempt = ExamAttempt.objects.create(exam=exam, student=self.student, expires_at=timezone.now() + timedelta(minutes=30))
         chosen = bank.options.get(option_key="A")
@@ -637,6 +640,7 @@ class CloudWorkflowTests(TestCase):
             "category": self.category.pk, "subject": "Science", "difficulty": "medium", "language": "en",
             "question_type": "mcq_single", "question_text": bank.question_text, "positive_marks": "4",
             "negative_marks": "1", "option_text_A": "", "option_text_B": "", "correct_option": "",
+            "target_type": "jee",
         })
         saved_response.refresh_from_db()
         self.assertEqual(saved_response.selected_option_id, chosen.id)

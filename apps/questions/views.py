@@ -4,9 +4,9 @@ from decimal import Decimal
 from django.contrib import messages
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import transaction
-from django.db.models import Count, Q
-from django.http import FileResponse, Http404
+from django.db import OperationalError, connection, transaction
+from django.db.models import Count, F, Q
+from django.http import FileResponse, Http404, HttpResponse
 from django.utils import timezone
 from django.utils.cache import patch_cache_control
 from django.shortcuts import get_object_or_404, redirect, render
@@ -132,7 +132,7 @@ def _equivalent_bank_question(question):
     correct = _confirmed_staging_key(question)
     staged = [(o["key"].strip().upper(), o.get("text", ""), o["key"].strip().upper() == correct and bool(correct))
               for o in question.options]
-    for existing in Question.objects.filter(is_private_practice=False, is_classroom_snapshot=False, category=question.paper.category, question_text__iexact=question.question_text.strip()):
+    for existing in Question.objects.filter(is_private_practice=False, is_classroom_snapshot=False, category=question.paper.category, target_type=question.paper.target_type, question_text__iexact=question.question_text.strip()):
         if (existing.image or existing.figures.exists() or existing.is_image_first or not existing.is_pdf_derived
                 or bool(existing.answer_status == AnswerStatus.MANUALLY_VERIFIED) != bool(correct)
                 or existing.question_type != _bank_question_type(question)
@@ -518,7 +518,7 @@ class ExtractedQuestionApproveView(TeacherRequiredMixin, View):
         # Create permanent Question Bank item inside an atomic transaction
         with transaction.atomic():
             bank_q = Question.objects.create(
-                category=paper.category,
+                category=paper.category, target_type=paper.target_type,
                 subject=paper.subject or "General",
                 topic=paper.target_exam or "",
                 question_text=q.question_text, tables=q.tables, source_regions=q.source_regions, primary_image_region=q.primary_image_region,
@@ -600,7 +600,7 @@ class QuestionPaperBulkApproveView(TeacherRequiredMixin, View):
 
                 # Create question in bank
                 bank_q = Question.objects.create(
-                    category=paper.category,
+                    category=paper.category, target_type=paper.target_type,
                     subject=paper.subject or "General",
                     topic=paper.target_exam or "",
                     question_text=q.question_text, tables=q.tables, source_regions=q.source_regions, primary_image_region=q.primary_image_region,
@@ -828,7 +828,31 @@ class QuestionCreateView(TeacherRequiredMixin, CreateView):
             return redirect("questions:question_bank")
 
 
-class QuestionUpdateView(TeacherRequiredMixin, UpdateView):
+def _lock_bank_question(pk):
+    """Share an ordered question lock with the examination builder."""
+    questions = Question.objects.filter(pk=pk, is_private_practice=False, is_classroom_snapshot=False)
+    if connection.vendor == "sqlite":
+        questions.update(id=F("id"))
+    return get_object_or_404(questions.select_for_update())
+
+
+class BankQuestionMutationLockMixin:
+    def dispatch(self, request, *args, **kwargs):
+        if request.method != "POST":
+            return super().dispatch(request, *args, **kwargs)
+        try:
+            with transaction.atomic():
+                _lock_bank_question(kwargs["pk"])
+                return super().dispatch(request, *args, **kwargs)
+        except OperationalError as exc:
+            if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
+                raise
+            response = HttpResponse("This question is busy. Please retry your changes.", status=503)
+            response["Retry-After"] = "1"
+            return response
+
+
+class QuestionUpdateView(TeacherRequiredMixin, BankQuestionMutationLockMixin, UpdateView):
     """
     Allows editing statement, options, marks, explanation, and images
     of an existing Question Bank item.
@@ -941,7 +965,7 @@ class QuestionUpdateView(TeacherRequiredMixin, UpdateView):
             return redirect("questions:question_bank")
 
 
-class QuestionDeleteView(TeacherRequiredMixin, View):
+class QuestionDeleteView(TeacherRequiredMixin, BankQuestionMutationLockMixin, View):
     """
     Deletes a question from Question Bank with protection against deleting
     questions that are locked in examinations with student attempts.

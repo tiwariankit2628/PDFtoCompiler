@@ -25,11 +25,11 @@ class PublicPdfConfirmedKeyTests(TestCase):
         config = override_settings(MEDIA_ROOT=str(Path(temp.name) / "media"), PRIVATE_PRACTICE_ROOT=str(Path(temp.name) / "private"))
         config.enable(); self.addCleanup(config.disable)
         self.teacher = User.objects.create_user(username="pdf_owner", email="owner@example.test", password="x", role="TEACHER")
-        self.student = User.objects.create_user(username="pdf_student", email="student@example.test", password="x", role="STUDENT")
-        self.second = User.objects.create_user(username="pdf_second", email="second@example.test", password="x", role="STUDENT")
+        self.student = User.objects.create_user(username="pdf_student", email="student@example.test", password="x", role="STUDENT", exam_track="jee")
+        self.second = User.objects.create_user(username="pdf_second", email="second@example.test", password="x", role="STUDENT", exam_track="jee")
         self.category = Category.objects.create(name="Public PDF", slug="public-pdf")
         self.paper = QuestionPaperUpload.objects.create(title="Reviewed PDF", category=self.category,
-            uploaded_by=self.teacher, status=QuestionPaperUpload.ProcessingStatus.EXTRACTED, image_first=False)
+            uploaded_by=self.teacher, status=QuestionPaperUpload.ProcessingStatus.EXTRACTED, image_first=False, target_type="jee")
         options = [{"key": key, "text": f"Choice {key}"} for key in "ABCD"]
         self.staged = []
         for number, key, status, kind in ((1, "B", AnswerStatus.NEEDS_REVIEW, "mcq_single"),
@@ -47,7 +47,7 @@ class PublicPdfConfirmedKeyTests(TestCase):
         self.exam = Exam.objects.create(title="PDF key exam", slug="pdf-key-exam", category=self.category,
             creator=self.teacher, status=Exam.ExamStatus.PUBLISHED, is_free=True, duration_minutes=30,
             passing_percentage=40, shuffle_questions=False, shuffle_options=False,
-            show_result_immediately=True, allow_review_answers=True)
+            show_result_immediately=True, allow_review_answers=True, target_type="jee")
         for number, q in enumerate(self.questions, 1):
             ExamQuestion.objects.create(exam=self.exam, question=q, order=number, positive_marks=4, negative_marks=1)
         self.exam.recalculate_marks()

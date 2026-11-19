@@ -20,13 +20,13 @@ from apps.questions.models import AnswerStatus, Question, QuestionOption
 class ClassroomConcurrencyTests(TransactionTestCase):
     def setUp(self):
         self.teacher = User.objects.create_user("race_teacher", email="race-t@example.test", password="x", role=User.Roles.TEACHER)
-        self.student = User.objects.create_user("race_student", email="race-s@example.test", password="x", role=User.Roles.STUDENT)
+        self.student = User.objects.create_user("race_student", email="race-s@example.test", password="x", role=User.Roles.STUDENT, exam_track="jee")
         category = Category.objects.create(name="Race classroom", slug="race-classroom")
         self.exam = Exam.objects.create(title="Race classroom", slug="race-classroom-exam", creator=self.teacher,
             category=category, status=Exam.ExamStatus.PUBLISHED, is_classroom_only=True, duration_minutes=30,
-            total_marks=4, shuffle_questions=False, shuffle_options=False)
+            total_marks=4, shuffle_questions=False, shuffle_options=False, target_type="jee")
         q = Question.objects.create(category=category, creator=self.teacher, is_classroom_snapshot=True,
-            answer_status=AnswerStatus.MANUALLY_VERIFIED, subject="Science", question_text="Test?")
+            answer_status=AnswerStatus.MANUALLY_VERIFIED, subject="Science", question_text="Test?", target_type="jee")
         self.correct = QuestionOption.objects.create(question=q, option_key="A", option_text="Yes", is_correct=True)
         QuestionOption.objects.create(question=q, option_key="B", option_text="No")
         ExamQuestion.objects.create(exam=self.exam, question=q, order=1, positive_marks=4, negative_marks=1)
@@ -192,7 +192,7 @@ class ClassroomConcurrencyTests(TransactionTestCase):
         self.assertEqual(float(attempt.score_obtained), 4.0)
 
     def test_join_rechecks_code_after_concurrent_regeneration(self):
-        newcomer = User.objects.create_user("race_newcomer", email="race-new@example.test", role=User.Roles.STUDENT)
+        newcomer = User.objects.create_user("race_newcomer", email="race-new@example.test", role=User.Roles.STUDENT, exam_track="jee")
         student_client, teacher_client = self.client_for(newcomer), self.client_for(self.teacher)
         old_code = self.session.code
         looked_up, resume = Event(), Event()
@@ -231,7 +231,7 @@ class ClassroomConcurrencyTests(TransactionTestCase):
         self.assertTrue(self.session.participants.filter(student=newcomer).exists())
 
     def test_many_students_start_the_same_session_without_a_hardcoded_cap(self):
-        students = [User.objects.create_user(f"race-{i}", email=f"race-{i}@example.test", role=User.Roles.STUDENT)
+        students = [User.objects.create_user(f"race-{i}", email=f"race-{i}@example.test", role=User.Roles.STUDENT, exam_track="jee")
                     for i in range(40)]
         ClassroomParticipant.objects.bulk_create([ClassroomParticipant(session=self.session, student=user) for user in students])
         clients = [self.client_for(student) for student in students]

@@ -29,12 +29,16 @@ class CategoryAdmin(admin.ModelAdmin):
 @admin.register(Exam)
 class ExamAdmin(PublicDataAdminMixin, admin.ModelAdmin):
     exclude = ("is_private_practice", "is_classroom_only")
+    # Use the application's exam editor for target changes: it locks the exam,
+    # validates its questions and protects attempts. A forged admin POST must
+    # not bypass those checks.
+    readonly_fields = ("target_type",)
 
     def get_queryset(self, request):
         return super().get_queryset(request).filter(is_private_practice=False, is_classroom_only=False)
 
-    list_display = ("title", "category", "creator", "status", "is_free", "duration_minutes", "created_at")
-    list_filter = ("status", "is_free", "category")
+    list_display = ("title", "target_type", "category", "creator", "status", "is_free", "duration_minutes", "created_at")
+    list_filter = ("target_type", "status", "is_free", "category")
     search_fields = ("title", "slug")
     prepopulated_fields = {"slug": ("title",)}
 

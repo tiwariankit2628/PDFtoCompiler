@@ -43,6 +43,7 @@ const {chromium} = require('playwright-core');
     await teacher.goto(base + data.hub);
     await teacher.getByRole('link', {name:/Create Test from PDF/i}).first().click();
     await teacher.locator('#id_title').fill('Browser classroom PDF');
+    await teacher.locator('#id_target_type').selectOption('jee_main');
     await teacher.locator('#id_subject').fill('Science');
     await teacher.locator('#id_pdf_file').setInputFiles(data.pdf);
     await teacher.locator('#id_image_first').check();

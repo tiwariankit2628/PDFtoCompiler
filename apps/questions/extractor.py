@@ -287,14 +287,14 @@ class PDFQuestionExtractor:
             # but don't make an unsupported item eligible for single scoring.
             detected_type = ExtractedQuestion.DetectedType.NUMERICAL
             type_reason = ("Printed section instructions indicate numerical answers; "
-                           "confirm the type before using single-choice scoring.")
+                           "confirm the question type and marking rules against the original.")
         elif (detected_type == ExtractedQuestion.DetectedType.SINGLE and len(options) >= 2
               and getattr(item, "multiple_correct_section", False)):
             # A strong section instruction takes precedence over a local
             # combination-style guess. Human review is still required.
             detected_type = ExtractedQuestion.DetectedType.MULTIPLE
             type_reason = ("Printed section instructions may allow multiple correct choices; "
-                           "confirm the type before using single-choice scoring.")
+                           "confirm the question type and marking rules against the original.")
         if detected_type in (ExtractedQuestion.DetectedType.NUMERICAL,
                              ExtractedQuestion.DetectedType.SUBJECTIVE):
             # These legitimately have no MCQ options; preserve content and flag

@@ -147,23 +147,23 @@ class GeminiOnlyWorkflowTests(TestCase):
         self.addCleanup(self.override.disable)
         self.category = Category.objects.create(name="Tests", slug="tests", is_active=True)
         self.teacher = User.objects.create_user(username="teacher_low", email="teacher_low@example.test", role=User.Roles.TEACHER, is_staff=True)
-        self.student = User.objects.create_user(username="student_low", email="student_low@example.test", role=User.Roles.STUDENT)
-        self.other = User.objects.create_user(username="other_low", email="other_low@example.test", role=User.Roles.STUDENT)
+        self.student = User.objects.create_user(username="student_low", email="student_low@example.test", role=User.Roles.STUDENT, exam_track="jee")
+        self.other = User.objects.create_user(username="other_low", email="other_low@example.test", role=User.Roles.STUDENT, exam_track="jee")
         self.client.force_login(self.teacher)
 
     def paper(self, **kwargs):
         data = dict(title="Gemini only", category=self.category, uploaded_by=self.teacher,
                     pdf_file=upload(), extraction_mode="gemini", cloud_consent_at=timezone.now())
         data.update(kwargs)
-        return QuestionPaperUpload.objects.create(**data)
+        return QuestionPaperUpload.objects.create(**data, target_type="jee")
 
     def test_both_upload_forms_reject_cloud_and_default_to_local(self):
         """Section 4: both upload forms offer local only; cloud/gemini/mineru are
         rejected server-side, and an omitted method defaults to local."""
         def teacher_form(**extra):
-            return QuestionPaperUploadForm(data={"title": "Paper", "category": self.category.pk, **extra}, files={"pdf_file": upload()}, user=self.teacher)
+            return QuestionPaperUploadForm(data={"title": "Paper", "category": self.category.pk, "target_type": "jee", **extra}, files={"pdf_file": upload()}, user=self.teacher)
         def student_form(**extra):
-            return PracticeUploadForm(data={"title": "Paper", **extra}, files={"pdf_file": upload()})
+            return PracticeUploadForm(data={"title": "Paper", "target_type": "jee", **extra}, files={"pdf_file": upload()})
         for factory in (teacher_form, student_form):
             default = factory()
             self.assertTrue(default.is_valid(), default.errors)
@@ -185,6 +185,7 @@ class GeminiOnlyWorkflowTests(TestCase):
             response = self.client.post(reverse("questions:paper_upload"), {
                 "title": "Crafted cloud", "category": self.category.pk,
                 "extraction_mode": "gemini", "cloud_consent": "on", "pdf_file": upload(),
+                "target_type": "jee",
             })
         self.assertEqual(response.status_code, 200)  # re-rendered with error
         self.assertFalse(QuestionPaperUpload.objects.filter(title="Crafted cloud").exists())
@@ -271,6 +272,7 @@ class GeminiOnlyWorkflowTests(TestCase):
              patch("apps.questions.practice_views.extract_private_practice_paper") as local_task:
             rejected = self.client.post(reverse("questions:practice_upload"), {
                 "title": "Crafted cloud", "extraction_mode": "gemini", "cloud_consent": "on", "pdf_file": upload(),
+                "target_type": "jee",
             })
         self.assertEqual(rejected.status_code, 200)  # re-rendered with error
         self.assertFalse(QuestionPaperUpload.objects.filter(uploaded_by=self.student).exists())

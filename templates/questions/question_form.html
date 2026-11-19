@@ -54,6 +54,11 @@
                             {% if form.category.errors %}<div class="text-danger small mt-1">{{ form.category.errors.0 }}</div>{% endif %}
                         </div>
                         <div class="col-md-6">
+                            <label class="form-label small fw-bold" for="{{ form.target_type.id_for_label }}">Target exam <span class="text-danger">*</span></label>
+                            {{ form.target_type }}<div class="form-text">{{ form.target_type.help_text }}</div>
+                            {% if form.target_type.errors %}<div class="text-danger small">{{ form.target_type.errors.0 }}</div>{% endif %}
+                        </div>
+                        <div class="col-md-6">
                             <label class="form-label small fw-bold">Subject / Domain <span class="text-danger">*</span></label>
                             {{ form.subject }}
                             {% if form.subject.errors %}<div class="text-danger small mt-1">{{ form.subject.errors.0 }}</div>{% endif %}

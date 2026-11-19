@@ -25,8 +25,10 @@
                 </div>
 
                 <div class="card-body p-4">
+                    {% if user.is_student and not user.exam_track %}<div class="alert alert-warning" role="status"><strong>Choose your exam track.</strong> Your previous profile value{% if user.target_exam %} “{{ user.target_exam }}”{% endif %} was not automatically classified. Choose JEE or NEET below to see matching tests. Your existing records remain intact.</div>{% endif %}
                     <form method="post" enctype="multipart/form-data" action="{% url 'accounts:profile' %}">
                         {% csrf_token %}
+                        {% if form.errors %}<div class="alert alert-danger" role="alert">Please correct the highlighted fields. {{ form.non_field_errors }}</div>{% endif %}
 
                         <h5 class="fw-bold mb-3 border-bottom pb-2">Personal Information</h5>
                         <div class="row g-3 mb-4">
@@ -55,8 +57,10 @@
                                 {{ form.institute_name }}
                             </div>
                             <div class="col-md-6">
-                                <label class="form-label fw-semibold small">Target Examination</label>
+                                <label class="form-label fw-semibold small" for="{{ form.target_exam.id_for_label }}">Target Examination{% if user.is_student %} *{% endif %}</label>
                                 {{ form.target_exam }}
+                                {% if form.target_exam.help_text %}<div class="form-text">{{ form.target_exam.help_text }}</div>{% endif %}
+                                {% for error in form.target_exam.errors %}<div class="text-danger small" role="alert">{{ error }}</div>{% endfor %}
                             </div>
                             <div class="col-12">
                                 <label class="form-label fw-semibold small">Bio / Candidate Notes</label>

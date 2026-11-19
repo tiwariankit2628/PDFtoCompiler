@@ -18,8 +18,10 @@ const assert = require('assert');
       email:tag+'@example.test', password:'PracticeBrowserPass987!', confirm_password:'PracticeBrowserPass987!'})) {
       await page.locator('#id_' + field).fill(value);
     }
+    await page.locator('#id_target_exam').selectOption('JEE');
     await Promise.all([page.waitForURL('**/dashboard/**'), page.locator('form').filter({has:page.locator('#id_username')}).locator('button[type=submit]').click()]);
     await page.goto(base + '/questions/practice/upload/');
+    await page.locator('#id_target_type').selectOption('jee_main');
     assert.strictEqual(await page.locator('#id_extraction_mode').count(), 0);
     assert(await page.getByText('Your PDF is processed on the server and is not sent to an external provider.', {exact:true}).isVisible());
     assert(!(await page.getByText('Tesseract', {exact:false}).count()));

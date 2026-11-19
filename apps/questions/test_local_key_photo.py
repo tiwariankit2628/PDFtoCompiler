@@ -48,13 +48,13 @@ class LocalKeyPhotoWorkflowTests(TestCase):
         self.assertTrue(all(answer in "1234" and len(answer) == 1 for answer in self.truth))
         self.assertEqual(self.truth[158], "3")
         self.category = Category.objects.create(name="Local photo workflow", slug="local-photo-workflow")
-        self.student = User.objects.create_user("photo-student", email="photo-s@example.test", password="x", role="STUDENT")
+        self.student = User.objects.create_user("photo-student", email="photo-s@example.test", password="x", role="STUDENT", exam_track="jee")
         self.teacher = User.objects.create_user("photo-teacher", email="photo-t@example.test", password="x", role="TEACHER")
 
     def make_paper(self, owner, **flags):
         paper = QuestionPaperUpload.objects.create(title="Local photo workflow", category=self.category,
                     uploaded_by=owner, status=QuestionPaperUpload.ProcessingStatus.EXTRACTED,
-                    image_first=False, **flags)
+                    image_first=False, **flags, target_type="jee")
         combinations = ["A, B and E only", "B, C and D only", "A, B and D only", "A, D and E only"]
         questions = []
         for number in range(1, 181):

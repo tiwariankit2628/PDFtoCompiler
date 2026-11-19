@@ -22,11 +22,13 @@ const assert = require('assert');
   try {
     await page.goto(base+'/auth/register/');
     for(const [field,value] of Object.entries({first_name:'Arena',last_name:'Browser',username:tag,email:tag+'@example.test',password:'PracticeBrowserPass987!',confirm_password:'PracticeBrowserPass987!'})) await page.locator('#id_'+field).fill(value);
+    await page.locator('#id_target_exam').selectOption('JEE');
     await Promise.all([page.waitForURL('**/dashboard/**'),page.locator('form').filter({has:page.locator('#id_username')}).locator('button[type=submit]').click()]);
     assert((await page.locator('body').innerText()).toLowerCase().includes('your private workspace')); step('register and student dashboard');
 
     await page.goto(base+'/questions/practice/upload/');
     await page.locator('#id_title').fill('Browser science practice');
+    await page.locator('#id_target_type').selectOption('jee_main');
     await page.locator('#id_subject').fill('Physics');
     await page.locator('#id_pdf_file').setInputFiles(sourcePdf);
     await Promise.all([page.waitForURL('**/settings/'),page.getByRole('button',{name:/Upload & extract/i}).click()]);

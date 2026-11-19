@@ -23,17 +23,18 @@ class StrictExamModeTests(TestCase):
         self.teacher = User.objects.create_user(username="strict_teacher", email="st@test.com",
                                                  password="Password123!", role=User.Roles.TEACHER, is_staff=True)
         self.student = User.objects.create_user(username="strict_student", email="ss@test.com",
-                                                password="Password123!", role=User.Roles.STUDENT)
+                                                password="Password123!", role=User.Roles.STUDENT, exam_track="jee")
         self.other = User.objects.create_user(username="strict_other", email="so@test.com",
-                                              password="Password123!", role=User.Roles.STUDENT)
+                                              password="Password123!", role=User.Roles.STUDENT, exam_track="jee")
         self.exam = Exam.objects.create(
             title="Strict Test", slug="strict-test", category=self.category, creator=self.teacher,
             status=Exam.ExamStatus.PUBLISHED, subject="Physics", duration_minutes=60,
             total_marks=Decimal("12.00"), max_attempts=1, is_free=True, strict_exam_mode=True,
+            target_type="jee",
         )
         for i in range(1, 4):
             q = Question.objects.create(category=self.category, subject="Physics",
-                                        question_text=f"Q{i}", positive_marks=4, negative_marks=1, creator=self.teacher)
+                                        question_text=f"Q{i}", positive_marks=4, negative_marks=1, creator=self.teacher, target_type="jee")
             for key, corr in [("A", True), ("B", False), ("C", False), ("D", False)]:
                 QuestionOption.objects.create(question=q, option_key=key, option_text=key, is_correct=corr)
             ExamQuestion.objects.create(exam=self.exam, question=q, order=i, positive_marks=4, negative_marks=1)
@@ -145,6 +146,6 @@ class StrictExamModeTests(TestCase):
 
     def test_strict_mode_is_scoped_to_the_exam(self):
         plain = Exam.objects.create(title="Plain", slug="plain-x", category=self.category,
-                                    creator=self.teacher, status=Exam.ExamStatus.PUBLISHED)
+                                    creator=self.teacher, status=Exam.ExamStatus.PUBLISHED, target_type="jee")
         self.assertFalse(plain.strict_exam_mode)
         self.assertTrue(self.exam.strict_exam_mode)

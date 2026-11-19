@@ -27,13 +27,13 @@ class ClassroomBrowserTests(StaticLiveServerTestCase):
                                            password=password, role=User.Roles.TEACHER)
         student = User.objects.create_user(username="live_student", email="live-student@example.test",
                                            password=password, role=User.Roles.STUDENT,
-                                           first_name="<img src=x onerror=alert(1)>")
+                                           first_name="<img src=x onerror=alert(1)>", exam_track="jee")
         category = Category.objects.create(name="Live browser", slug="live-browser")
         exam = Exam.objects.create(title="Live browser exam", slug="live-browser-exam", creator=teacher,
                                    category=category, status=Exam.ExamStatus.PUBLISHED,
-                                   shuffle_questions=False, shuffle_options=False, is_free=True)
+                                   shuffle_questions=False, shuffle_options=False, is_free=True, target_type="jee")
         question = Question.objects.create(category=category, creator=teacher, subject="Math",
-                                           question_text="What is 2 + 2?", answer_status=AnswerStatus.MANUALLY_VERIFIED)
+                                           question_text="What is 2 + 2?", answer_status=AnswerStatus.MANUALLY_VERIFIED, target_type="jee")
         QuestionOption.objects.create(question=question, option_key="A", option_text="Four", is_correct=True)
         QuestionOption.objects.create(question=question, option_key="B", option_text="Five", is_correct=False)
         ExamQuestion.objects.create(exam=exam, question=question, order=1, positive_marks=4, negative_marks=1)
@@ -73,8 +73,8 @@ class ClassroomPdfBrowserTests(StaticLiveServerTestCase):
             try:
                 password = "ClassroomBrowserPass987!"
                 teacher = User.objects.create_user("pdf_teacher", email="pdf-t@example.test", password=password, role=User.Roles.TEACHER)
-                student_a = User.objects.create_user("pdf_student_a", email="pdf-a@example.test", password=password, role=User.Roles.STUDENT)
-                student_b = User.objects.create_user("pdf_student_b", email="pdf-b@example.test", password=password, role=User.Roles.STUDENT)
+                student_a = User.objects.create_user("pdf_student_a", email="pdf-a@example.test", password=password, role=User.Roles.STUDENT, exam_track="jee")
+                student_b = User.objects.create_user("pdf_student_b", email="pdf-b@example.test", password=password, role=User.Roles.STUDENT, exam_track="jee")
                 pdf_path = Path(root) / "two-question-paper.pdf"
                 pdf_path.write_bytes(classroom_pdf())
                 data = {"password": password, "teacher": teacher.username, "studentA": student_a.username,

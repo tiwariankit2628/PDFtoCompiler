@@ -1,0 +1,17 @@
+<div class="alert alert-warning small mt-3 mb-0" role="status">
+  Review this older test before starting a new attempt. Confirming the target also labels its unclassified questions; questions already tagged for another exam are never changed. Previous results and timers remain intact.
+  {% if user.exam_track %}
+  <form method="post" action="{% url 'questions:practice_test_set_target' test.pk %}" class="mt-2">
+    {% csrf_token %}
+    {% if test.target_type %}
+      <input type="hidden" name="target_type" value="{{ test.target_type }}">
+      <div>Test target: <strong>{{ test.get_target_type_display }}</strong></div>
+    {% else %}
+      <label class="visually-hidden" for="test-target-{{ test.pk }}">Target for {{ test.title }}</label>
+      <select id="test-target-{{ test.pk }}" name="target_type" class="form-select form-select-sm mb-2" style="max-width:260px" required>{% include 'questions/_target_options.html' %}</select>
+    {% endif %}
+    <label class="d-block my-2"><input type="checkbox" name="confirm_questions" required> I checked that this test and its unclassified questions belong to this exam.</label>
+    <button class="btn btn-sm btn-outline-dark">Confirm test target</button>
+  </form>
+  {% else %}<a href="{% url 'accounts:profile' %}">Choose your profile track first.</a>{% endif %}
+</div>

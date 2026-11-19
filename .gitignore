@@ -48,3 +48,4 @@ scratch/
 
 # Optional browser-test dependencies
 node_modules/
+.cache/

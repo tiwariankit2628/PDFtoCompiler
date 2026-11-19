@@ -163,7 +163,7 @@ class MinerUExtractionTests(TestCase):
         return QuestionPaperUpload.objects.create(
             title="MinerU Paper", category=self.category, subject="Physics", uploaded_by=self.teacher,
             extraction_mode=QuestionPaperUpload.ExtractionMode.LOCAL_MINERU,
-            pdf_file=SimpleUploadedFile("p.pdf", _one_page_pdf(), content_type="application/pdf"))
+            pdf_file=SimpleUploadedFile("p.pdf", _one_page_pdf(), content_type="application/pdf"), target_type="jee")
 
     def _fake_run(self, command, **kwargs):
         # Emulate the MinerU subprocess: write content_list.json + an image.

@@ -58,7 +58,10 @@ class QuestionPaperUpload(models.Model):
         related_name="uploaded_papers",
     )
     subject = models.CharField("Subject / Course", max_length=150, blank=True)
+    # Preserve legacy free text separately from the reviewed classification.
     target_exam = models.CharField("Target Examination", max_length=150, blank=True)
+    from apps.core.exam_targets import ExamTarget
+    target_type = models.CharField("Target examination", max_length=16, choices=ExamTarget.choices, blank=True, db_index=True)
     pdf_file = models.FileField(
         "Original PDF Paper",
         upload_to="question_papers/%Y/%m/",
@@ -160,6 +163,8 @@ class Question(models.Model):
         on_delete=models.CASCADE,
         related_name="questions",
     )
+    from apps.core.exam_targets import ExamTarget
+    target_type = models.CharField("Target examination", max_length=16, choices=ExamTarget.choices, blank=True, db_index=True)
     subject = models.CharField("Subject", max_length=150, db_index=True)
     topic = models.CharField("Topic", max_length=150, blank=True, db_index=True)
     chapter = models.CharField("Chapter", max_length=150, blank=True)

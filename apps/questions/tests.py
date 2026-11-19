@@ -84,6 +84,7 @@ class PDFUploadAndValidationTests(TestCase):
             email="stu_read@test.com",
             password="Password123!",
             role=User.Roles.STUDENT,
+            exam_track="jee",
         )
 
     def test_non_pdf_file_rejected(self):
@@ -104,7 +105,7 @@ class PDFUploadAndValidationTests(TestCase):
             "title": "Physics JEE 2024",
             "category": self.category.pk,
             "subject": "Physics",
-            "target_exam": "JEE Main",
+            "target_type": "jee_main",
         }
         form = QuestionPaperUploadForm(data=form_data, files={"pdf_file": pdf_file})
         self.assertTrue(form.is_valid(), form.errors)
@@ -147,6 +148,7 @@ class PDFQuestionExtractionEngineTests(TestCase):
             subject="Science",
             pdf_file=self.pdf_file,
             uploaded_by=self.teacher,
+            target_type="jee",
         )
 
     def test_extraction_pipeline_extracts_multipage_and_hindi(self):
@@ -223,6 +225,7 @@ class QuestionReviewAndApprovalTests(TestCase):
             email="bob@test.com",
             password="Password123!",
             role=User.Roles.STUDENT,
+            exam_track="jee",
         )
         pdf_bytes = create_sample_pdf_bytes()
         self.paper = QuestionPaperUpload.objects.create(
@@ -231,6 +234,7 @@ class QuestionReviewAndApprovalTests(TestCase):
             subject="Algorithms",
             pdf_file=SimpleUploadedFile("midterm.pdf", pdf_bytes, content_type="application/pdf"),
             uploaded_by=self.teacher,
+            target_type="jee",
         )
         self.q1 = ExtractedQuestion.objects.create(
             paper=self.paper,
@@ -436,6 +440,7 @@ class QuestionBankAuthoringTests(TestCase):
             email="alice@test.com",
             password="Password123!",
             role=User.Roles.STUDENT,
+            exam_track="jee",
         )
 
     def test_manual_question_creation_with_options_and_marks(self):
@@ -459,6 +464,7 @@ class QuestionBankAuthoringTests(TestCase):
                 "positive_marks": "4.00",
                 "negative_marks": "1.00",
                 "explanation": "Mitochondria generate most of the chemical energy needed to power the cell (ATP).",
+                "target_type": "jee",
             },
         )
         self.assertEqual(res.status_code, 302)
@@ -486,6 +492,7 @@ class QuestionBankAuthoringTests(TestCase):
                 "correct_option": "A",
                 "positive_marks": "4.00",
                 "negative_marks": "1.00",
+                "target_type": "jee",
             },
         )
         self.assertEqual(res.status_code, 200)
@@ -500,6 +507,7 @@ class QuestionBankAuthoringTests(TestCase):
             question_text="Old Genetics Question",
             positive_marks=4.00,
             creator=self.teacher,
+            target_type="jee",
         )
         QuestionOption.objects.create(question=q, option_key="A", option_text="Opt A", is_correct=True)
         QuestionOption.objects.create(question=q, option_key="B", option_text="Opt B", is_correct=False)
@@ -520,6 +528,7 @@ class QuestionBankAuthoringTests(TestCase):
                 "correct_option": "D",
                 "positive_marks": "5.00",
                 "negative_marks": "1.00",
+                "target_type": "jee",
             },
         )
         self.assertEqual(res.status_code, 302)
@@ -536,6 +545,7 @@ class QuestionBankAuthoringTests(TestCase):
             subject="Ecology",
             question_text="Ecology question to delete",
             creator=self.teacher,
+            target_type="jee",
         )
 
         res = self.client.post(reverse("questions:question_delete", args=[q.pk]))
@@ -548,6 +558,7 @@ class QuestionBankAuthoringTests(TestCase):
             subject="Physiology",
             question_text="Cardiac cycle duration",
             creator=self.teacher,
+            target_type="jee",
         )
 
         # Student gets 403 Forbidden

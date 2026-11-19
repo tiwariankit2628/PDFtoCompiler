@@ -21,6 +21,7 @@ const assert = require('assert');
     assert(await page.getByText('Your PDF is processed on the server and is not sent to an external provider.', {exact:true}).isVisible());
     assert.strictEqual(await page.getByText('Tesseract', {exact:false}).count(), 0);
     await page.locator('#id_title').fill('Local browser PDF');
+    await page.locator('#id_target_type').selectOption('jee_main');
     await page.locator('#id_pdf_file').setInputFiles(process.env.LOCAL_IMPROVE_PDF);
     await Promise.all([page.waitForURL('**/settings/'),page.getByRole('button',{name:/Upload & extract/i}).click()]);
     assert(await page.getByText('Extracted questions', {exact:false}).first().isVisible());

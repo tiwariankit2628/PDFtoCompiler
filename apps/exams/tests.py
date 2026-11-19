@@ -36,6 +36,7 @@ class CategoryManagementTests(TestCase):
             email="student@test.com",
             password="Password123!",
             role=User.Roles.STUDENT,
+            exam_track="jee",
         )
         self.cat1 = Category.objects.create(
             name="UPSC Civil Services",
@@ -123,6 +124,7 @@ class CategoryManagementTests(TestCase):
             category=self.cat1,
             creator=self.teacher,
             status=Exam.ExamStatus.PUBLISHED,
+            target_type="jee",
         )
 
         self.client.login(username="test_admin", password="Password123!")
@@ -170,6 +172,7 @@ class ExamCreationAndManagementTests(TestCase):
             email="candidate@test.com",
             password="Password123!",
             role=User.Roles.STUDENT,
+            exam_track="jee",
         )
 
         self.category = Category.objects.create(
@@ -193,6 +196,7 @@ class ExamCreationAndManagementTests(TestCase):
                 positive_marks=4.00,
                 negative_marks=1.00,
                 creator=self.teacher,
+                target_type="jee",
             )
             for key, is_corr in [("A", True), ("B", False), ("C", False), ("D", False)]:
                 QuestionOption.objects.create(
@@ -214,6 +218,7 @@ class ExamCreationAndManagementTests(TestCase):
             default_positive_marks=4.00,
             default_negative_marks=1.00,
             total_marks=0.00,
+            target_type="jee",
         )
 
     def test_student_forbidden_from_exam_management(self):
@@ -247,6 +252,7 @@ class ExamCreationAndManagementTests(TestCase):
                 "max_attempts": 1,
                 "status": Exam.ExamStatus.DRAFT,
                 "is_free": True,
+                "target_type": "jee",
             },
         )
         self.assertEqual(res.status_code, 302)
@@ -404,12 +410,14 @@ class CBTEngineAndExaminationTests(TestCase):
             email="candidate1@test.com",
             password="Password123!",
             role=User.Roles.STUDENT,
+            exam_track="jee",
         )
         self.other_student = User.objects.create_user(
             username="cbt_candidate_2",
             email="candidate2@test.com",
             password="Password123!",
             role=User.Roles.STUDENT,
+            exam_track="jee",
         )
 
         # Create published exam
@@ -428,6 +436,7 @@ class CBTEngineAndExaminationTests(TestCase):
             max_attempts=2,
             is_free=True,
             show_result_immediately=True,
+            target_type="jee",
         )
 
         # Create 3 questions with options
@@ -440,6 +449,7 @@ class CBTEngineAndExaminationTests(TestCase):
                 positive_marks=4.00,
                 negative_marks=1.00,
                 creator=self.teacher,
+                target_type="jee",
             )
             # Create options A, B, C, D (A is always correct in test setup)
             for key, is_corr in [("A", True), ("B", False), ("C", False), ("D", False)]:
@@ -762,18 +772,21 @@ class ResultEvaluationAndAnalyticsTests(TestCase):
             email="alpha@test.com",
             password="Password123!",
             role=User.Roles.STUDENT,
+            exam_track="jee",
         )
         self.student_2 = User.objects.create_user(
             username="cand_beta",
             email="beta@test.com",
             password="Password123!",
             role=User.Roles.STUDENT,
+            exam_track="jee",
         )
         self.student_3 = User.objects.create_user(
             username="cand_gamma",
             email="gamma@test.com",
             password="Password123!",
             role=User.Roles.STUDENT,
+            exam_track="jee",
         )
 
         # Create published exam
@@ -788,6 +801,7 @@ class ResultEvaluationAndAnalyticsTests(TestCase):
             total_marks=Decimal("12.00"),
             show_result_immediately=True,
             allow_review_answers=True,
+            target_type="jee",
         )
 
         # 3 questions
@@ -805,6 +819,7 @@ class ResultEvaluationAndAnalyticsTests(TestCase):
                 negative_marks=Decimal("1.00"),
                 creator=self.teacher,
                 explanation=f"Step-by-step solution for question {i}.",
+                target_type="jee",
             )
             for key, is_corr in [("A", True), ("B", False), ("C", False), ("D", False)]:
                 QuestionOption.objects.create(
@@ -959,7 +974,7 @@ class ResultEvaluationAndAnalyticsTests(TestCase):
 
         # Candidate 3: Q1=A (+4) -> 4.00 marks -> Rank 3 of 3 (Wait, let's test tie-breaker between a1 and a4)
         # Let's create an exact score match for Rank 1 to test tie-breaker
-        student_4 = User.objects.create_user(username="cand_delta", email="delta@test.com", password="Password123!", role=User.Roles.STUDENT)
+        student_4 = User.objects.create_user(username="cand_delta", email="delta@test.com", password="Password123!", role=User.Roles.STUDENT, exam_track="jee")
         # Candidate 4: Q1=A (+4), Q2=A (+4), Q3=B (-1), wait: 8.00 vs 8.00
         # If candidate 4 has score 8.00 but 1 incorrect (e.g. if test had 4 questions or different mark):
         # With current questions, let's test faster time tie-breaker:

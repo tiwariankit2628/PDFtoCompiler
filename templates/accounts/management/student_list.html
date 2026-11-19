@@ -83,7 +83,7 @@
                             </div>
                         </td>
                         <td>
-                            <span class="badge bg-light text-dark border">{{ student.target_exam|default:"General Practice" }}</span>
+                            <span class="badge bg-light text-dark border">{{ student.get_exam_track_display|default:"Not classified" }}</span>
                         </td>
                         <td class="text-muted">{{ student.institute_name|default:"-" }}</td>
                         <td>

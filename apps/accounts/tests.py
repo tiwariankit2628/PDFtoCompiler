@@ -13,6 +13,7 @@ class UserModelTests(TestCase):
             password="SecurePassword123!",
             role=User.Roles.STUDENT,
             target_exam="JEE Advanced",
+            exam_track="jee",
         )
         self.teacher = User.objects.create_user(
             username="testteacher",
@@ -44,7 +45,7 @@ class UserModelTests(TestCase):
             "last_name": "Patel",
             "username": "aaravp",
             "email": "aarav@example.com",
-            "target_exam": "NEET-UG",
+            "target_exam": "NEET",
             "password": "StrongPassword99!",
             "confirm_password": "StrongPassword99!",
         }
@@ -52,7 +53,7 @@ class UserModelTests(TestCase):
         self.assertTrue(form.is_valid(), form.errors)
         user = form.save()
         self.assertEqual(user.role, User.Roles.STUDENT)
-        self.assertEqual(user.target_exam, "NEET-UG")
+        self.assertEqual(user.target_exam, "NEET")
 
     def test_student_registration_view(self):
         response = self.client.post(
@@ -62,7 +63,7 @@ class UserModelTests(TestCase):
                 "last_name": "Sharma",
                 "username": "priyas",
                 "email": "priya@example.com",
-                "target_exam": "UPSC CSE",
+                "target_exam": "JEE",
                 "password": "StrongPassword99!",
                 "confirm_password": "StrongPassword99!",
             },
@@ -103,12 +104,14 @@ class StudentManagementTests(TestCase):
             password="Password123!",
             role=User.Roles.STUDENT,
             target_exam="JEE Main",
+            exam_track="jee",
         )
         self.other_student = User.objects.create_user(
             username="stu2",
             email="stu2@test.com",
             password="Password123!",
             role=User.Roles.STUDENT,
+            exam_track="jee",
         )
 
     def test_student_list_search_and_filter(self):
@@ -128,7 +131,7 @@ class StudentManagementTests(TestCase):
                 "username": "rohanv",
                 "email": "rohan@test.com",
                 "password": "StrongPassword99!",
-                "target_exam": "NEET-UG",
+                "target_exam": "NEET",
                 "is_active": True,
                 "is_verified": True,
             },
@@ -236,6 +239,7 @@ class InactiveAccountRestrictionsTests(TestCase):
             password="Password123!",
             role=User.Roles.STUDENT,
             is_active=False,
+            exam_track="jee",
         )
 
     def test_inactive_student_cannot_login(self):

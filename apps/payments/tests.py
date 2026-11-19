@@ -21,8 +21,8 @@ from .services import current_plan
                    RAZORPAY_WEBHOOK_SECRET="safe_webhook_secret")
 class RazorpayPhase7Tests(TestCase):
     def setUp(self):
-        self.user = User.objects.create_user("payer", email="payer@example.test", password="x", role=User.Roles.STUDENT)
-        self.other = User.objects.create_user("another", email="another@example.test", password="x", role=User.Roles.STUDENT)
+        self.user = User.objects.create_user("payer", email="payer@example.test", password="x", role=User.Roles.STUDENT, exam_track="jee")
+        self.other = User.objects.create_user("another", email="another@example.test", password="x", role=User.Roles.STUDENT, exam_track="jee")
         self.client.force_login(self.user)
         self.plan = PracticePlan.objects.create(name="Prepaid", slug="prepaid", billing="one_time",
             price_paise=14950, duration_days=30, monthly_pdf_uploads=20, monthly_attempts=50)

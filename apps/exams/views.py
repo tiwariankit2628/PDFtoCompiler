@@ -3,8 +3,9 @@ from decimal import Decimal
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
-from django.db import transaction
-from django.db.models import Count, ProtectedError, Q, Sum
+from django.db import OperationalError, connection, transaction
+from django.db.models import Count, F, ProtectedError, Q, Sum
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
@@ -14,7 +15,43 @@ from apps.core.utils import log_audit
 from apps.questions.models import Question
 from apps.questions.presentation import decorate_staged_question, use_original_image
 from .forms import CategoryForm, ExamForm, ExamRandomQuestionForm
+from apps.core.exam_targets import targets_for_track, track_for_target
 from .models import Category, Exam, ExamQuestion
+
+
+def _lock_public_exam(pk):
+    """Serialize exam mutations with candidate starts before checking attempts."""
+    candidates = Exam.objects.filter(pk=pk, is_private_practice=False, is_classroom_only=False)
+    if connection.vendor == "sqlite":
+        candidates.update(id=F("id"))  # SQLite has no row-level FOR UPDATE.
+    return get_object_or_404(candidates.select_for_update())
+
+
+def _lock_exam_question_selection(exam, ids):
+    """Read fresh target labels under ordered locks shared with bank edits."""
+    allowed = targets_for_track(track_for_target(exam.target_type))
+    questions = Question.objects.select_for_update().filter(
+        pk__in=ids, category=exam.category, is_private_practice=False,
+        is_classroom_snapshot=False, target_type__in=allowed,
+    ).order_by("pk")
+    return {question.pk: question for question in questions}
+
+
+class ExamMutationLockMixin:
+    """Protect attempt checks, publication and builder changes from starts."""
+    def dispatch(self, request, *args, **kwargs):
+        if request.method != "POST":
+            return super().dispatch(request, *args, **kwargs)
+        try:
+            with transaction.atomic():
+                _lock_public_exam(kwargs["pk"])
+                return super().dispatch(request, *args, **kwargs)
+        except OperationalError as exc:
+            if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
+                raise
+            response = HttpResponse("This test is busy. Please retry; existing timers continue.", status=503)
+            response["Retry-After"] = "1"
+            return response
 
 
 # ==============================================================================
@@ -311,6 +348,25 @@ class ExamUpdateView(TeacherRequiredMixin, UpdateView):
         kwargs["user"] = self.request.user
         return kwargs
 
+    def post(self, request, *args, **kwargs):
+        # Validate and save while holding the same exam lock as a candidate
+        # start. A target change cannot race past the attempts check.
+        exam = self.get_object()
+        try:
+            with transaction.atomic():
+                _lock_public_exam(exam.pk)
+                # A bank edit can change an unclassified question while this
+                # form validates the exam target. Lock all attached questions
+                # in a stable order before reading their targets.
+                list(Question.objects.select_for_update().filter(exam_instances__exam_id=exam.pk).order_by("pk"))
+                return super().post(request, *args, **kwargs)
+        except OperationalError as exc:
+            if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
+                raise
+            response = HttpResponse("This test is busy. Please retry your changes.", status=503)
+            response["Retry-After"] = "1"
+            return response
+
     def form_valid(self, form):
         exam = self.get_object()
         if exam.has_attempts and not self.request.user.is_admin_role:
@@ -330,7 +386,7 @@ class ExamUpdateView(TeacherRequiredMixin, UpdateView):
         return redirect("exams:exam_list")
 
 
-class ExamDeleteView(TeacherRequiredMixin, View):
+class ExamDeleteView(TeacherRequiredMixin, ExamMutationLockMixin, View):
     """
     Deletes an examination. Strictly blocked if student candidate attempts exist.
     """
@@ -362,7 +418,7 @@ class ExamDeleteView(TeacherRequiredMixin, View):
         return redirect("exams:exam_list")
 
 
-class ExamDuplicateView(TeacherRequiredMixin, View):
+class ExamDuplicateView(TeacherRequiredMixin, ExamMutationLockMixin, View):
     """
     Duplicates an examination, copying its configuration and all assigned questions
     into a fresh Draft copy ("Copy of ...") without any attached candidate attempts.
@@ -385,7 +441,7 @@ class ExamDuplicateView(TeacherRequiredMixin, View):
                 description=source_exam.description,
                 subject=source_exam.subject,
                 topics=source_exam.topics,
-                target_exam=source_exam.target_exam,
+                target_exam=source_exam.target_exam, target_type=source_exam.target_type,
                 is_free=source_exam.is_free,
                 duration_minutes=source_exam.duration_minutes,
                 total_marks=source_exam.total_marks,
@@ -428,7 +484,7 @@ class ExamDuplicateView(TeacherRequiredMixin, View):
         return redirect("exams:exam_questions", pk=new_exam.pk)
 
 
-class ExamTogglePublishView(TeacherRequiredMixin, View):
+class ExamTogglePublishView(TeacherRequiredMixin, ExamMutationLockMixin, View):
     """
     Validates and toggles examination status between Published and Draft.
     Requires at least 1 question and valid duration before publishing.
@@ -453,7 +509,15 @@ class ExamTogglePublishView(TeacherRequiredMixin, View):
             )
             messages.info(request, f"Examination '{exam.title}' has been moved to Draft.")
         else:
-            # Validate before publishing
+            # Validate before publishing. Old unclassified exams remain stored,
+            # but need a deliberate target before they become available again.
+            allowed = targets_for_track(track_for_target(exam.target_type))
+            if not allowed:
+                messages.error(request, "Choose a JEE or NEET target in the exam settings before publishing.")
+                return redirect("exams:exam_edit", pk=exam.pk)
+            if exam.exam_questions.exclude(question__target_type__in=allowed).exists():
+                messages.error(request, "Review and classify every question for the same exam track before publishing.")
+                return redirect("exams:exam_questions", pk=exam.pk)
             if exam.total_questions_count == 0:
                 messages.error(
                     request,
@@ -546,7 +610,9 @@ class ExamQuestionManageView(TeacherRequiredMixin, DetailView):
         context["exam_questions"] = _review_questions(exam)
 
         assigned_q_ids = exam.exam_questions.values_list("question_id", flat=True)
-        available_qs = Question.objects.filter(category=exam.category, is_private_practice=False, is_classroom_snapshot=False).exclude(id__in=assigned_q_ids)
+        allowed = targets_for_track(track_for_target(exam.target_type))
+        available_qs = Question.objects.filter(category=exam.category, is_private_practice=False,
+            is_classroom_snapshot=False, target_type__in=allowed).exclude(id__in=assigned_q_ids)
 
         if not user.is_admin_role:
             assigned_cats = user.assigned_categories.all()
@@ -581,7 +647,7 @@ class ExamQuestionManageView(TeacherRequiredMixin, DetailView):
         return context
 
 
-class ExamAddQuestionsBulkView(TeacherRequiredMixin, View):
+class ExamAddQuestionsBulkView(TeacherRequiredMixin, ExamMutationLockMixin, View):
     """
     Adds selected questions from the Question Bank into an examination.
     """
@@ -611,23 +677,31 @@ class ExamAddQuestionsBulkView(TeacherRequiredMixin, View):
             current_max_order = (
                 exam.exam_questions.aggregate(Max("order"))["order__max"] or 0
             )
-
-            for q_id in selected_ids:
+            ids = []
+            for value in selected_ids:
                 try:
-                    q = Question.objects.get(pk=int(q_id), category=exam.category, is_private_practice=False, is_classroom_snapshot=False)
-                    if not exam.exam_questions.filter(question=q).exists():
-                        current_max_order += 1
-                        ExamQuestion.objects.create(
-                            exam=exam,
-                            question=q,
-                            order=current_max_order,
-                            section=request.POST.get("section", "General") or "General",
-                            positive_marks=q.positive_marks or exam.default_positive_marks,
-                            negative_marks=q.negative_marks or exam.default_negative_marks,
-                        )
-                        added_count += 1
-                except (ValueError, Question.DoesNotExist):
+                    ids.append(int(value))
+                except (TypeError, ValueError):
                     continue
+            locked = _lock_exam_question_selection(exam, ids)
+            for q_id in ids:
+                q = locked.get(q_id)
+                if q is None:
+                    continue
+                # Match the same creator/category permissions as the chooser.
+                if not user.is_admin_role and q.creator_id != user.pk and not user.assigned_categories.filter(pk=q.category_id).exists():
+                    continue
+                if not exam.exam_questions.filter(question=q).exists():
+                    current_max_order += 1
+                    ExamQuestion.objects.create(
+                        exam=exam,
+                        question=q,
+                        order=current_max_order,
+                        section=request.POST.get("section", "General") or "General",
+                        positive_marks=q.positive_marks or exam.default_positive_marks,
+                        negative_marks=q.negative_marks or exam.default_negative_marks,
+                    )
+                    added_count += 1
 
             exam.recalculate_marks()
 
@@ -641,7 +715,7 @@ class ExamAddQuestionsBulkView(TeacherRequiredMixin, View):
         return redirect("exams:exam_questions", pk=exam.pk)
 
 
-class ExamAddRandomQuestionsView(TeacherRequiredMixin, View):
+class ExamAddRandomQuestionsView(TeacherRequiredMixin, ExamMutationLockMixin, View):
     """
     Selects N questions randomly from the Question Bank matching criteria
     and appends them to the examination.
@@ -675,7 +749,11 @@ class ExamAddRandomQuestionsView(TeacherRequiredMixin, View):
         neg_marks = form.cleaned_data.get("negative_marks", exam.default_negative_marks)
 
         assigned_q_ids = exam.exam_questions.values_list("question_id", flat=True)
-        pool = Question.objects.filter(category=exam.category, is_private_practice=False, is_classroom_snapshot=False).exclude(id__in=assigned_q_ids)
+        pool = Question.objects.filter(category=exam.category, is_private_practice=False, is_classroom_snapshot=False,
+            target_type__in=targets_for_track(track_for_target(exam.target_type))).exclude(id__in=assigned_q_ids)
+        if not user.is_admin_role:
+            assigned = user.assigned_categories.all()
+            pool = pool.filter(Q(creator=user) | Q(category__in=assigned)) if assigned.exists() else pool.filter(creator=user)
 
         if subject:
             pool = pool.filter(subject__icontains=subject)
@@ -689,8 +767,8 @@ class ExamAddRandomQuestionsView(TeacherRequiredMixin, View):
             messages.warning(request, "No matching unassigned questions found in the Question Bank.")
             return redirect("exams:exam_questions", pk=exam.pk)
 
-        sample_size = min(count, available_count)
         pool_ids = list(pool.values_list("id", flat=True))
+        sample_size = min(count, len(pool_ids))
         sampled_ids = random.sample(pool_ids, sample_size)
 
         added = 0
@@ -699,9 +777,14 @@ class ExamAddRandomQuestionsView(TeacherRequiredMixin, View):
             current_max_order = (
                 exam.exam_questions.aggregate(Max("order"))["order__max"] or 0
             )
+            locked = _lock_exam_question_selection(exam, sampled_ids)
             for q_id in sampled_ids:
+                q = locked.get(q_id)
+                if q is None:
+                    continue  # A concurrent reviewer changed its target/category.
+                if not user.is_admin_role and q.creator_id != user.pk and not user.assigned_categories.filter(pk=q.category_id).exists():
+                    continue
                 current_max_order += 1
-                q = Question.objects.get(pk=q_id)
                 ExamQuestion.objects.create(
                     exam=exam,
                     question=q,
@@ -727,7 +810,7 @@ class ExamAddRandomQuestionsView(TeacherRequiredMixin, View):
         return redirect("exams:exam_questions", pk=exam.pk)
 
 
-class ExamRemoveQuestionView(TeacherRequiredMixin, View):
+class ExamRemoveQuestionView(TeacherRequiredMixin, ExamMutationLockMixin, View):
     """
     Removes a single question from an examination.
     """

@@ -22,7 +22,7 @@ class CategorySetupTests(TestCase):
         Category.objects.all().delete()
         self.admin = User.objects.create_superuser("category-admin", "ca@example.test", "x")
         self.teacher = User.objects.create_user("category-teacher", email="ct@example.test", password="x", role="TEACHER")
-        self.student = User.objects.create_user("category-student", email="cs@example.test", password="x", role="STUDENT")
+        self.student = User.objects.create_user("category-student", email="cs@example.test", password="x", role="STUDENT", exam_track="jee")
 
     @staticmethod
     def migrate_data():
@@ -33,7 +33,7 @@ class CategorySetupTests(TestCase):
     def form_data(category="", title="Test with category"):
         return {"title": title, "category": category, "duration_minutes": "60", "total_marks": "100",
                 "passing_percentage": "40", "default_positive_marks": "4", "default_negative_marks": "1",
-                "max_attempts": "1", "status": "draft"}
+                "max_attempts": "1", "status": "draft", "target_type": "jee"}
 
     def test_data_migration_initializes_empty_catalog_once_without_touching_exam_data(self):
         self.migrate_data()
@@ -42,7 +42,7 @@ class CategorySetupTests(TestCase):
         category = Category.objects.get(slug="engineering-medical-entrance")
         self.assertIn("JEE", category.description)
         self.assertIn("NEET", category.description)
-        exam = Exam.objects.create(title="Existing examination", category=category, creator=self.teacher)
+        exam = Exam.objects.create(title="Existing examination", category=category, creator=self.teacher, target_type="jee")
         attempt = ExamAttempt.objects.create(exam=exam, student=self.student, status="submitted", score_obtained=12)
         self.teacher.assigned_categories.add(category)
         before = list(Category.objects.values_list("pk", "name", "slug", "is_active", "updated_at"))
@@ -167,7 +167,7 @@ class CategorySetupTests(TestCase):
         other_inactive = Category.objects.create(name="Other inactive", slug="other-inactive", is_active=False)
         other_unassigned = Category.objects.create(name="Other unassigned", slug="other-unassigned")
         self.teacher.assigned_categories.add(assigned)
-        exam = Exam.objects.create(title="Old exam", category=current, creator=self.teacher)
+        exam = Exam.objects.create(title="Old exam", category=current, creator=self.teacher, target_type="jee")
         self.client.force_login(self.teacher)
         url = reverse("exams:exam_edit", args=[exam.pk])
         page = self.client.get(url)

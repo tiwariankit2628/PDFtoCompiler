@@ -199,7 +199,7 @@ class ClassroomReportingTests(ClassroomBase):
         exam.save(update_fields=["max_attempts"])
         session = self.session_for(exam=exam)
         classroom_attempt = self.take(session, {1: "A"})
-        public_student = User.objects.create_user(username="public_candidate", email="public@test.com", role=User.Roles.STUDENT)
+        public_student = User.objects.create_user(username="public_candidate", email="public@test.com", role=User.Roles.STUDENT, exam_track="jee")
         ordinary = ExamAttempt.objects.create(exam=exam, student=public_student, status=ExamAttempt.AttemptStatus.SUBMITTED,
                                                score_obtained=2, total_marks=4, percentage=50)
         ordinary.recalculate_ranks()

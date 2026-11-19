@@ -14,6 +14,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views import View
 
 from apps.exams.models import Exam, ExamQuestion
+from apps.core.exam_targets import ExamTarget, targets_for_track
 from apps.payments.services import FeatureUnavailable, QuotaExceeded, consume, lock_practice_user, require_feature
 from apps.core.utils import log_audit
 from .forms import BootstrapFormMixin
@@ -29,7 +30,9 @@ from .practice_views import PrivateStudentMixin, _open_private_pdf, _system_cate
 
 
 def bank_items(user):
-    return Question.objects.filter(creator=user, is_private_practice=True, is_bank_archived=False)
+    allowed = targets_for_track(user.exam_track)
+    return Question.objects.filter(Q(target_type__in=allowed) | Q(target_type=""),
+                                   creator=user, is_private_practice=True, is_bank_archived=False)
 
 
 def _feature_or_redirect(request):
@@ -42,6 +45,8 @@ def _feature_or_redirect(request):
 
 
 class BankQuestionForm(BootstrapFormMixin, forms.Form):
+    target_type = forms.ChoiceField(choices=[("", "Select an exam")] + list(ExamTarget.choices),
+        label="Target exam", help_text="Classify this question after checking its original paper.")
     question_type = forms.ChoiceField(required=False, choices=Question.QuestionType.choices,
         label="Question type (check against the original)")
     question_text = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 4}))
@@ -95,12 +100,14 @@ class BankQuestionForm(BootstrapFormMixin, forms.Form):
         self.crop_only_keys = {o.option_key for o in options if has_crop and not o.option_text.strip()}
         if not args and "data" not in kwargs:
             kwargs["initial"] = {
-                **{name: getattr(question, name) for name in ("question_type", "question_text", "subject", "topic", "chapter", "difficulty", "language", "positive_marks", "negative_marks", "explanation", "multi_scoring_mode", "partial_credit_per_choice", "numeric_tolerance")},
+                **{name: getattr(question, name) for name in ("target_type", "question_type", "question_text", "subject", "topic", "chapter", "difficulty", "language", "positive_marks", "negative_marks", "explanation", "multi_scoring_mode", "partial_credit_per_choice", "numeric_tolerance")},
                 "correct_option": self.previous_key if question.question_type == Question.QuestionType.MCQ_SINGLE else "",
                 "typed_key": self.previous_key if question.question_type != Question.QuestionType.MCQ_SINGLE else "",
                 **{f"option_{o.option_key}": o.option_text for o in options if o.option_key in "ABCDE"},
             }
         super().__init__(*args, **kwargs)
+        allowed = targets_for_track(question.creator.exam_track)
+        self.fields["target_type"].choices = [("", "Select an exam")] + [(value, label) for value, label in ExamTarget.choices if value in allowed]
         add_tables_editor(self, question)
 
     def clean(self):
@@ -166,7 +173,7 @@ def clone_for_edit(question):
 def save_bank_form(form, question):
     data = form.cleaned_data
     question = clone_for_edit(question)
-    for field in ("question_type", "question_text", "subject", "topic", "chapter", "difficulty", "language", "positive_marks", "negative_marks", "explanation", "multi_scoring_mode", "partial_credit_per_choice", "numeric_tolerance"):
+    for field in ("target_type", "question_type", "question_text", "subject", "topic", "chapter", "difficulty", "language", "positive_marks", "negative_marks", "explanation", "multi_scoring_mode", "partial_credit_per_choice", "numeric_tolerance"):
         setattr(question, field, data[field])
     question.tables = data["tables_data"]
     existing = {o.option_key: o for o in question.options.all()}
@@ -450,6 +457,9 @@ class BankTestCreateView(PrivateStudentMixin, View):
                     raise Http404()
                 by_id = {q.pk: q for q in questions}
                 questions = [by_id[pk] for pk in ids]
+                if not targets_for_track(request.user.exam_track) or any(not q.target_type for q in questions):
+                    messages.error(request, "Choose your exam track and classify every selected question before creating a test.")
+                    return redirect("questions:practice_bank")
                 for question in questions:
                     if question.question_type not in (Question.QuestionType.MCQ_SINGLE, Question.QuestionType.MCQ_MULTIPLE, Question.QuestionType.NUMERICAL):
                         messages.error(request, "A selected question type is unsupported. Review or exclude it.")
@@ -473,6 +483,7 @@ class BankTestCreateView(PrivateStudentMixin, View):
                 consume(request.user, "test_creations")
                 exam = Exam.objects.create(is_private_practice=True, slug=f"practice-{uuid.uuid4().hex}",
                     title=form.cleaned_data["title"], category=_system_category(), creator=request.user,
+                    target_type=request.user.exam_track,
                     subject=questions[0].subject if all(q.subject == questions[0].subject for q in questions) else "Mixed subjects",
                     status=Exam.ExamStatus.PUBLISHED, is_free=True, max_attempts=0,
                     duration_minutes=form.cleaned_data["duration_minutes"], total_marks=positive,

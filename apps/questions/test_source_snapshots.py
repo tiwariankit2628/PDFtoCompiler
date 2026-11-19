@@ -332,15 +332,15 @@ class SnapshotPrivateWorkflowTests(TestCase):
         self.settings_override = override_settings(MEDIA_ROOT=root.name + "/media", PRIVATE_PRACTICE_ROOT=root.name + "/private",
                                            STATIC_ROOT=root.name + "/static")
         self.settings_override.enable(); self.addCleanup(self.settings_override.disable)
-        self.owner = User.objects.create_user(username="snap-owner", email="snap-owner@example.test", password="x", role="STUDENT")
-        self.other = User.objects.create_user(username="snap-other", email="snap-other@example.test", password="x", role="STUDENT")
+        self.owner = User.objects.create_user(username="snap-owner", email="snap-owner@example.test", password="x", role="STUDENT", exam_track="jee")
+        self.other = User.objects.create_user(username="snap-other", email="snap-other@example.test", password="x", role="STUDENT", exam_track="jee")
         self.category = Category.objects.create(name="Snapshot Physics", slug="snapshot-physics")
 
     def test_all_extraction_notes_remain_visible_beyond_short_flag_summary(self):
         doc = math_pdf(); data = doc.write(); doc.close()
         paper = QuestionPaperUpload.objects.create(title="Warnings", category=self.category,
             uploaded_by=self.owner, is_student_private=True, subject="Physics",
-            private_pdf_file=SimpleUploadedFile("warnings.pdf", data, content_type="application/pdf"))
+            private_pdf_file=SimpleUploadedFile("warnings.pdf", data, content_type="application/pdf"), target_type="jee")
         self.assertEqual(PDFQuestionExtractor(paper).extract(), 2)
         item = paper.extracted_questions.get(question_number=1)
         message = "Printed instructions may allow multiple correct choices; review or exclude."
@@ -363,7 +363,7 @@ class SnapshotPrivateWorkflowTests(TestCase):
         data = doc.write(); doc.close()
         paper = QuestionPaperUpload.objects.create(title="Visual choices", category=self.category,
             uploaded_by=self.owner, is_student_private=True, subject="Physics",
-            private_pdf_file=SimpleUploadedFile("visual-choices.pdf", data, content_type="application/pdf"))
+            private_pdf_file=SimpleUploadedFile("visual-choices.pdf", data, content_type="application/pdf"), target_type="jee")
         self.assertEqual(PDFQuestionExtractor(paper).extract(), 2)
         item = paper.extracted_questions.get(question_number=1)
         self.assertEqual(item.options, [])
@@ -420,7 +420,7 @@ class SnapshotPrivateWorkflowTests(TestCase):
         # has its own tests and intentionally keeps printed choice order fixed.
         paper = QuestionPaperUpload.objects.create(title="Parallel paper", category=self.category,
             uploaded_by=self.owner, is_student_private=True, subject="Physics", image_first=False,
-            private_pdf_file=SimpleUploadedFile("parallel.pdf", data, content_type="application/pdf"))
+            private_pdf_file=SimpleUploadedFile("parallel.pdf", data, content_type="application/pdf"), target_type="jee")
         self.assertEqual(PDFQuestionExtractor(paper).extract(), 3)
         first = paper.extracted_questions.get(question_number=1)
         source = first.figures.get(source="parallel-source")
@@ -472,7 +472,7 @@ class SnapshotPrivateWorkflowTests(TestCase):
         doc = math_pdf(); data = doc.write(); doc.close()
         paper = QuestionPaperUpload.objects.create(title="Visual source", category=self.category,
             uploaded_by=self.owner, is_student_private=True, subject="Physics",
-            private_pdf_file=SimpleUploadedFile("visual.pdf", data, content_type="application/pdf"))
+            private_pdf_file=SimpleUploadedFile("visual.pdf", data, content_type="application/pdf"), target_type="jee")
         self.assertEqual(PDFQuestionExtractor(paper).extract(), 2)
         item = paper.extracted_questions.get(question_number=1)
         self.assertTrue(item.is_flagged)

@@ -6,6 +6,7 @@ from django.views.generic import TemplateView, View
 
 from apps.accounts.models import User
 from apps.core.models import AuditLog
+from apps.core.exam_targets import student_exam_queryset
 from apps.core.permissions import (
     ActiveUserRequiredMixin,
     AdminRequiredMixin,
@@ -229,11 +230,10 @@ class StudentDashboardView(StudentRequiredMixin, TemplateView):
         )
 
         # Available exams with free vs premium labels
-        context["available_exams"] = (
-            Exam.objects.filter(status=Exam.ExamStatus.PUBLISHED, is_private_practice=False, is_classroom_only=False)
-            .select_related("category")
-            .order_by("-created_at")[:6]
+        available = student_exam_queryset(
+            Exam.objects.filter(status=Exam.ExamStatus.PUBLISHED, is_private_practice=False, is_classroom_only=False), student
         )
+        context["available_exams"] = available.select_related("category").order_by("-created_at")[:6]
 
         # Private practice is a separate workspace, not part of institutional metrics.
         from apps.payments.services import usage_summary
@@ -245,6 +245,6 @@ class StudentDashboardView(StudentRequiredMixin, TemplateView):
         context["practice_count"] = ExamAttempt.objects.filter(student=student, exam__creator=student, exam__is_private_practice=True).count()
 
         # Dynamic categories for quick navigation
-        context["categories"] = Category.objects.filter(is_active=True).order_by("display_order")
+        context["categories"] = Category.objects.filter(is_active=True, pk__in=available.values("category_id")).order_by("display_order")
 
         return context
