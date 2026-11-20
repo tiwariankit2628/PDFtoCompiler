@@ -59,7 +59,7 @@ Save the file and, in the same project folder, run the read-only diagnostic:
 .\.venv\Scripts\python.exe manage.py check_google_signin
 ```
 
-The command lists settings that need attention and, when safe, the callback URL to register in Google Cloud. It does not print the client ID or secret, contact Google, check the database/migrations, or modify files or accounts. A nonzero exit status means the local settings are not ready. Existing process environment variables override values in `.env`; check the server's service environment if a change appears ineffective. Restart the server, then open **exactly** `http://127.0.0.1:8000/` in the browser on the same computer.
+The command lists settings that need attention and, when safe, the callback URL to register in Google Cloud. It does not print the client ID or secret, contact Google, check the database/migrations, or write settings or account data. A nonzero exit status means the local settings are not ready. Existing process environment variables override values in `.env`; check the server's service environment if a change appears ineffective. Restart the server, then open **exactly** `http://127.0.0.1:8000/` in the browser on the same computer.
 
 Incomplete configuration leaves the button disabled and password sign-in available. An enabled button or a successful diagnostic only means the local settings have the expected format—it does **not** prove that Google accepted the client, callback, network, or consent configuration. Apply the migration described in step 1 before starting the Google flow, and perform the controlled real-provider test below.
 
