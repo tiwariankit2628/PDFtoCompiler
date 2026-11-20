@@ -51,6 +51,10 @@
                             </a>
                         </li>
 
+                        {% if user.role == 'SUPER_ADMIN' and user.founder_access.is_enabled %}
+                        <li class="nav-item"><a class="nav-link text-dark" href="{% url 'founder:overview' %}"><i class="bi bi-shield-lock me-2" aria-hidden="true"></i> Founder workspace</a></li>
+                        {% endif %}
+
                         {% if user.is_super_admin %}
                         <li class="nav-item">
                             <a class="nav-link text-dark {% if 'admin_list' in request.resolver_match.url_name or 'admin_create' in request.resolver_match.url_name or 'admin_edit' in request.resolver_match.url_name %}active bg-primary text-white fw-semibold{% endif %}" href="{% url 'accounts:admin_list' %}">

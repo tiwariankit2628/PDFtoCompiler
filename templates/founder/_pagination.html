@@ -1,0 +1,5 @@
+{% if page_obj.paginator.num_pages > 1 %}<nav class="pagination" aria-label="{{ label|default:'Table' }} pages">
+  {% if page_obj.has_previous %}<a href="?{% if account and section == 'payments' %}account={{ account.pk }}&amp;{% endif %}{% if action %}action={{ action|urlencode }}&amp;{% endif %}{% if role %}role={{ role|urlencode }}&amp;{% endif %}{{ param }}={{ page_obj.previous_page_number }}#{{ param }}">← Previous</a>{% endif %}
+  <span>Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+  {% if page_obj.has_next %}<a href="?{% if account and section == 'payments' %}account={{ account.pk }}&amp;{% endif %}{% if action %}action={{ action|urlencode }}&amp;{% endif %}{% if role %}role={{ role|urlencode }}&amp;{% endif %}{{ param }}={{ page_obj.next_page_number }}#{{ param }}">Next →</a>{% endif %}
+</nav>{% endif %}

@@ -6,3 +6,6 @@ class CoreConfig(AppConfig):
     name = "apps.core"
     verbose_name = "Core & Public Portal"
 
+    def ready(self):
+        from . import signals  # noqa: F401 -- connects the successful-sign-in receiver
+

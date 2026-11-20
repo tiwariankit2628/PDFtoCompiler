@@ -9,6 +9,7 @@ admin.site.index_title = "Commercial CBT Platform Management"
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("founder/", include("apps.core.founder_urls", namespace="founder")),
     path("", include("apps.core.urls", namespace="core")),
     path("auth/", include("apps.accounts.urls", namespace="accounts")),
     path("exams/", include("apps.exams.urls", namespace="exams")),

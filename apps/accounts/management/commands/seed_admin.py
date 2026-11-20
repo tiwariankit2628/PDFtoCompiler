@@ -1,4 +1,5 @@
-from django.core.management.base import BaseCommand
+from django.conf import settings
+from django.core.management.base import BaseCommand, CommandError
 from apps.accounts.models import User
 
 
@@ -6,6 +7,8 @@ class Command(BaseCommand):
     help = "Seeds initial demo accounts (Super Admin, Teacher, Student) for local testing."
 
     def handle(self, *args, **options):
+        if not settings.DEBUG:
+            raise CommandError("Demo accounts use public passwords and cannot be seeded with DEBUG=False. No accounts were changed.")
         # 1. Super Admin
         admin_user, created = User.objects.get_or_create(
             username="admin",

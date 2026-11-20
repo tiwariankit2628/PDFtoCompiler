@@ -1,0 +1,16 @@
+{% extends 'founder/base.html' %}{% load humanize %}
+{% block title %}People{% endblock %}{% block breadcrumb %}People{% endblock %}
+{% block content %}
+<div class="page-intro"><div><p class="eyebrow">YOUR COMMUNITY</p><h1>People, not just numbers<span class="heading-period">.</span></h1><p>Find an account and review the operational details needed to help. Opening the directory, searching, and viewing an account are audited.</p></div></div>
+<div class="directory-tools">
+  <section class="surface tool-card"><h2>Find a person</h2><p>Search by username, name, email, or account ID. Search terms are not added to the URL or audit log.</p><form method="post" class="form-row">{% csrf_token %}<div class="field"><label for="people-query">Account lookup</label><input id="people-query" name="q" type="search" maxlength="120" minlength="2" autocomplete="off" placeholder="Name, email, username or ID" required></div><button class="button button-dark" type="submit">Search <i class="bi bi-search" aria-hidden="true"></i></button></form></section>
+  <section class="surface tool-card"><h2>Browse by role</h2><p>Filter registered accounts. Enabled is an account setting, not a live status.</p><form method="get" class="form-row"><div class="field"><label for="people-role">Role</label><select id="people-role" name="role"><option value="">All roles</option>{% for value,label in roles %}<option value="{{ value }}" {% if role == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div><button class="button button-light" type="submit">Filter</button></form></section>
+</div>
+{% if search_error %}<div class="notice notice-warn" role="alert">{{ search_error }}</div>{% endif %}
+<section class="surface table-surface" id="page">
+  <div class="table-heading"><div><h2>{% if search_mode %}Search results{% else %}Account directory{% endif %}</h2><p>{% if search_mode %}Showing up to 50 matches. Refine your search if needed.{% else %}{{ users.paginator.count|intcomma }} account{{ users.paginator.count|pluralize }} · newest first{% endif %}</p></div>{% if search_mode %}<a href="{% url 'founder:accounts' %}" class="text-link">Clear search <i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>{% endif %}</div>
+  {% if search_mode %}{% include 'founder/_account_rows.html' with rows=results %}{% else %}{% include 'founder/_account_rows.html' with rows=users %}{% include 'founder/_pagination.html' with page_obj=users param='page' label='Account directory' %}{% endif %}
+  {% if more_results %}<p class="empty-table">More than 50 accounts matched. Please use a more specific search.</p>{% endif %}
+</section>
+<div class="data-reminder"><i class="bi bi-shield-check" aria-hidden="true"></i><p><strong>Privacy first.</strong> Support metadata is visible after verification; private PDFs, questions, answers, passwords, OTPs and payment card details are not shown.</p></div>
+{% endblock %}

@@ -202,9 +202,13 @@ The platform enforces strict role-based access control with four distinct roles:
 
 Password sign-in and registration remain available. Google Sign-In is disabled until an operator privately configures a Google Cloud OAuth web client and the exact callback; see [Google Sign-In setup and safety](docs/google-sign-in.md). New Google users choose student/teacher and students choose JEE/NEET. Existing users connect Google **after signing in to their existing account**, so records and credits are not silently merged. A new Google-only user can add a password from their profile. Google sign-in is separate from Gmail delivery and has only been tested with synthetic provider responses here; real credentials and an end-to-end test are still required.
 
+### Founder workspace
+
+The read-only founder workspace is separately provisioned for a deliberately selected existing super-administrator and requires password plus authenticator verification. Existing super-administrators are **not** automatically founders. Sign-in activity is recorded only from the new tracking start date. The implemented payment gateways remain test-only; historical payment rows have no per-record mode flag. For enrollment, privacy boundaries, recovery, backups and production safeguards, see [Founder workspace setup and security](docs/founder-dashboard.md).
+
 ### Optional Local Demo Accounts
 
-`python manage.py seed_admin` creates these accounts if they do not exist. The passwords are public and predictable: **use them only in an isolated local development database, never in production**:
+`python manage.py seed_admin` creates these accounts if they do not exist and refuses to run with `DEBUG=False`. The passwords are public and predictable: **use them only in an isolated local development database, never in production**. The guard does not remove existing demo accounts:
 
 | Role | Username | Password | Email |
 | :--- | :--- | :--- | :--- |

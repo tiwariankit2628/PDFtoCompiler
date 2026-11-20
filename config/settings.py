@@ -77,6 +77,7 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "apps.core.founder_security.FounderHeadersMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -297,6 +298,11 @@ EMAIL_VERIFICATION_RESEND_SECONDS = 60
 GOOGLE_SIGN_IN_ENABLED = os.environ.get("GOOGLE_SIGN_IN_ENABLED", "False").lower() in ("true", "1", "yes")
 GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
 GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
+
+# Independent Fernet key, not Django's SECRET_KEY. Empty/invalid means the
+# founder area is unavailable; there is deliberately no default or auto-grant.
+# Keep a different value in every environment and back it up securely.
+FOUNDER_TOTP_ENCRYPTION_KEY = os.environ.get("FOUNDER_TOTP_ENCRYPTION_KEY", "").strip()
 
 # ------------------------------------------------------------------------------
 # SECURITY ENHANCEMENTS

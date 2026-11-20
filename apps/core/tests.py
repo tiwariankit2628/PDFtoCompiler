@@ -86,7 +86,10 @@ class CoreViewTests(TestCase):
         self.client.login(username="super_user", password="Password123!")
         resp = self.client.get(reverse("core:super_admin_dashboard"))
         self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "Platform Governance &amp; Analytics")
+        # An ordinary super-administrator retains the operations dashboard;
+        # founder access is a separate explicit enrollment and step-up.
+        self.assertContains(resp, "Administrator Operations Portal")
+        self.assertNotContains(resp, "FOUNDER SPACE")
         self.client.logout()
 
         # Standard admin is denied (403 PermissionDenied)

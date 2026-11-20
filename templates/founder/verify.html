@@ -1,0 +1,40 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow, noarchive"><meta name="theme-color" content="#1b1918">
+  <title>Verify founder access | {{ PLATFORM_NAME }}</title>
+  <link rel="stylesheet" href="{% static 'vendor/bootstrap-icons/bootstrap-icons.min.css' %}">
+  <link rel="stylesheet" href="{% static 'css/founder.css' %}">
+</head>
+<body class="founder-verify-body">
+<main class="verify-layout">
+  <section class="verify-intro">
+    <a class="founder-brand" href="{% url 'core:home' %}"><span class="founder-brand-mark"><i class="bi bi-asterisk" aria-hidden="true"></i></span><span><strong>{{ PLATFORM_NAME }}</strong><small>FOUNDER SPACE</small></span></a>
+    <div class="verify-copy"><span class="eyebrow-light"><i class="bi bi-shield-lock" aria-hidden="true"></i> PRIVATE BY DESIGN</span><h1>A little extra<br><em>peace of mind.</em></h1><p>Your founder workspace contains sensitive operational information. Verify it’s you before continuing.</p></div>
+    <div class="verify-intro-foot">ONE WORKSPACE <span>✳</span> A CLEARER PICTURE</div>
+  </section>
+  <section class="verify-panel" aria-labelledby="verify-title">
+    <div class="verify-card">
+      <div class="verify-icon"><i class="bi bi-shield-lock" aria-hidden="true"></i></div>
+      <p class="eyebrow">FOUNDER ACCESS · STEP 2 OF 2</p>
+      <h2 id="verify-title">Verify it’s you.</h2>
+      <p class="muted">Signed in as <strong>{{ user.username }}</strong>. Enter your account password and a fresh code from your authenticator app.</p>
+      {% if error %}<div class="notice notice-warn" role="alert">{{ error }}{% if retry %} Verification is temporarily locked. Please wait before trying again.{% endif %}</div>{% endif %}
+      {% if locked_until %}<div class="notice notice-warn" role="status">Verification is temporarily locked until {{ locked_until|date:'d M Y, H:i' }} IST.</div>{% endif %}
+      <form method="post" class="verify-form" autocomplete="off">{% csrf_token %}
+        <label for="founder-password">Account password</label>
+        <input id="founder-password" name="password" type="password" autocomplete="current-password" required maxlength="1024" autofocus>
+        <label for="founder-code">Authenticator code</label>
+        <input id="founder-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required placeholder="6-digit code">
+        <button class="button button-dark button-wide" type="submit">Unlock workspace <i class="bi bi-arrow-up-right" aria-hidden="true"></i></button>
+      </form>
+      <p class="verify-footnote"><i class="bi bi-clock-history" aria-hidden="true"></i> Verification expires after 15 minutes. Five unsuccessful attempts temporarily lock verification.</p>
+      <div class="verify-links"><a href="{% url 'core:admin_dashboard' %}">Back to operations</a><form method="post" action="{% url 'accounts:logout' %}">{% csrf_token %}<button type="submit">Sign out</button></form></div>
+    </div>
+    <p class="verify-disclaimer">Never share your password, setup secret or authenticator codes. This page does not request card details.</p>
+  </section>
+</main>
+</body>
+</html>

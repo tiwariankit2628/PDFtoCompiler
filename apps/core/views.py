@@ -60,50 +60,20 @@ class DashboardRouterView(ActiveUserRequiredMixin, View):
 # 1. SUPER ADMIN DASHBOARD
 # ==============================================================================
 
-class SuperAdminDashboardView(SuperAdminRequiredMixin, TemplateView):
+class SuperAdminDashboardView(SuperAdminRequiredMixin, View):
+    """Replace the old overview without promoting existing administrators.
+
+    Explicitly enrolled founders are sent to their separately protected page;
+    other super-administrators retain the ordinary operations dashboard and
+    all of their existing role permissions.
     """
-    Executive command center for Super Administrators with platform-wide
-    analytics, user growth, exam attempts, and audit logs.
-    """
 
-    template_name = "core/dashboard_super_admin.html"
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-
-        # Core platform counters
-        context["total_students"] = User.objects.filter(role=User.Roles.STUDENT).count()
-        context["total_active_students"] = User.objects.filter(
-            role=User.Roles.STUDENT, is_active=True
-        ).count()
-        context["total_teachers"] = User.objects.filter(role=User.Roles.TEACHER).count()
-        context["total_active_teachers"] = User.objects.filter(
-            role=User.Roles.TEACHER, is_active=True
-        ).count()
-        context["total_admins"] = User.objects.filter(role=User.Roles.ADMIN).count()
-        context["total_super_admins"] = User.objects.filter(role=User.Roles.SUPER_ADMIN).count()
-        context["total_categories"] = Category.objects.count()
-        context["total_active_categories"] = Category.objects.filter(is_active=True).count()
-        context["total_exams"] = Exam.objects.filter(is_private_practice=False, is_classroom_only=False).count()
-        context["total_published_exams"] = Exam.objects.filter(
-            status=Exam.ExamStatus.PUBLISHED, is_private_practice=False, is_classroom_only=False
-        ).count()
-        context["total_attempts"] = ExamAttempt.objects.filter(exam__is_private_practice=False, classroom_session__isnull=True).count()
-
-        # Recent activities and registrations
-        context["recent_registrations"] = User.objects.order_by("-date_joined")[:6]
-        context["recent_activities"] = AuditLog.objects.select_related("user").order_by(
-            "-created_at"
-        )[:8]
-
-        # Category distribution
-        context["category_breakdown"] = (
-            Category.objects.annotate(exam_count=Count("exams", filter=Q(exams__is_private_practice=False, exams__is_classroom_only=False)))
-            .filter(is_active=True)
-            .order_by("-exam_count")[:6]
-        )
-
-        return context
+    def get(self, request):
+        from .models import FounderAccess
+        if (request.user.role == User.Roles.SUPER_ADMIN
+                and FounderAccess.objects.filter(user=request.user, is_enabled=True).exists()):
+            return redirect("founder:overview")
+        return AdminDashboardView.as_view()(request)
 
 
 # ==============================================================================

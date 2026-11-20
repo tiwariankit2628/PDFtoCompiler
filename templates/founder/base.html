@@ -1,0 +1,48 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <meta name="theme-color" content="#1b1918">
+  <title>{% block title %}Founder workspace{% endblock %} | {{ PLATFORM_NAME }}</title>
+  <link rel="stylesheet" href="{% static 'vendor/bootstrap-icons/bootstrap-icons.min.css' %}">
+  <link rel="stylesheet" href="{% static 'css/founder.css' %}">
+</head>
+<body class="founder-body">
+<a class="founder-skip" href="#founder-content">Skip to content</a>
+<div class="founder-shell">
+  <aside class="founder-sidebar" aria-label="Founder navigation">
+    <a class="founder-brand" href="{% url 'founder:overview' %}">
+      <span class="founder-brand-mark"><i class="bi bi-asterisk" aria-hidden="true"></i></span>
+      <span><strong>{{ PLATFORM_NAME }}</strong><small>FOUNDER SPACE</small></span>
+    </a>
+    <div class="sidebar-caption">WORKSPACE <span>01</span></div>
+    <nav class="founder-nav" aria-label="Founder sections">
+      <a href="{% url 'founder:overview' %}" class="{% if section == 'overview' %}is-active{% endif %}" {% if section == 'overview' %}aria-current="page"{% endif %}><i class="bi bi-grid-1x2" aria-hidden="true"></i><span>Overview</span><i class="bi bi-arrow-up-right nav-arrow" aria-hidden="true"></i></a>
+      <a href="{% url 'founder:accounts' %}" class="{% if section == 'accounts' %}is-active{% endif %}" {% if section == 'accounts' %}aria-current="page"{% endif %}><i class="bi bi-people" aria-hidden="true"></i><span>People</span><i class="bi bi-arrow-up-right nav-arrow" aria-hidden="true"></i></a>
+      <a href="{% url 'founder:series' %}" class="{% if section == 'series' %}is-active{% endif %}" {% if section == 'series' %}aria-current="page"{% endif %}><i class="bi bi-collection" aria-hidden="true"></i><span>Test series</span><i class="bi bi-arrow-up-right nav-arrow" aria-hidden="true"></i></a>
+      <a href="{% url 'founder:payments' %}" class="{% if section == 'payments' %}is-active{% endif %}" {% if section == 'payments' %}aria-current="page"{% endif %}><i class="bi bi-wallet2" aria-hidden="true"></i><span>Payments</span><i class="bi bi-arrow-up-right nav-arrow" aria-hidden="true"></i></a>
+      <a href="{% url 'founder:activity' %}" class="{% if section == 'activity' %}is-active{% endif %}" {% if section == 'activity' %}aria-current="page"{% endif %}><i class="bi bi-activity" aria-hidden="true"></i><span>Activity &amp; audit</span><i class="bi bi-arrow-up-right nav-arrow" aria-hidden="true"></i></a>
+    </nav>
+    <div class="sidebar-bottom">
+      <div class="sidebar-security"><span class="security-orb"><i class="bi bi-shield-lock" aria-hidden="true"></i></span><div><strong>Private workspace</strong><small>Read-only &amp; audited</small></div></div>
+      <a class="sidebar-back" href="{% url 'core:admin_dashboard' %}"><i class="bi bi-arrow-left" aria-hidden="true"></i> Operations dashboard</a>
+    </div>
+  </aside>
+  <div class="founder-main">
+    <header class="founder-topbar">
+      <div><span class="topbar-breadcrumb">FOUNDER SPACE</span><span class="topbar-slash"> / </span><strong>{% block breadcrumb %}Overview{% endblock %}</strong></div>
+      <div class="topbar-actions"><span class="verified-pill"><span></span> VERIFIED SESSION</span><span class="topbar-date">{{ now|date:'d M Y' }} · IST</span>
+        <form method="post" action="{% url 'founder:lock' %}">{% csrf_token %}<button class="lock-button" type="submit" title="Lock founder workspace"><i class="bi bi-lock" aria-hidden="true"></i><span>Lock</span></button></form>
+      </div>
+    </header>
+    <main id="founder-content" class="founder-content" tabindex="-1">
+      {% block content %}{% endblock %}
+      <footer class="founder-footer"><span>PRIVATE BY DESIGN <b>✳</b> {{ PLATFORM_NAME }}</span><span>Times shown in Asia/Kolkata · Data from this environment</span></footer>
+    </main>
+  </div>
+</div>
+</body>
+</html>
