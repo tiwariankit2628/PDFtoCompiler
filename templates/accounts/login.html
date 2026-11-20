@@ -17,6 +17,8 @@
             <span class="eyebrow">WELCOME BACK</span>
             <h3 class="fw-bold mt-2 mb-1">Sign in to your space.</h3>
             <p class="text-muted small mb-4">Your next step is right where you left it.</p>
+            {% include 'accounts/_google_signin.html' with google_mode='signin' %}
+            <div class="google-signin-divider"><span>or use your password</span></div>
             {% if form.non_field_errors %}<div class="alert alert-danger py-2 small" role="alert">{% for error in form.non_field_errors %}<div><i class="bi bi-exclamation-circle me-1" aria-hidden="true"></i> {{ error }}</div>{% endfor %}</div>{% endif %}
             <form method="post" action="{% url 'accounts:login' %}{% if request.GET.next %}?next={{ request.GET.next|urlencode }}{% endif %}" novalidate>
                 {% csrf_token %}

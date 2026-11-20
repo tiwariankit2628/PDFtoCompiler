@@ -9,6 +9,7 @@ class EmailVerificationMiddleware:
     # and its assets must remain usable even after an email address changes.
     ALLOWED = {
         "accounts:verification_pending", "accounts:verification_resend", "accounts:verify_email",
+        "accounts:google_start", "accounts:google_callback", "accounts:google_signup",
         "accounts:logout", "accounts:profile",
         "exams:exam_session", "exams:exam_save_answer", "exams:exam_sync_status",
         "exams:exam_log_event", "exams:exam_submit", "exams:exam_completed",

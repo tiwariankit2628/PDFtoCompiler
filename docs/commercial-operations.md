@@ -27,6 +27,8 @@ New classroom sessions and series show the student's score and their own answers
 
 ## Verification email (console locally, Gmail to explore)
 
+[Optional Google Sign-In](google-sign-in.md) is a separate login method, not an email-sending service. It cannot establish that SMTP delivery works and does not replace mail verification for password registrations or Google accounts using non-Google-hosted addresses.
+
 `PUBLIC_BASE_URL` must be the site's exact public origin, without a path. A deployed site with `DEBUG=False` requires HTTPS. It is explicitly configured, never derived from the incoming Host header. `ALLOWED_HOSTS` and exact `CSRF_TRUSTED_ORIGINS` must match the deployment. Set `TRUST_PROXY_HTTPS=True` only when a trusted reverse proxy strips untrusted forwarding headers and supplies the correct HTTPS scheme.
 
 For local development, `.env.example` uses the console mail backend and `PUBLIC_BASE_URL=http://127.0.0.1:8000`. Register and open the signed link printed on the server console. **This does not send email.** Links expire after 24 hours, require an explicit CSRF-protected confirmation POST, and become invalid after use, resend or address change. A resend is throttled per account. Existing active attempts and their expiry remain usable after an address changes while the new address is unverified. New starts, PDF uploads, classroom activations, pack checkouts, and public test/question creation and publication recheck the locked account's verification status. Admin account edits and verification resends use the same lock, so stale form state does not restore an old verification token. These are application safeguards, not a substitute for a security review.

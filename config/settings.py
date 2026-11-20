@@ -101,6 +101,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "apps.core.context_processors.platform_context",
+                "apps.accounts.context_processors.google_sign_in_context",
             ],
         },
     },
@@ -289,6 +290,13 @@ EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "15"))
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
 EMAIL_VERIFICATION_MAX_AGE = 24 * 60 * 60
 EMAIL_VERIFICATION_RESEND_SECONDS = 60
+
+# Google Sign-In is separate from Gmail sending. Enable only after creating a
+# Google OAuth web client and privately configuring its credentials and the
+# exact PUBLIC_BASE_URL. A disabled/incomplete configuration never authenticates.
+GOOGLE_SIGN_IN_ENABLED = os.environ.get("GOOGLE_SIGN_IN_ENABLED", "False").lower() in ("true", "1", "yes")
+GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
 
 # ------------------------------------------------------------------------------
 # SECURITY ENHANCEMENTS

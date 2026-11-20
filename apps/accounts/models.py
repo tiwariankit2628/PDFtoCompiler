@@ -113,3 +113,21 @@ class User(AbstractUser):
         if self.is_superuser and self.role != self.Roles.SUPER_ADMIN:
             self.role = self.Roles.SUPER_ADMIN
         super().save(*args, **kwargs)
+
+
+class GoogleIdentity(models.Model):
+    """One explicitly connected Google subject per site account.
+
+    Google's stable ``sub`` is the identifier, not the changeable email. No
+    provider access token, refresh token, client secret or password is stored.
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="google_identity")
+    subject = models.CharField(max_length=255, unique=True)
+    linked_at = models.DateTimeField(auto_now_add=True)
+
+
+class GoogleOAuthState(models.Model):
+    """Short-lived, atomically consumed anti-replay marker for one OAuth flow."""
+    digest = models.CharField(max_length=64, primary_key=True)
+    expires_at = models.DateTimeField(db_index=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)

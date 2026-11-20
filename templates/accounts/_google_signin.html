@@ -1,0 +1,12 @@
+{% load static %}
+{% if GOOGLE_SIGN_IN_READY %}
+<form method="post" action="{% url 'accounts:google_start' %}" class="google-signin-form">
+    {% csrf_token %}
+    <input type="hidden" name="mode" value="{{ google_mode|default:'signin' }}">
+    {% if google_mode != 'link' and request.GET.next %}<input type="hidden" name="next" value="{{ request.GET.next }}">{% endif %}
+    <button type="submit" class="google-signin-button"><img src="{% static 'vendor/google-signin/google-g-light.png' %}" width="20" height="20" alt=""><span>Continue with Google</span></button>
+</form>
+{% else %}
+<button type="button" class="google-signin-button" disabled><img src="{% static 'vendor/google-signin/google-g-light.png' %}" width="20" height="20" alt=""><span>Continue with Google</span></button>
+<p class="google-signin-hint">Google sign-in is not configured on this site yet. You can still use your existing sign-in.</p>
+{% endif %}

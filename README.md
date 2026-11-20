@@ -198,6 +198,10 @@ The platform enforces strict role-based access control with four distinct roles:
 3. **Teacher / Content Manager**: Scoped strictly to permitted categories and self-authored tests.
 4. **Student**: Candidate practice portal, performance summary, attempt history, free trial tracking.
 
+### Optional Google Sign-In
+
+Password sign-in and registration remain available. Google Sign-In is disabled until an operator privately configures a Google Cloud OAuth web client and the exact callback; see [Google Sign-In setup and safety](docs/google-sign-in.md). New Google users choose student/teacher and students choose JEE/NEET. Existing users connect Google **after signing in to their existing account**, so records and credits are not silently merged. A new Google-only user can add a password from their profile. Google sign-in is separate from Gmail delivery and has only been tested with synthetic provider responses here; real credentials and an end-to-end test are still required.
+
 ### Optional Local Demo Accounts
 
 `python manage.py seed_admin` creates these accounts if they do not exist. The passwords are public and predictable: **use them only in an isolated local development database, never in production**:

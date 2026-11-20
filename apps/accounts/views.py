@@ -7,7 +7,7 @@ from django.contrib.auth.views import (
     PasswordResetDoneView,
     PasswordResetView,
 )
-from django.db import OperationalError, connection, transaction
+from django.db import IntegrityError, OperationalError, connection, transaction
 from django.http import Http404, HttpResponse, HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
@@ -43,7 +43,19 @@ class UserRegisterView(View):
             user = form.save(commit=False)
             user.verification_required = True
             user.is_verified = False
-            user.save()
+            try:
+                with transaction.atomic():
+                    user.save()
+            except IntegrityError:
+                # A concurrent Google or password registration may have taken
+                # the same normalized email or username after form validation.
+                form.add_error(None, "This account could not be created. Sign in if you already registered, or try a different username.")
+                return render(request, self.template_name, {"form": form})
+            except OperationalError as exc:
+                if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
+                    raise
+                form.add_error(None, "Registration is busy. Please try again.")
+                return render(request, self.template_name, {"form": form}, status=503)
             login(request, user)
             from .verification import send_verification, status_message
             status_message(request, send_verification(user))

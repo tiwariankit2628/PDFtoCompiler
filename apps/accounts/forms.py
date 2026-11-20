@@ -245,6 +245,29 @@ class PublicRegistrationForm(StudentRegistrationForm):
         return user
 
 
+class GoogleSignupForm(BootstrapFormMixin, forms.Form):
+    """Collect only local onboarding choices after Google has authenticated."""
+    first_name = forms.CharField(label="First name", max_length=150)
+    last_name = forms.CharField(label="Last name", max_length=150, required=False)
+    role = forms.ChoiceField(label="I am joining as", choices=[
+        (User.Roles.STUDENT, "Student"), (User.Roles.TEACHER, "Teacher"),
+    ], initial=User.Roles.STUDENT)
+    target_exam = forms.ChoiceField(label="Target examination", choices=STUDENT_TARGET_CHOICES, required=False)
+
+    def clean(self):
+        cleaned = super().clean()
+        role = cleaned.get("role")
+        if role == User.Roles.STUDENT and not cleaned.get("target_exam"):
+            self.add_error("target_exam", "Students must choose JEE or NEET.")
+        if role == User.Roles.TEACHER:
+            cleaned["target_exam"] = ""
+        return cleaned
+
+
+class GoogleSetPasswordForm(BootstrapFormMixin, SetPasswordForm):
+    """Optional password for an authenticated Google-only account."""
+
+
 class UserProfileForm(BootstrapFormMixin, forms.ModelForm):
     """Student targets are explicit; teachers keep their existing profile text."""
 

@@ -1,5 +1,5 @@
 from django.urls import path
-from . import views, views_management
+from . import google_views, views, views_management
 
 app_name = "accounts"
 
@@ -11,6 +11,10 @@ urlpatterns = [
     path("verify-email/pending/", views.verification_pending, name="verification_pending"),
     path("verify-email/resend/", views.verification_resend, name="verification_resend"),
     path("verify-email/<str:token>/", views.verify_email_view, name="verify_email"),
+    path("google/start/", google_views.google_start, name="google_start"),
+    path("google/callback/", google_views.google_callback, name="google_callback"),
+    path("google/complete/", google_views.google_signup, name="google_signup"),
+    path("google/add-password/", google_views.google_add_password, name="google_add_password"),
 
     # Password reset flow
     path(

@@ -13,6 +13,8 @@ redis>=5.0.0
 razorpay>=1.4.1
 whitenoise>=6.7.0
 requests>=2.32.0
+# Official verifier for Google OpenID Connect ID tokens (Google Sign-In).
+google-auth>=2.60,<3
 # Optional: pure-Python, offline QR codes for classroom join links. The app
 # degrades gracefully (Copy Code / Copy Link) when this is not installed.
 segno>=1.6.0

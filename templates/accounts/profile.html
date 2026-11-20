@@ -79,6 +79,22 @@
                             </button>
                         </div>
                     </form>
+                    {% if user.is_student or user.is_teacher %}{% if not user.is_superuser %}
+                    <section class="google-profile-option border-top mt-4 pt-4" aria-labelledby="google-profile-heading">
+                        <h5 class="fw-bold" id="google-profile-heading">Google sign-in</h5>
+                        {% if user.google_identity %}
+                            {% if user.has_usable_password %}
+                            <p class="small text-muted mb-0">Google sign-in is connected. {% if GOOGLE_SIGN_IN_READY %}You can sign in with either Google or your existing password.{% else %}Google sign-in is currently not configured; you can still use your password.{% endif %} Your records and credits are unchanged.</p>
+                            {% else %}
+                            <p class="small text-muted">Google sign-in is connected. {% if not GOOGLE_SIGN_IN_READY %}Google sign-in is currently not configured. {% endif %}{% if not user.needs_email_verification %}You can add a password as another way to access this same account.{% else %}Verify your profile email before adding a password.{% endif %}</p>
+                            {% if not user.needs_email_verification %}<a href="{% url 'accounts:google_add_password' %}" class="btn btn-cbt-outline">Add a password</a>{% endif %}
+                            {% endif %}
+                        {% else %}
+                        <p class="small text-muted">Connect the Google account matching your profile email to sign in either way.</p>
+                        {% include 'accounts/_google_signin.html' with google_mode='link' %}
+                        {% endif %}
+                    </section>
+                    {% endif %}{% endif %}
                 </div>
             </div>
         </div>
