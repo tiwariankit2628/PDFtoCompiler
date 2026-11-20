@@ -12,11 +12,12 @@ from django.conf import settings
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
 from django.test import override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.accounts.test_google_browser import LocalTLSProxy
 from apps.core.founder_security import encrypt_secret
-from apps.core.models import FounderAccess
+from apps.core.models import ActivityTrackingState, FounderAccess
 
 
 @skipUnless(os.environ.get("RUN_BROWSER_E2E") == "1", "Optional Chromium founder HTTPS test")
@@ -31,6 +32,9 @@ class FounderBrowserTests(StaticLiveServerTestCase):
         secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"  # synthetic only
         password = "BrowserFounderPassword987!"
         with override_settings(FOUNDER_TOTP_ENCRYPTION_KEY=key):
+            # A preceding TransactionTestCase can flush migration-created rows.
+            # This browser fixture explicitly starts its own synthetic tracking.
+            ActivityTrackingState.objects.update_or_create(key="sign_in", defaults={"started_at": timezone.now()})
             owner = User.objects.create_superuser("browser-founder", "browser-founder@example.test", password, first_name="Anika")
             other = User.objects.create_superuser("browser-other-super", "browser-super@example.test", password)
             student = User.objects.create_user("browser-support-student", "browser-student@example.test", password,

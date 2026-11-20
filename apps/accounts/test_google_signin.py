@@ -82,6 +82,7 @@ class GoogleSignInWorkflowTests(TestCase):
         for changes in ({"GOOGLE_SIGN_IN_ENABLED": False}, {"GOOGLE_OAUTH_CLIENT_SECRET": ""},
                         {"GOOGLE_OAUTH_CLIENT_ID": "not-a-google-client"}, {"PUBLIC_BASE_URL": ""},
                         {"PUBLIC_BASE_URL": "http://nonlocal.example"},
+                        {"PUBLIC_BASE_URL": "https://example.test\n.evil.test"},
                         {"DEBUG": False, "PUBLIC_BASE_URL": "http://127.0.0.1:8000"}):
             with self.subTest(changes=changes), override_settings(**changes):
                 self.assertIsNone(configuration())

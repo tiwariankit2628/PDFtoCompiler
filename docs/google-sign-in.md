@@ -1,8 +1,10 @@
 # Optional Google Sign-In: setup and safety
 
-Google Sign-In is **off by default**. It uses a Google Cloud OAuth **web application** client and does not require a paid authentication intermediary. Creating the sign-in client does not itself require buying an authentication service; Google account eligibility, policies and quotas can change, and unrelated cloud services may have their own charges. Consult the [Google setup guide](https://developers.google.com/identity/oauth2/web/guides/get-google-api-clientid) and [OAuth audience rules](https://support.google.com/cloud/answer/15549945) for current requirements.
+Google Sign-In is **off by default**. The message “Google sign-in is not configured” means the feature is disabled or its local settings are incomplete or invalid; it does not mean the password account was changed. Follow the steps below to create a Google Cloud OAuth **web application** client, privately configure it and run the new local check. This does not require a paid authentication intermediary. Creating the sign-in client does not itself require buying an authentication service; Google account eligibility, policies and quotas can change, and unrelated cloud services may have their own charges. Consult the [Google setup guide](https://developers.google.com/identity/oauth2/web/guides/get-google-api-clientid) and [OAuth audience rules](https://support.google.com/cloud/answer/15549945) for current requirements.
 
 **This is sign-in, not email delivery.** It does not enable Gmail SMTP or the Gmail API and does not send verification or password-reset mail. Normal password registrations and some Google accounts still need a separately configured mail service; see [commercial operations](commercial-operations.md#verification-email-console-locally-gmail-to-explore). No PDFs, questions or answers are sent to Google by this sign-in flow.
+
+Google Sign-In is for active student and teacher accounts only. **Founder and administrator accounts continue to use their existing sign-in; the Founder Dashboard still requires password and TOTP.**
 
 The implementation has automated tests using synthetic identities and provider responses. **A real Google sign-in has not been tested in this environment.** The site owner must supply credentials and perform the controlled end-to-end test below before offering it to users.
 
@@ -32,7 +34,14 @@ On macOS/Linux use the environment's `python` in the same commands. Migration `a
 
 ## 3. Configure the local application
 
-In your private `.env`, use the exact same origin as the redirect URI, and add the values obtained above:
+On a **separate local test copy**, open PowerShell in the project folder. If `.env` does not exist, make a private copy of the example; the conditional command below does **not** replace an existing `.env`:
+
+```powershell
+if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
+notepad .env
+```
+
+Edit the existing lines for these settings (do not add duplicates). For a local server opened at `http://127.0.0.1:8000`, the values are:
 
 ```text
 DEBUG=True
@@ -42,7 +51,17 @@ GOOGLE_OAUTH_CLIENT_ID=<your-web-client-id>
 GOOGLE_OAUTH_CLIENT_SECRET=<your-web-client-secret>
 ```
 
-Replace the placeholders locally; do not use them literally. Existing environment variables override values in `.env`; check the service environment if a change appears ineffective. Restart the server and open **exactly** `http://127.0.0.1:8000/` in the browser on the same computer. Incomplete configuration leaves the button disabled and password sign-in available. An enabled button only means that settings have the expected format—it does **not** prove that Google accepted the client, callback, network, or consent configuration.
+Replace the placeholders locally with the values from your Google Cloud **Web application** client. Do not post the secret or the `.env` file in chat or screenshots. Keep every other setting, especially `SECRET_KEY`, `FOUNDER_TOTP_ENCRYPTION_KEY` and the database configuration. `PUBLIC_BASE_URL` is also used for verification-email links, so use the site's actual origin; never change a live site to localhost or set `DEBUG=True` there. If your local port or hostname differs, use that exact origin here and in Google's registered callback.
+
+Save the file and, in the same project folder, run the read-only diagnostic:
+
+```powershell
+.\.venv\Scripts\python.exe manage.py check_google_signin
+```
+
+The command lists settings that need attention and, when safe, the callback URL to register in Google Cloud. It does not print the client ID or secret, contact Google, check the database/migrations, or modify files or accounts. A nonzero exit status means the local settings are not ready. Existing process environment variables override values in `.env`; check the server's service environment if a change appears ineffective. Restart the server, then open **exactly** `http://127.0.0.1:8000/` in the browser on the same computer.
+
+Incomplete configuration leaves the button disabled and password sign-in available. An enabled button or a successful diagnostic only means the local settings have the expected format—it does **not** prove that Google accepted the client, callback, network, or consent configuration. Apply the migration described in step 1 before starting the Google flow, and perform the controlled real-provider test below.
 
 ## 4. Controlled test
 

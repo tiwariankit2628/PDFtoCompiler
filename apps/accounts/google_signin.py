@@ -39,28 +39,43 @@ class GoogleSignInError(Exception):
     """A safe, non-sensitive error suitable for a user-facing message."""
 
 
-def configuration():
-    """Return trusted settings only when the entire OAuth setup is present.
+def configuration_status():
+    """Return the valid origin and issue codes, without the credential fields.
 
-    The callback never depends on an incoming Host header. HTTP is accepted
-    only for a local development origin; public origins must use HTTPS.
+    The same checks drive both the button and the operator diagnostic. The
+    origin is taken from settings, not an incoming Host header. HTTP is only
+    permitted for a loopback development origin.
     """
+    issues = []
     if not settings.GOOGLE_SIGN_IN_ENABLED:
-        return None
+        issues.append("disabled")
     client_id = settings.GOOGLE_OAUTH_CLIENT_ID
     client_secret = settings.GOOGLE_OAUTH_CLIENT_SECRET
-    origin = base_url()
     if (not isinstance(client_id, str) or not client_id.endswith(".apps.googleusercontent.com")
-            or not 1 <= len(client_id) <= 255 or any(c.isspace() for c in client_id)
-            or not isinstance(client_secret, str) or not 1 <= len(client_secret) <= 1024
-            or any(c.isspace() for c in client_secret) or not origin):
-        return None
-    parts = urlsplit(origin)
-    if parts.scheme == "http" and parts.hostname not in ("localhost", "127.0.0.1", "::1"):
+            or not 1 <= len(client_id) <= 255 or any(c.isspace() for c in client_id)):
+        issues.append("client_id")
+    if (not isinstance(client_secret, str) or not 1 <= len(client_secret) <= 1024
+            or any(c.isspace() for c in client_secret)):
+        issues.append("client_secret")
+    origin = base_url() if isinstance(settings.PUBLIC_BASE_URL, str) else ""
+    if origin:
+        parts = urlsplit(origin)
+        if (any(c.isspace() or not c.isprintable() for c in origin)
+                or (parts.scheme == "http" and parts.hostname not in ("localhost", "127.0.0.1", "::1"))):
+            origin = ""
+    if not origin:
+        issues.append("origin")
+    return origin, tuple(issues)
+
+
+def configuration():
+    """Return trusted settings only when the entire OAuth setup is present."""
+    origin, issues = configuration_status()
+    if issues:
         return None
     return {
-        "client_id": client_id,
-        "client_secret": client_secret,
+        "client_id": settings.GOOGLE_OAUTH_CLIENT_ID,
+        "client_secret": settings.GOOGLE_OAUTH_CLIENT_SECRET,
         "origin": origin,
         "redirect_uri": origin + reverse("accounts:google_callback"),
     }

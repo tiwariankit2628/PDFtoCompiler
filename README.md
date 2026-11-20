@@ -200,7 +200,7 @@ The platform enforces strict role-based access control with four distinct roles:
 
 ### Optional Google Sign-In
 
-Password sign-in and registration remain available. Google Sign-In is disabled until an operator privately configures a Google Cloud OAuth web client and the exact callback; see [Google Sign-In setup and safety](docs/google-sign-in.md). New Google users choose student/teacher and students choose JEE/NEET. Existing users connect Google **after signing in to their existing account**, so records and credits are not silently merged. A new Google-only user can add a password from their profile. Google sign-in is separate from Gmail delivery and has only been tested with synthetic provider responses here; real credentials and an end-to-end test are still required.
+Password sign-in and registration remain available. Google Sign-In is disabled until an operator privately configures a Google Cloud OAuth web client and the exact callback; see [Google Sign-In setup and safety](docs/google-sign-in.md). Run `python manage.py check_google_signin` for a read-only settings diagnostic; it does not contact Google or validate credentials. New Google users choose student/teacher and students choose JEE/NEET. Existing users connect Google **after signing in to their existing account**, so records and credits are not silently merged. Founder/admin accounts continue using their existing sign-in, not Google. A new Google-only user can add a password from their profile. Google sign-in is separate from Gmail delivery and has only been tested with synthetic provider responses here; real credentials and an end-to-end test are still required.
 
 ### Founder workspace
 
